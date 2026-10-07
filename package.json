@@ -2,8 +2,9 @@
   "name": "azure-gh-runners",
   "private": true,
   "scripts": {
-    "validate": "npm run validate:bicep && npm run validate:markdown",
-    "validate:bicep": "az bicep build --file infra/main.bicep --stdout && az bicep build-params --file infra/main.bicepparam --stdout && az bicep lint --file infra/main.bicep",
+    "validate": "npm run validate:bicep && npm run validate:network && npm run validate:markdown",
+    "validate:bicep": "az bicep build --file infra/main.bicep --stdout && az bicep build-params --file infra/main.bicepparam --stdout && az bicep lint --file infra/main.bicep && az bicep lint --file infra/modules/network.bicep",
+    "validate:network": "node --test tools/network.test.js && node tools/validate-network.js",
     "validate:markdown": "markdownlint-cli2 \"**/*.md\""
   },
   "devDependencies": {
