@@ -28,6 +28,7 @@ Both were written while evaluating `apex-vnext` as the first consumer.
 ## Local validation
 
 Install Node.js/npm, the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), PowerShell 7, and Python 3.
+Hook tests additionally require Bash, git, jq, and curl on Linux, or Linux Docker on Windows.
 Then run:
 
 ```powershell
@@ -38,7 +39,7 @@ npm run validate
 `npm run validate` runs consumer schema, policy, and generator tests; validates active `config/consumers/*.json`
 entries against GitHub repository visibility and default-branch metadata; checks generated consumer parameters for
 drift; builds and lints the Bicep deployment and modules; validates diagnostic categories against the configuration
-consumed by the deployment; checks the offline image contract; and checks all Markdown with the repository's
+consumed by the deployment; checks the offline image contract and executes the Bats policy-hook fixtures; and checks all Markdown with the repository's
 `.markdownlint-cli2.jsonc` configuration.
 Run `npm run generate:consumers` after editing the registry to update `infra/generated/consumers.json`. The generated
 ARM parameters document contains typed consumer deployment fields and a serialized `policyJson`; `main.bicep` does

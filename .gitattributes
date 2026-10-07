@@ -1,2 +1,4 @@
 image/*.sh text eol=lf
+image/*.py text eol=lf
+tests/*.bats text eol=lf
 image/Dockerfile text eol=lf

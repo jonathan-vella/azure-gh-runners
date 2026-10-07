@@ -24,6 +24,11 @@ if command -v dockerd || [[ -S /var/run/docker.sock ]]; then
   exit 1
 fi
 [[ ! -w /opt/runner-image/versions.json && ! -w /usr/local/bin ]]
+equal jobStartedHook /opt/runner-image/pre-job-policy.sh "${ACTIONS_RUNNER_HOOK_JOB_STARTED:-}"
+for hook_file in /opt/runner-image/pre-job-policy.sh /opt/runner-image/pre-job-policy.py; do
+  [[ -x "$hook_file" && ! -w "$hook_file" ]]
+  equal 'hook owner' 0 "$(stat -c %u "$hook_file")"
+done
 [[ -x /home/runner/run.sh && -x /home/runner/config.sh ]]
 equal runner "$(jq -r '.base.version' "$manifest")" "$(ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=0 /home/runner/bin/Runner.Listener --version)"
 

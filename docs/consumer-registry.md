@@ -17,8 +17,8 @@ Each onboarded repository has one JSON declaration in `config/consumers/<name>.j
 | `maxExecutions` | Required positive integer for maximum concurrent executions. Effective scale is subject to Azure quotas; the schema does not invent a concurrency cap. |
 | `replicaTimeoutSeconds` | Required positive integer. The ACA job API does not document a service maximum for this setting, so the schema does not impose an arbitrary upper bound. |
 | `allowedEvents` | Required, non-empty list of `workflow_dispatch`, `schedule`, and `push`; private consumers may also opt into `pull_request`. `pull_request_target` and `workflow_run` are never accepted. |
-| `allowedRefs` | Required, non-empty list of branch refs in `refs/heads/<branch>` form. Public declarations can list only one ref; the registry validator checks that it is the repository's actual default branch. |
-| `allowedWorkflows` | Required, non-empty list of `GITHUB_WORKFLOW_REF` values in `<owner>/<repo>/.github/workflows/<file>@refs/heads/<branch>` form. |
+| `allowedRefs` | Required, non-empty list of branch refs in `refs/heads/<branch>` form. Public declarations can list only one ref; the registry validator checks that it is the repository's actual default branch. For opted-in private PRs, this allowlists the PR base branch. |
+| `allowedWorkflows` | Required, non-empty list in `<owner>/<repo>/.github/workflows/<file>@refs/heads/<branch>` form. Branch jobs match directly; private PRs authorize the workflow path against the PR base branch while validating the actual merge ref separately. |
 | `notes` | Optional maintainer context; never include credentials or secrets. |
 
 The schema rejects unknown fields. The registry validator in issue [#17](https://github.com/jonathan-vella/azure-gh-runners/issues/17)
@@ -55,6 +55,19 @@ semantics are set-valued. Each consumer has this typed shape:
 default branch because the hook policy uses the validated allowed-ref list. Optional maintainer-only `notes` are not
 deployed. This parameter payload is the contract for future Bicep consumer-job work; the current `main.bicep` does not
 consume it yet.
+
+The main runner container must receive the generated string unchanged as non-secret `CONSUMER_POLICY_JSON`.
+For public consumers, the sole `allowedRefs` entry is the explicit, remotely verified default-branch contract; the
+hook does not guess `main`, infer it from a PR payload, or call GitHub. Regenerate/review the declaration when a
+repository changes visibility or default branch. Policy injection is administrator-controlled runner process
+configuration, not consumer workflow/job `env`. Never let workflow code supply or override it.
+
+Private `pull_request` is an explicit opt-in to **open, same-repository, non-fork merge-ref jobs only**. The runtime
+hook validates the payload repositories, visibility, PR number, base/head branches, `GITHUB_BASE_REF`,
+`GITHUB_HEAD_REF`, job merge ref, and workflow merge ref before mapping the workflow filename to its allowed base
+branch entry. Closed PRs, head-ref jobs, forks (including private forks), malformed metadata, and branch-ref
+fallbacks are rejected. This narrows rather than widens the platform floor.
+See [the image hook contract](../image/README.md#pre-job-policy-contract) for context provenance and execution limits.
 
 ## ACA CPU and memory
 
