@@ -8,6 +8,6 @@ Planned ADRs from the M1 spikes:
 | --- | --- | --- |
 | 0001 | Image build path (ACR Tasks agent pool vs fallback) | `spike-acr-agentpool` |
 | [0002](0002-key-vault-secret-references.md) | Key Vault secret references over private endpoints (blocked; unverified) | `spike-kv-ref-pe` |
-| 0003 | Egress requirements (KEDA polling path) | `spike-keda-egress` |
+| [0003](0003-egress-requirements.md) | Egress requirements (KEDA polling path; proposed) | `spike-keda-egress` |
 | 0004 | Runner secret isolation (init container, EmptyDir, identitySettings) | `spike-job-identity-init` |
 | 0005 | Runner labels and `runs-on` syntax | `spike-jit-labels` |
