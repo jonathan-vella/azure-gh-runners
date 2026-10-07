@@ -42,12 +42,27 @@ destinations; use FQDN-aware egress controls where available rather than freezin
 - Run the test only from `main` through `platform-prod`, preserving its required reviewer and main-only branch policy.
   The workflow must be pinned and scoped to `rg-ghrunners-spike8-swc`; it must not broaden the production service
   principal's scope.
-- Compare NAT Gateway metrics before and during real App-authenticated scaler polling, and run a short, recorded deny
+- The prepared harness is `.github/workflows/spike-keda-egress.yml` and `tools/spikes/keda-egress/`. An operator
+  prepares the empty, tagged resource group and its exact-scope Contributor assignment with
+  `pwsh ./tools/spikes/keda-egress/bootstrap.ps1 -Mode Prepare`; the workflow creates no resources until it is
+  dispatched from `main`, explicitly confirmed, and approved through `platform-prod`. After the workflow removes
+  the named workload resources, the operator removes the empty group and scoped assignment with
+  `pwsh ./tools/spikes/keda-egress/bootstrap.ps1 -Mode CleanupGroup`.
+- Container Apps operations use the exact stable ARM API version `2026-07-01`; the environment is internal with
+  `publicNetworkAccess` disabled, and the diagnostic image is digest-pinned.
+- Compare NAT Gateway metrics before and during the configured real-App-auth scale rule, and run a short, recorded deny
   test against the resolved GitHub API destination if metrics alone are ambiguous. Test runner-container egress
   separately so it is not mistaken for scaler traffic. Record exact metric intervals, NSG rule, scaler/job errors or
   responses, and the final resource-group cleanup result.
+- The prepared harness verifies the App-auth rule configuration, the subnet probe's expected success/failure, and
+  aggregate NAT `ByteCount` samples. It cannot independently prove that KEDA completed a successful GitHub API poll
+  or attribute aggregate bytes to `api.github.com`; report those observations as unknown until corroborated by
+  service-level evidence.
 - Keep the experiment bounded to 45 minutes. Delete only the dedicated issue #8 resource group and resources created
   for this spike. Do not touch the active issue #6/#7 spike groups or production resources.
+- Do not provision the environment until the separate issue #7 regional Container Apps capacity blocker and the
+  required `platform-prod` reviewer gate are resolved. Do not change regions or enable public access to work around
+  capacity constraints.
 - Until those observations exist, acceptance criterion 1 remains open and this ADR cannot be marked accepted.
 
 ## Status

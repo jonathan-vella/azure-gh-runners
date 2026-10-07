@@ -1,0 +1,70 @@
+name: Spike 8 - KEDA GitHub egress
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type run-spike8 to start the bounded experiment
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: spike8-keda-egress
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-prod
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Require explicit dispatch confirmation
+        shell: pwsh
+        env:
+          SPIKE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          if ($env:SPIKE_CONFIRMATION -cne 'run-spike8') {
+            throw 'The confirmation must exactly equal run-spike8.'
+          }
+
+      - name: Check out the repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Sign in to the approved Azure subscription
+        id: azure-login
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure App-authenticated rule and collect network evidence
+        id: spike
+        timeout-minutes: 40
+        shell: pwsh
+        env:
+          GITHUB_REF: ${{ github.ref }}
+          SPIKE_CONFIRMATION: ${{ inputs.confirmation }}
+          GH_APP_ID: ${{ secrets.GH_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+        run: ./tools/spikes/keda-egress/run.ps1 -Mode Test
+
+      - name: Remove only named issue #8 resources
+        if: always() && steps.azure-login.outcome == 'success'
+        shell: pwsh
+        run: ./tools/spikes/keda-egress/run.ps1 -Mode CleanupResources
+
+      - name: Upload non-secret evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: spike8-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/spike8-evidence.json
+          if-no-files-found: warn
+          retention-days: 7
