@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "targetResourceId": {
+      "type": "string"
+    },
+    "workspaceResourceId": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "logCategories": {
+      "type": "array",
+      "defaultValue": []
+    },
+    "enableAllMetrics": {
+      "type": "bool",
+      "defaultValue": false
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[parameters('targetResourceId')]",
+      "name": "[parameters('name')]",
+      "properties": {
+        "workspaceId": "[parameters('workspaceResourceId')]",
+        "copy": [
+          {
+            "name": "logs",
+            "count": "[length(parameters('logCategories'))]",
+            "input": {
+              "category": "[parameters('logCategories')[copyIndex('logs')]]",
+              "enabled": true
+            }
+          }
+        ],
+        "metrics": "[if(parameters('enableAllMetrics'), createArray(createObject('category', 'AllMetrics', 'enabled', true)), createArray())]"
+      }
+    }
+  ]
+}

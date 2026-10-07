@@ -149,6 +149,16 @@ test('drift check rejects missing and stale artifacts without creating or modify
       JSON.parse(fs.readFileSync(output, 'utf8')).parameters.consumers.value.map(({ name }) => name),
       ['example'],
     );
+
+    const generated = fs.readFileSync(output, 'utf8');
+    fs.writeFileSync(output, generated.replace(/\n/g, '\r\n'), 'utf8');
+    generateConsumers({
+      check: true,
+      directory: registry,
+      destination: output,
+      metadataProvider: provider,
+    });
+    assert.equal(fs.readFileSync(output, 'utf8'), generated.replace(/\n/g, '\r\n'));
   });
 });
 
