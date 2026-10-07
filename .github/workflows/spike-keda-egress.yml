@@ -1,0 +1,113 @@
+name: Spike 8 - KEDA GitHub egress
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type run-spike8 to start the selected bounded operation
+        required: true
+        type: string
+      mode:
+        description: Preflight the protected-environment OIDC subject or run the KEDA experiment
+        required: true
+        type: choice
+        options:
+          - oidc-preflight
+          - test
+      capacity_recovered:
+        description: For test mode, attest the issue #7 swedencentral capacity blocker is resolved
+        required: true
+        type: choice
+        options:
+          - not-confirmed
+          - confirmed-recovered
+      synthetic_run_url:
+        description: Queued ghr-smoke run URL using the spike8-queued-probe workflow and custom label
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: spike8-keda-egress
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-prod
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Require explicit dispatch confirmation
+        shell: pwsh
+        env:
+          SPIKE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          if ($env:SPIKE_CONFIRMATION -cne 'run-spike8') {
+            throw 'The confirmation must exactly equal run-spike8.'
+          }
+
+      - name: Require operator confirmation of recovered regional capacity
+        if: inputs.mode == 'test'
+        shell: pwsh
+        env:
+          CAPACITY_RECOVERED: ${{ inputs.capacity_recovered }}
+        run: |
+          if ($env:CAPACITY_RECOVERED -cne 'confirmed-recovered') {
+            throw 'Do not make Azure calls until the issue #7 swedencentral capacity blocker is confirmed resolved.'
+          }
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Sign in to the approved Azure subscription
+        id: azure-login
+        if: inputs.mode == 'test'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906
+        with:
+          client-id: ${{ secrets.AZURE_SPIKE8_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install pinned Container Apps log-stream extension
+        if: inputs.mode == 'test'
+        shell: bash
+        run: az extension add --name containerapp --version 1.3.0b5 --yes --only-show-errors
+
+      - name: Verify protected-environment OIDC claims without Azure login
+        if: inputs.mode == 'oidc-preflight'
+        shell: pwsh
+        run: ./tools/spikes/keda-egress/oidc-claims.ps1
+
+      - name: Configure App-authenticated rule and collect network evidence
+        id: spike
+        if: inputs.mode == 'test'
+        timeout-minutes: 40
+        shell: pwsh
+        env:
+          GITHUB_REF: ${{ github.ref }}
+          SPIKE_CONFIRMATION: ${{ inputs.confirmation }}
+          CAPACITY_RECOVERED: ${{ inputs.capacity_recovered }}
+          SYNTHETIC_RUN_URL: ${{ inputs.synthetic_run_url }}
+          GH_APP_ID: ${{ secrets.GH_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: ./tools/spikes/keda-egress/run.ps1 -Mode Test
+
+      - name: Remove only named issue #8 resources
+        if: always() && inputs.mode == 'test' && steps.azure-login.outcome == 'success'
+        shell: pwsh
+        run: ./tools/spikes/keda-egress/run.ps1 -Mode CleanupResources
+
+      - name: Upload non-secret evidence
+        if: always() && inputs.mode == 'test'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: spike8-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/spike8-evidence.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,15 @@
+name: Spike 8 queued-run probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  queued-probe:
+    runs-on: ghr-spike8-probe
+    timeout-minutes: 20
+    steps:
+      - name: Hold the job active during the bounded scaler comparison
+        run: sleep 600

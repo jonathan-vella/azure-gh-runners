@@ -36,6 +36,12 @@ const resourceProfiles = [
     resourceType: 'Microsoft.Network/publicIPAddresses',
     namePrefix: 'pip-ghrunners-prod-swc-',
   },
+  {
+    outputName: 'containerAppsEnvironmentResourceId',
+    profileName: 'containerAppsEnvironment',
+    resourceType: 'Microsoft.App/managedEnvironments',
+    namePrefix: 'cae-ghrunners-prod-swc-',
+  },
 ];
 
 const azureCliOptions = {

@@ -44,5 +44,21 @@
     "metricCategories": [
       "AllMetrics"
     ]
+  },
+  "containerAppsEnvironment": {
+    "supportedLogCategories": [
+      "ContainerAppConsoleLogs",
+      "ContainerAppSystemLogs"
+    ],
+    "supportedMetricCategories": [
+      "AllMetrics"
+    ],
+    "logCategories": [
+      "ContainerAppConsoleLogs",
+      "ContainerAppSystemLogs"
+    ],
+    "metricCategories": [
+      "AllMetrics"
+    ]
   }
 }
