@@ -14,6 +14,7 @@ Container Apps jobs for any onboarded repository.
 | [Roadmap](docs/roadmap.md) | Milestones M0–M6 and exit criteria |
 | [Backlog](docs/backlog.md) | Every work item with acceptance criteria and linked issue |
 | [Plan](docs/plan.md) | Approved implementation plan and target architecture |
+| [Identity bootstrap](docs/runbooks/bootstrap-identity.md) | Approved Azure identities, constrained RBAC, and GitHub OIDC configuration |
 | [ADRs](docs/adr/README.md) | Decisions, including spike outcomes |
 | [AGENTS.md](AGENTS.md) | Rules for AI agents working in this repo |
 
