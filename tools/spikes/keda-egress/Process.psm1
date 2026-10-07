@@ -55,22 +55,37 @@ function Invoke-BoundedProcess {
 }
 
 function Get-BoundedAzureCli {
-    $azCommand = Get-Command az -CommandType Application -ErrorAction Stop
-    if ($azCommand.Source -match '(?i)\.cmd$') {
-        $pythonPath = Join-Path (Split-Path $azCommand.Source) 'python.exe'
-        if (-not (Test-Path -LiteralPath $pythonPath)) {
-            $pythonPath = Join-Path (Split-Path (Split-Path $azCommand.Source)) 'python.exe'
-        }
-        if (-not (Test-Path -LiteralPath $pythonPath)) {
-            throw 'Could not resolve the managed Python runtime for the installed Azure CLI.'
+    param(
+        [object[]]$Candidates = @(Get-Command az -CommandType Application -All -ErrorAction Stop),
+        [bool]$OnWindows = $IsWindows
+    )
+
+    $sources = @($Candidates | ForEach-Object { [string]$_.Source } | Where-Object { $_ })
+    $azPath = if ($OnWindows) {
+        @($sources | Where-Object { $_ -match '(?i)\.cmd$' }) + @($sources | Where-Object { $_ -match '(?i)\.exe$' }) |
+            Select-Object -First 1
+    } else {
+        $sources | Select-Object -First 1
+    }
+    if (-not $azPath) {
+        throw 'Could not resolve a supported Azure CLI executable.'
+    }
+
+    if ($azPath -match '(?i)\.cmd$') {
+        $pythonPaths = @(
+            (Join-Path (Split-Path $azPath) 'python.exe'),
+            (Join-Path (Split-Path (Split-Path $azPath)) 'python.exe')
+        ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+        if (@($pythonPaths).Count -ne 1) {
+            throw 'Could not resolve a single managed Python runtime for the installed Azure CLI.'
         }
         return [pscustomobject]@{
-            fileName = $pythonPath
+            fileName = [string]@($pythonPaths)[0]
             prefix = @('-IBm', 'azure.cli')
         }
     }
     return [pscustomobject]@{
-        fileName = $azCommand.Source
+        fileName = [string]$azPath
         prefix = @()
     }
 }
