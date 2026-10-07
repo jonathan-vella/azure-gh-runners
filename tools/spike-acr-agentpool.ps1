@@ -45,6 +45,37 @@ function Get-AzJson {
     $output | ConvertFrom-Json
 }
 
+function Get-SpikeFederatedSubject {
+    $metadataJson = & gh api "repos/$repository" --jq '{full_name, name, owner_login:.owner.login, owner_id:(.owner.id|tostring), repository_id:(.id|tostring)}'
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not read the exact public GitHub repository metadata; refusing the spike identity operation.'
+    }
+    $metadata = $metadataJson | ConvertFrom-Json
+    if ($metadata.full_name -cne $repository -or $metadata.owner_login -cne 'jonathan-vella' -or
+        $metadata.name -cne 'azure-gh-runners' -or $metadata.owner_id -notmatch '^\d+$' -or
+        $metadata.repository_id -notmatch '^\d+$') {
+        throw 'GitHub repository metadata differs from the exact spike repository; refusing the identity operation.'
+    }
+
+    $customizationJson = & gh api "repos/$repository/actions/oidc/customization/sub" `
+        --jq '{use_default, use_immutable_subject, sub_claim_prefix}'
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not read the repository OIDC subject configuration; refusing the spike identity operation.'
+    }
+    $customization = $customizationJson | ConvertFrom-Json
+    $expectedPrefix = "repo:$($metadata.owner_login)@$($metadata.owner_id)/$($metadata.name)@$($metadata.repository_id)"
+    if ($customization.use_default -ne $true -or $customization.use_immutable_subject -ne $true -or
+        $customization.sub_claim_prefix -cne $expectedPrefix) {
+        throw 'GitHub immutable OIDC subject configuration differs from the exact expected repository-ID prefix.'
+    }
+
+    $subject = "${expectedPrefix}:ref:refs/heads/${branch}"
+    if ($subject -notmatch '^repo:jonathan-vella@\d+/azure-gh-runners@\d+:ref:refs/heads/main$') {
+        throw 'The derived OIDC subject is outside the exact main-branch spike allowlist.'
+    }
+    return $subject
+}
+
 function Assert-Account {
     $account = Get-AzJson @('account', 'show', '--subscription', $subscription)
     if ($account.id -ne $subscription -or $account.tenantId -ne $tenant -or $account.name -ne 'shared') {
@@ -89,6 +120,7 @@ if ($Action -eq 'Setup') {
     if ($apps.Count -ne 0) { throw 'Spike app name already exists; refusing to reuse it.' }
     $nameCheck = Get-AzJson @('acr', 'check-name', '--name', $registry, '--subscription', $subscription)
     if (-not $nameCheck.nameAvailable) { throw 'The fixed spike registry name is unavailable.' }
+    $federatedSubject = Get-SpikeFederatedSubject
 
     $app = $null
     $sp = $null
@@ -109,7 +141,7 @@ if ($Action -eq 'Setup') {
             @{
                 name = 'ghrunners-spike6-main'
                 issuer = 'https://token.actions.githubusercontent.com'
-                subject = "repo:${repository}:ref:refs/heads/${branch}"
+                subject = $federatedSubject
                 audiences = @('api://AzureADTokenExchange')
             } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $ficPath -Encoding ascii
             Invoke-Az @('ad', 'app', 'federated-credential', 'create', '--id', $app.appId,
@@ -133,7 +165,7 @@ if ($Action -eq 'Setup') {
             '--id', $app.appId))
         if ($federatedCredentials.Count -ne 1 -or
             $federatedCredentials[0].name -ne 'ghrunners-spike6-main' -or
-            $federatedCredentials[0].subject -ne "repo:${repository}:ref:refs/heads/${branch}" -or
+            $federatedCredentials[0].subject -ne $federatedSubject -or
             $federatedCredentials[0].issuer -ne 'https://token.actions.githubusercontent.com' -or
             @($federatedCredentials[0].audiences).Count -ne 1 -or
             $federatedCredentials[0].audiences[0] -ne 'api://AzureADTokenExchange') {
@@ -181,7 +213,7 @@ if ($Action -eq 'Setup') {
     Write-Output "Resource group: $resourceGroup"
     Write-Output "Registry: $registry"
     Write-Output "Client ID (workflow_dispatch input): $($app.appId)"
-    Write-Output "FIC subject: repo:${repository}:ref:refs/heads/${branch}"
+    Write-Output "FIC subject: $federatedSubject"
     Write-Output 'The temporary app has no password or certificate credential.'
     Write-Output "If the workflow fails or times out, run: .\tools\spike-acr-agentpool.ps1 -Action Cleanup -ClientId $($app.appId)"
     Write-Output 'The same cleanup command is required after every workflow outcome.'
@@ -193,6 +225,7 @@ if ($Action -eq 'Cleanup') {
         throw 'Cleanup requires the exact temporary app client ID printed by Setup.'
     }
     Remove-SpikeGroup
+    $federatedSubject = Get-SpikeFederatedSubject
     $apps = @(Get-AzJson @('ad', 'app', 'list', '--display-name', $applicationName) |
         Where-Object { $_.displayName -eq $applicationName -and $_.appId -eq $ClientId })
     if ($apps.Count -ne 1) { throw 'Expected exactly one matching spike app before cleanup.' }
@@ -203,7 +236,7 @@ if ($Action -eq 'Cleanup') {
     $federatedCredentials = @(Get-AzJson @('ad', 'app', 'federated-credential', 'list', '--id', $ClientId))
     if ($federatedCredentials.Count -ne 1 -or
         $federatedCredentials[0].name -ne 'ghrunners-spike6-main' -or
-        $federatedCredentials[0].subject -ne "repo:${repository}:ref:refs/heads/${branch}" -or
+        $federatedCredentials[0].subject -ne $federatedSubject -or
         $federatedCredentials[0].issuer -ne 'https://token.actions.githubusercontent.com' -or
         @($federatedCredentials[0].audiences).Count -ne 1 -or
         $federatedCredentials[0].audiences[0] -ne 'api://AzureADTokenExchange') {
