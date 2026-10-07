@@ -1,0 +1,8 @@
+{
+  "config": {
+    "default": true,
+    // Long prose lines are allowed; docs are rendered, not read raw.
+    "MD013": false
+  },
+  "ignores": ["node_modules/**"]
+}
