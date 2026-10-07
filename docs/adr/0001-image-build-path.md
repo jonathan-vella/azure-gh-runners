@@ -12,6 +12,16 @@ disabled and accessed from a VNet through an approved private endpoint. An S1 ag
 The S2 pool was still `Creating` when cleanup began; its create command returned a registry-not-found error during
 resource-group deletion. Neither build context nor the GHCR image pull was tested.
 
+On 2026-10-07, [run 37652530423](https://github.com/jonathan-vella/azure-gh-runners/actions/runs/37652530423)
+and [run 37653350378](https://github.com/jonathan-vella/azure-gh-runners/actions/runs/37653350378) both stopped
+at Azure login with `AADSTS700213`; no networking, agent-pool, or build steps ran. The presented GitHub Actions subject was
+`repo:jonathan-vella@25802147/azure-gh-runners@1408821667:ref:refs/heads/main`, while the first setup helper
+created a name-based subject. The repository OIDC customization readback reported immutable subjects enabled and
+the matching ID-based prefix. Both temporary resource groups and Entra applications/service principals were
+subsequently removed and absence verified. The setup helper now derives the prefix from GitHub repository metadata,
+requires it to match the repository's OIDC customization readback, and appends only the observed `main` ref suffix.
+This correction requires review and merge before another runtime attempt.
+
 Microsoft Learn's [agent-pool documentation](https://learn.microsoft.com/en-us/azure/container-registry/tasks-agent-pools)
 lists Sweden Central, S1 (2 vCPU/3 GB), S2 (4 vCPU/8 GB), and a default standard-pool quota of 16 vCPU per registry.
 It requires HTTPS egress to external registries such as GHCR. This documented quota is per registry, not a
@@ -34,9 +44,10 @@ secret. Its `Contributor` assignment is limited to the explicitly named, tagged 
 ## Consequences
 
 - Keep issue #6 open until source-context upload, Git-context, GHCR pull, S1/S2, and cleanup results are recorded.
-- Before dispatch, run `tools/spike-acr-agentpool.ps1 -Action Setup` from an already-authenticated Azure CLI session
-  in the approved `shared` subscription. It refuses to reuse an existing group or app and prints the non-secret
-  client ID.
+- Before dispatch, run `tools/spike-acr-agentpool.ps1 -Action Setup` from an authenticated Azure CLI session in the
+  approved `shared` subscription and a `gh` session able to read this repository's metadata and OIDC customization.
+  Setup derives the subject prefix from that metadata and fails on any configuration mismatch. It refuses to reuse
+  an existing group or app and prints the non-secret client ID.
 - After this workflow is merged to `main`, dispatch `.github/workflows/spike-acr-agentpool.yml` on `main` with all
   three required inputs: `client_id`, `resource_group` (`rg-ghrunners-spike6-swc`), and `registry_name`
   (`ghrunners6jv20261007`).
@@ -55,6 +66,14 @@ secret. Its `Contributor` assignment is limited to the explicitly named, tagged 
   actual client ID.
 - Task logs are captured only in the ephemeral GitHub-hosted runner's temporary directory, reduced to the exit code,
   run ID, and fixed diagnostic classification, then deleted. They are not printed or uploaded as artifacts.
+- The current GitHub Actions subject for this repository includes immutable owner and repository IDs. The setup
+  helper derives `repo:<owner>@<owner-id>/<repository>@<repository-id>` from GitHub metadata and requires an exact
+  match with the known owner and repository IDs and the repository's immutable OIDC subject configuration before
+  creating the temporary app. Cleanup validates the same exact subject from its fixed allowlist without requiring
+  GitHub API availability, so a GitHub outage cannot block removal of the temporary Azure identity. Setup appends
+  only the observed `:ref:refs/heads/main` suffix; no environment or event suffix is inferred. See the
+  [GitHub OIDC reference](https://docs.github.com/en/actions/reference/security/oidc). The two prior AADSTS700213
+  runs do not constitute evidence for any pool or build criterion.
 - Do not choose ACR Tasks or the documented fallback until the GH-hosted run URLs, ACR task run IDs/statuses,
   public-endpoint probe, pool states, and cleanup assertions have been reviewed and added here.
 

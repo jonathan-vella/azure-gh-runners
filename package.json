@@ -2,14 +2,17 @@
   "name": "azure-gh-runners",
   "private": true,
   "scripts": {
-    "validate": "npm run validate:bicep && npm run validate:spike7 && npm run validate:network && npm run validate:spike && npm run validate:markdown",
+    "validate": "npm run validate:consumers && npm run validate:bicep && npm run validate:spike6 && npm run validate:spike7 && npm run validate:network && npm run validate:spike && npm run validate:markdown",
+    "validate:consumers": "node --test tests/consumer-schema.test.cjs tests/consumer-registry.test.cjs && node tools/validate-consumers.js",
     "validate:bicep": "az bicep build --file infra/main.bicep --stdout && az bicep build-params --file infra/main.bicepparam --stdout && az bicep lint --file infra/main.bicep && az bicep lint --file infra/modules/network.bicep && az bicep build --file infra/spike7/main.bicep --stdout && az bicep lint --file infra/spike7/main.bicep && az bicep build --file infra/spike7/job.bicep --stdout && az bicep lint --file infra/spike7/job.bicep",
     "validate:spike7": "node tools/validate-spike7.mjs && pwsh -NoProfile -File tools/test-spike7.ps1",
+    "validate:spike6": "pwsh -NoProfile -File tools/test-spike-acr-agentpool.ps1",
     "validate:network": "node --test tools/network.test.js && node tools/validate-network.js",
     "validate:spike": "pwsh -NoProfile -File tools/spike-job-identity-init/test.ps1",
     "validate:markdown": "markdownlint-cli2 \"**/*.md\""
   },
   "devDependencies": {
+    "ajv": "8.20.0",
     "markdownlint-cli2": "0.23.3"
   },
   "overrides": {
