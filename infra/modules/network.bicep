@@ -363,7 +363,7 @@ var acrAgentsSecurityRules = [
   }
 ]
 
-module acaNsg 'br/public:avm/res/network/network-security-group:0.5.0' = {
+module acaNsg 'br/public:avm/res/network/network-security-group:0.5.3' = {
   name: 'aca-nsg-${uniqueSuffix}'
   params: {
     name: acaNsgName
@@ -374,7 +374,7 @@ module acaNsg 'br/public:avm/res/network/network-security-group:0.5.0' = {
   }
 }
 
-module acrAgentsNsg 'br/public:avm/res/network/network-security-group:0.5.0' = {
+module acrAgentsNsg 'br/public:avm/res/network/network-security-group:0.5.3' = {
   name: 'acr-agents-nsg-${uniqueSuffix}'
   params: {
     name: acrAgentsNsgName
@@ -403,7 +403,7 @@ module natGatewayPublicIp 'br/public:avm/res/network/public-ip-address:0.13.0' =
   }
 }
 
-module natGateway 'br/public:avm/res/network/nat-gateway:2.1.0' = {
+module natGateway 'br/public:avm/res/network/nat-gateway:2.1.1' = {
   name: 'nat-gateway-${uniqueSuffix}'
   params: {
     name: natGatewayName
@@ -418,7 +418,7 @@ module natGateway 'br/public:avm/res/network/nat-gateway:2.1.0' = {
   }
 }
 
-module virtualNetwork 'br/public:avm/res/network/virtual-network:0.10.0' = {
+module virtualNetwork 'br/public:avm/res/network/virtual-network:0.10.2' = {
   name: 'virtual-network-${uniqueSuffix}'
   params: {
     name: virtualNetworkName
@@ -458,7 +458,7 @@ module virtualNetwork 'br/public:avm/res/network/virtual-network:0.10.0' = {
   }
 }
 
-module privateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.0' = [
+module privateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.1' = [
   for (zone, index) in networkConfig.privateDnsZones: {
     name: 'private-dns-${index}-${uniqueSuffix}'
     params: {

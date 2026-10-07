@@ -146,7 +146,17 @@ test('VNet subnets use the required layout and share NAT only across compute sub
 
 test('network Bicep uses exact AVM module versions and exposes downstream resource IDs', () => {
   const moduleReferences = [...networkBicep.matchAll(/br\/public:avm\/res\/network\/[\w/-]+:\d+\.\d+\.\d+/g)];
-  assert.equal(moduleReferences.length, 6);
+  assert.deepEqual(
+    moduleReferences.map(([reference]) => reference).sort(),
+    [
+      'br/public:avm/res/network/nat-gateway:2.1.1',
+      'br/public:avm/res/network/network-security-group:0.5.3',
+      'br/public:avm/res/network/network-security-group:0.5.3',
+      'br/public:avm/res/network/private-dns-zone:0.8.1',
+      'br/public:avm/res/network/public-ip-address:0.13.0',
+      'br/public:avm/res/network/virtual-network:0.10.2',
+    ].sort(),
+  );
   assert.match(networkBicep, /natGatewayResourceId: natGateway\.outputs\.resourceId/g);
   assert.match(networkBicep, /output privateDnsZoneResourceIds array/);
   assert.match(networkBicep, /resourceId: privateDnsZones\[index\]\.outputs\.resourceId/);
