@@ -1,0 +1,388 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jonathan-vella/azure-gh-runners/blob/main/config/schema/consumer.v1.json",
+  "title": "Azure GitHub Actions runner consumer",
+  "description": "Version 1 contract for one repository registered to use the shared runner platform.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "repo",
+    "visibility",
+    "labels",
+    "cpu",
+    "memory",
+    "maxExecutions",
+    "replicaTimeoutSeconds",
+    "allowedEvents",
+    "allowedRefs",
+    "allowedWorkflows"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "description": "Lowercase consumer identifier; cross-entry uniqueness and its runner label are checked by the registry validator."
+    },
+    "repo": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$",
+      "description": "GitHub repository in owner/name form."
+    },
+    "visibility": {
+      "type": "string",
+      "enum": [
+        "public",
+        "private"
+      ]
+    },
+    "labels": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "description": "Custom runner labels; the registry validator enforces the required ghr-<name> label."
+    },
+    "cpu": {
+      "type": "number",
+      "description": "Total vCPU for all containers in the consumer runner replica. Must use a supported CPU/memory pair."
+    },
+    "memory": {
+      "type": "string",
+      "enum": [
+        "0.5Gi",
+        "1Gi",
+        "1.5Gi",
+        "2Gi",
+        "2.5Gi",
+        "3Gi",
+        "3.5Gi",
+        "4Gi",
+        "4.5Gi",
+        "5Gi",
+        "5.5Gi",
+        "6Gi",
+        "6.5Gi",
+        "7Gi",
+        "7.5Gi",
+        "8Gi"
+      ],
+      "description": "Total memory for all containers in the consumer runner replica."
+    },
+    "maxExecutions": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Maximum concurrent job executions. No schema maximum is imposed; effective scale is limited by Azure environment and subscription quotas."
+    },
+    "replicaTimeoutSeconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Positive ACA job replica timeout in seconds. Azure does not document a service maximum for this property."
+    },
+    "allowedEvents": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "workflow_dispatch",
+          "schedule",
+          "push",
+          "pull_request"
+        ]
+      },
+      "description": "Allowed workflow trigger events. pull_request is permitted only for private repositories."
+    },
+    "allowedRefs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^refs/heads/[^\\s]+$"
+      },
+      "description": "Allowed branch refs. The registry validator verifies the default branch remotely."
+    },
+    "allowedWorkflows": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/\\.github/workflows/[^@]+@refs/heads/[^\\s]+$"
+      },
+      "description": "Allowed GITHUB_WORKFLOW_REF values, including repository, workflow path, and branch ref."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional maintainer-facing context. Do not put secrets or credentials here."
+    }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "cpu": {
+              "const": 0.25
+            },
+            "memory": {
+              "const": "0.5Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 0.5
+            },
+            "memory": {
+              "const": "1Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 0.75
+            },
+            "memory": {
+              "const": "1.5Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 1
+            },
+            "memory": {
+              "const": "2Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 1.25
+            },
+            "memory": {
+              "const": "2.5Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 1.5
+            },
+            "memory": {
+              "const": "3Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 1.75
+            },
+            "memory": {
+              "const": "3.5Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 2
+            },
+            "memory": {
+              "const": "4Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 2.25
+            },
+            "memory": {
+              "const": "4.5Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 2.5
+            },
+            "memory": {
+              "const": "5Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 2.75
+            },
+            "memory": {
+              "const": "5.5Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 3
+            },
+            "memory": {
+              "const": "6Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 3.25
+            },
+            "memory": {
+              "const": "6.5Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 3.5
+            },
+            "memory": {
+              "const": "7Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 3.75
+            },
+            "memory": {
+              "const": "7.5Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        },
+        {
+          "properties": {
+            "cpu": {
+              "const": 4
+            },
+            "memory": {
+              "const": "8Gi"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ]
+        }
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "visibility": {
+            "const": "public"
+          }
+        },
+        "required": [
+          "visibility"
+        ]
+      },
+      "then": {
+        "properties": {
+          "allowedEvents": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "workflow_dispatch",
+                "schedule",
+                "push"
+              ]
+            }
+          },
+          "allowedRefs": {
+            "type": "array",
+            "maxItems": 1
+          }
+        }
+      }
+    }
+  ]
+}

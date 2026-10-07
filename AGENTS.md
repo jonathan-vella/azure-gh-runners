@@ -42,9 +42,9 @@ npm ci
 npm run validate
 ```
 
-`npm run validate` builds the Bicep template and parameter file, runs Bicep lint, and checks Markdown with the
-repository's Markdown configuration. It does not deploy resources or require an Azure login. Add future validators to
-the existing `validate` script so it remains the single documented local check.
+`npm run validate` runs the consumer schema fixture tests, builds the Bicep template and parameter file, runs Bicep
+lint, and checks Markdown with the repository's Markdown configuration. It does not deploy resources or require an
+Azure login. Add future validators to the existing `validate` script so it remains the single documented local check.
 
 ## Non-negotiable security and platform invariants
 

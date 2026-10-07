@@ -14,6 +14,7 @@ Container Apps jobs for any onboarded repository.
 | [Roadmap](docs/roadmap.md) | Milestones M0–M6 and exit criteria |
 | [Backlog](docs/backlog.md) | Every work item with acceptance criteria and linked issue |
 | [Plan](docs/plan.md) | Approved implementation plan and target architecture |
+| [Consumer registry](docs/consumer-registry.md) | Consumer JSON contract, resource limits, and validation boundary |
 | [Identity bootstrap](docs/runbooks/bootstrap-identity.md) | Approved Azure identities, constrained RBAC, and GitHub OIDC configuration |
 | [ADRs](docs/adr/README.md) | Decisions, including spike outcomes |
 | [AGENTS.md](AGENTS.md) | Rules for AI agents working in this repo |
@@ -31,9 +32,9 @@ npm ci
 npm run validate
 ```
 
-`npm run validate` builds and lints the Bicep scaffold and checks all Markdown with the repository's
-`.markdownlint-cli2.jsonc` configuration. The Bicep entrypoints are intentionally empty until their infrastructure
-issues are implemented.
+`npm run validate` runs consumer schema fixture tests, builds and lints the Bicep scaffold, and checks all Markdown
+with the repository's `.markdownlint-cli2.jsonc` configuration. The Bicep entrypoints are intentionally empty until
+their infrastructure issues are implemented.
 
 ## At a glance
 
