@@ -55,7 +55,10 @@ established from the safely reduced error. Independent cleanup succeeded and the
 resource group was verified absent. No ACA environment create or job run was observed. This is not evidence of ACA
 capacity failure and does not select VMSS as primary. See
 [the recorded D4 outcome](https://github.com/jonathan-vella/azure-gh-runners/issues/7#issuecomment-6045915111).
-The D4 authorization is exhausted; no retry or additional deployment is authorized.
+One further D4 attempt is pending the error-observability/lifecycle fix merging and successful read-only preflight on
+that merged commit. If run, it is a single non-zonal D4 attempt (0–3 nodes) in an isolated resource group with
+mandatory cleanup; a non-capacity failure gets no retry. Unless the coordinator reports that attempt has run, its
+status remains pending.
 
 Apply the approved conditional rule:
 

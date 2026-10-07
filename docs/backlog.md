@@ -14,9 +14,12 @@ diagnosis was `DeploymentAbsentOwnedGroupEmpty`. The underlying cause cannot be 
 error. Cleanup succeeded and the exact `rg-ghrunners-spike7-swc` resource group was verified absent. No ACA
 environment create or job run occurred; this is not evidence of ACA capacity failure. See
 [the recorded D4 outcome](https://github.com/jonathan-vella/azure-gh-runners/issues/7#issuecomment-6045915111).
-The authorization is exhausted: no retry or additional deployment is authorized. Apply the conditional rule in the
-roadmap; do not set backend defaults, change the active consumer contract, or reprioritize/relabel ACA work until
-evidence selects a primary.
+One further D4 attempt is pending coordinator confirmation that the error-observability/lifecycle fix has merged and
+the read-only preflight passes on that merged commit. If run, it is a single non-zonal D4 attempt (0–3 nodes) in an
+isolated resource group with mandatory cleanup; a non-capacity failure gets no retry. Until the coordinator reports
+that attempt has run, record it as pending, not exhausted. Apply the conditional rule in the roadmap; do not set
+backend defaults, change the active consumer contract, or reprioritize/relabel ACA work until evidence selects a
+primary.
 
 The additive schema issue #63 may proceed independently of the D4 outcome and VMSS spike. It must not set a default or
 alter existing ACA entries. All runtime/tooling changes and persistent VMSS implementation remain gated by the accepted
@@ -507,7 +510,8 @@ visible alongside the existing work items.
   accepted, but its wait failed before any deployment create call; a local mock confirmed zero create calls on this
   error path. The original exit was 1 and the safely reduced cause remains unclassified. Independent cleanup
   succeeded and the exact `rg-ghrunners-spike7-swc` group was verified absent. No ACA environment/job was created,
-  so this is not a capacity verdict; the D4 retry authorization is exhausted.
+  so this is not a capacity verdict. One further attempt is pending lifecycle-fix merge and successful read-only
+  preflight; if run, it is single-attempt with cleanup and no retry for a non-capacity failure.
 - **Schema #63:** may proceed before the D4 decision and VMSS spike, but stays additive, has no default, and preserves
   current ACA entries. Tooling #64 and backend flags #65 depend on the accepted ADR; flags additionally require a
   conclusive primary decision before choosing defaults. An explicitly assigned consumer on a disabled backend must
