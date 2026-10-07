@@ -9,7 +9,7 @@ permissions:
 jobs:
   queued-probe:
     runs-on: ghr-spike8-probe
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
-      - name: Confirm queued probe execution
-        run: echo "Issue 8 synthetic queued-run probe."
+      - name: Hold the job active during the bounded scaler comparison
+        run: sleep 600

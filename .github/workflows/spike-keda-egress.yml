@@ -14,8 +14,15 @@ on:
         options:
           - oidc-preflight
           - test
+      capacity_recovered:
+        description: For test mode, attest the issue #7 swedencentral capacity blocker is resolved
+        required: true
+        type: choice
+        options:
+          - not-confirmed
+          - confirmed-recovered
       synthetic_run_url:
-        description: Queued ghr-smoke run URL using the ghr-spike8-probe label
+        description: Queued ghr-smoke run URL using the spike8-queued-probe workflow and custom label
         required: false
         type: string
 
@@ -41,6 +48,16 @@ jobs:
         run: |
           if ($env:SPIKE_CONFIRMATION -cne 'run-spike8') {
             throw 'The confirmation must exactly equal run-spike8.'
+          }
+
+      - name: Require operator confirmation of recovered regional capacity
+        if: inputs.mode == 'test'
+        shell: pwsh
+        env:
+          CAPACITY_RECOVERED: ${{ inputs.capacity_recovered }}
+        run: |
+          if ($env:CAPACITY_RECOVERED -cne 'confirmed-recovered') {
+            throw 'Do not make Azure calls until the issue #7 swedencentral capacity blocker is confirmed resolved.'
           }
 
       - name: Check out the repository
@@ -73,10 +90,12 @@ jobs:
         env:
           GITHUB_REF: ${{ github.ref }}
           SPIKE_CONFIRMATION: ${{ inputs.confirmation }}
+          CAPACITY_RECOVERED: ${{ inputs.capacity_recovered }}
           SYNTHETIC_RUN_URL: ${{ inputs.synthetic_run_url }}
           GH_APP_ID: ${{ secrets.GH_APP_ID }}
           GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
           GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: ./tools/spikes/keda-egress/run.ps1 -Mode Test
 
       - name: Remove only named issue #8 resources

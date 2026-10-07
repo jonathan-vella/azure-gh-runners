@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Test', 'CleanupResources')]
+    [ValidateSet('Test', 'CleanupResources', 'Validate')]
     [string]$Mode = 'Test'
 )
 
@@ -23,6 +23,7 @@ $keyVaultName = 'kvghr8' + $subscriptionId.Replace('-', '').Substring(0, 12)
 $keyVaultIdentity = 'id-spike8-kv-swc'
 $workflowIdentity = 'id-spike8-workflow-swc'
 $workflowPrincipalId = $null
+$workloadPrincipalId = $null
 $privateEndpoint = 'pep-spike8-kv-swc'
 $privateDnsLink = 'link-spike8-kv-swc'
 $privateDnsZone = 'privatelink.vaultcore.azure.net'
@@ -36,8 +37,10 @@ $resourceNames = @(
     $networkSecurityGroup, $publicIp, $natGateway, $virtualNetwork,
     "$virtualNetwork/$subnet", "$virtualNetwork/$keyVaultSubnet",
     "$networkSecurityGroup/DenyGitHubApiForSpike8", "$networkSecurityGroup/AllowPrivateEndpointHttps",
-    "$networkSecurityGroup/AllowGitHubApiHttps",
+    "$networkSecurityGroup/AllowGitHubApiHttps", "$networkSecurityGroup/AllowAcaSubnetDependencies",
     "$networkSecurityGroup/AllowAzurePlatformDns", "$networkSecurityGroup/AllowAzureCloudHttps",
+    "$networkSecurityGroup/AllowMicrosoftContainerRegistry", "$networkSecurityGroup/AllowAzureFrontDoorFirstParty",
+    "$networkSecurityGroup/AllowAzureActiveDirectory", "$networkSecurityGroup/AllowAzureMonitor",
     "$networkSecurityGroup/DenyInternetOutbound", "$networkSecurityGroup/DenyRfc1918",
     $environment, $scalerJob, $probeJob, $keyVaultName, "$keyVaultName/gh-runner-app-key",
     $keyVaultIdentity, $workflowIdentity, "$workflowIdentity/github-platform-prod",
@@ -57,15 +60,33 @@ $tags = @(
     'maint-window=none',
     'spike-id=8'
 )
+$script:operationDeadline = if ($Mode -eq 'CleanupResources') {
+    [DateTimeOffset]::UtcNow.AddMinutes(4)
+} else {
+    [DateTimeOffset]::UtcNow.AddMinutes(38)
+}
+$script:githubInstallationToken = $null
+Import-Module (Join-Path $PSScriptRoot 'Process.psm1') -Force
+
+function Get-RemainingOperationSeconds {
+    $remaining = [int][Math]::Floor(($script:operationDeadline - [DateTimeOffset]::UtcNow).TotalSeconds)
+    if ($remaining -lt 1) {
+        throw 'The bounded issue #8 operation time budget expired.'
+    }
+    return $remaining
+}
 
 function Invoke-Az {
     param([Parameter(Mandatory)][string[]]$Arguments)
 
     $allArguments = @($Arguments) + @('--subscription', $subscriptionId, '--only-show-errors')
-    $output = & az @allArguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $azCommand = Get-BoundedAzureCli
+    $timeoutSeconds = [Math]::Min(120, (Get-RemainingOperationSeconds))
+    $result = Invoke-BoundedProcess -FileName $azCommand.fileName `
+        -Arguments (@($azCommand.prefix) + $allArguments) -TimeoutSeconds $timeoutSeconds
+    if ($result.exitCode -ne 0) {
         $code = $null
-        foreach ($line in $output) {
+        foreach ($line in @($result.stderr -split "`r?`n") + @($result.stdout -split "`r?`n")) {
             if ($line -match '(AuthorizationFailed|Forbidden|Conflict|BadRequest|NotFound|InvalidTemplateDeployment|DeploymentFailed)') {
                 $code = $Matches[1]
                 break
@@ -76,7 +97,107 @@ function Invoke-Az {
         }
         throw "Azure CLI '$($Arguments[0]) $($Arguments[1])' failed; response details were suppressed."
     }
-    return ($output -join "`n")
+    return $result.stdout
+}
+
+function ConvertTo-Base64Url {
+    param([Parameter(Mandatory)][byte[]]$Bytes)
+    return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+function New-GitHubInstallationToken {
+    $rsa = [System.Security.Cryptography.RSA]::Create()
+    $jwt = $null
+    $privateKey = $null
+    try {
+        $privateKey = [string]$env:GH_APP_PRIVATE_KEY
+        $rsa.ImportFromPem($privateKey)
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $header = ConvertTo-Base64Url ([System.Text.Encoding]::UTF8.GetBytes('{"alg":"RS256","typ":"JWT"}'))
+        $claims = @{
+            iat = $now - 60
+            exp = $now + 540
+            iss = [string]$env:GH_APP_ID
+        } | ConvertTo-Json -Compress
+        $payload = ConvertTo-Base64Url ([System.Text.Encoding]::UTF8.GetBytes($claims))
+        $unsigned = "$header.$payload"
+        $signature = $rsa.SignData(
+            [System.Text.Encoding]::UTF8.GetBytes($unsigned),
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+        )
+        $jwt = "$unsigned.$(ConvertTo-Base64Url $signature)"
+        $response = Invoke-RestMethod -Method Post `
+            -Uri "https://api.github.com/app/installations/$env:GH_APP_INSTALLATION_ID/access_tokens" `
+            -Headers @{ Authorization = "Bearer $jwt"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' } `
+            -ContentType 'application/json' `
+            -Body '{"permissions":{"actions":"read","metadata":"read"}}' -TimeoutSec 20
+        if ([string]::IsNullOrWhiteSpace([string]$response.token)) {
+            throw 'GitHub did not return a read-only installation token.'
+        }
+        return [string]$response.token
+    } catch {
+        throw 'Could not mint a read-only GitHub App installation token; response details were suppressed.'
+    } finally {
+        $rsa.Dispose()
+        $privateKey = $null
+        $jwt = $null
+        $claims = $null
+        $response = $null
+    }
+}
+
+function Get-SyntheticRunState {
+    param([Parameter(Mandatory)][string]$RunUrl)
+
+    if ($RunUrl -notmatch '^https://github\.com/jonathan-vella/ghr-smoke/actions/runs/(?<id>\d+)$') {
+        throw 'The synthetic run URL must identify a run in jonathan-vella/ghr-smoke.'
+    }
+    if ([string]::IsNullOrWhiteSpace($script:githubInstallationToken)) {
+        throw 'The scoped GitHub App installation token is unavailable.'
+    }
+    $runId = $Matches.id
+    try {
+        $headers = @{
+            Authorization = "Bearer $script:githubInstallationToken"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+        }
+        $repo = Invoke-RestMethod -Method Get -Uri 'https://api.github.com/repos/jonathan-vella/ghr-smoke' `
+            -Headers $headers -TimeoutSec 20
+        $run = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/jonathan-vella/ghr-smoke/actions/runs/$runId" `
+            -Headers $headers -TimeoutSec 20
+        $jobs = Invoke-RestMethod -Method Get `
+            -Uri "https://api.github.com/repos/jonathan-vella/ghr-smoke/actions/runs/$runId/jobs?per_page=100" `
+            -Headers $headers -TimeoutSec 20
+    } catch {
+        throw 'GitHub Actions API could not verify the private synthetic run and its job metadata.'
+    }
+
+    $expectedWorkflowPath = '.github/workflows/spike8-queued-probe.yml@refs/heads/' + [string]$repo.default_branch
+    $job = @($jobs.jobs | Where-Object {
+        $_.status -in @('queued', 'in_progress') -and @($_.labels) -ccontains 'ghr-spike8-probe'
+    })
+    if ($repo.full_name -cne 'jonathan-vella/ghr-smoke' -or $repo.private -ne $true -or
+        [string]::IsNullOrWhiteSpace([string]$repo.default_branch) -or
+        [string]$run.repository.full_name -cne 'jonathan-vella/ghr-smoke' -or
+        $run.event -cne 'workflow_dispatch' -or $run.head_branch -cne $repo.default_branch -or
+        $run.path -cne $expectedWorkflowPath -or $run.status -notin @('queued', 'in_progress') -or
+        $job.Count -ne 1) {
+        throw 'GitHub run metadata does not prove the expected default-branch queued synthetic job with the custom label.'
+    }
+    return [pscustomobject]@{
+        runId = [string]$run.id
+        repository = $run.repository.full_name
+        event = $run.event
+        branch = $run.head_branch
+        runStatus = $run.status
+        workflowPath = $run.path
+        jobStatus = $job[0].status
+        customLabelPresent = $true
+        evidenceSource = 'GitHub App Actions API readback'
+        observedAtUtc = [DateTime]::UtcNow.ToString('o')
+    }
 }
 
 function Get-AzJson {
@@ -108,6 +229,79 @@ function Get-AllowlistedErrorCode {
         }
     }
     return 'UnclassifiedError'
+}
+
+function Get-NsgOutboundRules {
+    param([Parameter(Mandatory)][string[]]$ApiPrefixes)
+
+    return @(
+        @{ name = 'AllowAcaSubnetDependencies'; priority = 100; protocol = '*'; source = '10.252.8.0/27'; destination = @('10.252.8.0/27'); ports = @('*'); access = 'Allow' },
+        @{ name = 'AllowPrivateEndpointHttps'; priority = 110; protocol = 'Tcp'; source = '10.252.8.0/27'; destination = @('10.252.8.32/27'); ports = @('443'); access = 'Allow' },
+        @{ name = 'AllowAzurePlatformDns'; priority = 120; protocol = 'Udp'; source = '10.252.8.0/27'; destination = @('AzurePlatformDNS'); ports = @('53'); access = 'Allow' },
+        @{ name = 'AllowMicrosoftContainerRegistry'; priority = 130; protocol = 'Tcp'; source = '10.252.8.0/27'; destination = @('MicrosoftContainerRegistry'); ports = @('443'); access = 'Allow' },
+        @{ name = 'AllowAzureFrontDoorFirstParty'; priority = 140; protocol = 'Tcp'; source = '10.252.8.0/27'; destination = @('AzureFrontDoor.FirstParty'); ports = @('443'); access = 'Allow' },
+        @{ name = 'AllowAzureActiveDirectory'; priority = 150; protocol = 'Tcp'; source = '10.252.8.0/27'; destination = @('AzureActiveDirectory'); ports = @('443'); access = 'Allow' },
+        @{ name = 'AllowAzureMonitor'; priority = 160; protocol = 'Tcp'; source = '10.252.8.0/27'; destination = @('AzureMonitor'); ports = @('443'); access = 'Allow' },
+        @{ name = 'AllowGitHubApiHttps'; priority = 170; protocol = 'Tcp'; source = '10.252.8.0/27'; destination = $ApiPrefixes; ports = @('443'); access = 'Allow' },
+        @{ name = 'DenyRfc1918'; priority = 4000; protocol = '*'; source = '10.252.8.0/27'; destination = @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'); ports = @('*'); access = 'Deny' },
+        @{ name = 'DenyInternetOutbound'; priority = 4090; protocol = '*'; source = '10.252.8.0/27'; destination = @('Internet'); ports = @('*'); access = 'Deny' }
+    )
+}
+
+function Get-GitHubApiDenyRule {
+    param([Parameter(Mandatory)][string[]]$ApiPrefixes)
+
+    return @{
+        name = 'DenyGitHubApiForSpike8'
+        priority = 165
+        protocol = 'Tcp'
+        source = '10.252.8.0/27'
+        destination = $ApiPrefixes
+        ports = @('443')
+        access = 'Deny'
+    }
+}
+
+function Get-CleanupResourcePlan {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Resources)
+
+    $unexpected = @($Resources | Where-Object { $_.name -notin $resourceNames })
+    if ($unexpected.Count -gt 0) {
+        throw 'Unexpected resources are present in the issue #8 group; refusing cleanup.'
+    }
+    $nested = @(
+        "$virtualNetwork/$subnet", "$virtualNetwork/$keyVaultSubnet",
+        "$networkSecurityGroup/DenyGitHubApiForSpike8", "$networkSecurityGroup/AllowPrivateEndpointHttps",
+        "$networkSecurityGroup/AllowGitHubApiHttps", "$networkSecurityGroup/AllowAcaSubnetDependencies",
+        "$networkSecurityGroup/AllowAzurePlatformDns", "$networkSecurityGroup/AllowAzureCloudHttps",
+        "$networkSecurityGroup/AllowMicrosoftContainerRegistry", "$networkSecurityGroup/AllowAzureFrontDoorFirstParty",
+        "$networkSecurityGroup/AllowAzureActiveDirectory", "$networkSecurityGroup/AllowAzureMonitor",
+        "$networkSecurityGroup/DenyInternetOutbound", "$networkSecurityGroup/DenyRfc1918",
+        "$keyVaultName/gh-runner-app-key", "$privateEndpoint/default",
+        "$privateDnsZone/$privateDnsLink", "$workflowIdentity/github-platform-prod"
+    )
+    $untagged = @($Resources | Where-Object {
+        $_.name -notin $nested -and $_.tags.'spike-id' -cne '8'
+    })
+    if ($untagged.Count -gt 0) {
+        throw 'A named resource lacks the issue #8 ownership tag; refusing cleanup.'
+    }
+    $order = @(
+        $scalerJob, $probeJob, $environment, $privateEndpoint,
+        "$privateDnsZone/$privateDnsLink", $virtualNetwork, $networkSecurityGroup,
+        $natGateway, $publicIp, $privateDnsZone
+    )
+    $plan = [System.Collections.Generic.List[object]]::new()
+    foreach ($name in $order) {
+        $matches = @($Resources | Where-Object { $_.name -ceq $name })
+        if ($matches.Count -gt 1) {
+            throw "More than one explicitly named resource '$name' exists; refusing cleanup."
+        }
+        if ($matches.Count -eq 1) {
+            $plan.Add($matches[0])
+        }
+    }
+    return $plan.ToArray()
 }
 
 function Invoke-ContainerAppsApi {
@@ -205,50 +399,71 @@ function Get-KedaEvents {
         '--resource-group', $resourceGroup, '--tail', '300', '--output', 'json'
     )
     try {
-        $records = @($raw | ConvertFrom-Json)
+        $parsed = $raw | ConvertFrom-Json
+        $valueProperty = $parsed.PSObject.Properties['value']
+        $records = if ($valueProperty) { @($valueProperty.Value) } else { @($parsed) }
     } catch {
         throw 'Container Apps returned unparseable system-log output; raw log contents were suppressed.'
     }
     $events = @()
-    $unscopedEventCount = 0
+    $unattributedKedaRecordCount = 0
     foreach ($record in $records) {
-        $text = if ($record -is [string]) {
-            $record
-        } else {
-            ConvertTo-Json -InputObject $record -Depth 10 -Compress
-        }
-        if ($text -notmatch '(?i)keda') {
+        $properties = if ($record.properties) { $record.properties } elseif ($record.Properties) { $record.Properties } else { $record }
+        $source = [string](@($properties.source, $properties.Source, $properties.component, $properties.Component) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -First 1)
+        if ($source -notmatch '^(?i:keda|kedacontroller|kedaScaler)$') {
             continue
         }
-        $timestamp = $null
-        if ($text -match '\b(20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\b') {
-            $timestamp = [DateTime]::Parse($Matches[1]).ToUniversalTime()
-            if ($timestamp -lt $StartTime.ToUniversalTime() -or $timestamp -gt $EndTime.ToUniversalTime()) {
-                continue
-            }
-        } else {
-            $unscopedEventCount++
+        $timestampValue = @($record.TimeGenerated, $record.timeGenerated, $properties.timeGeneratedUtc,
+            $properties.timestamp, $properties.TimeGenerated) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -First 1
+        $timestamp = [DateTimeOffset]::MinValue
+        $timestampParsed = $false
+        if ($timestampValue -is [DateTime]) {
+            $timestamp = [DateTimeOffset]$timestampValue
+            $timestampParsed = $true
+        } elseif ($timestampValue) {
+            $timestampParsed = [DateTimeOffset]::TryParse([string]$timestampValue, [ref]$timestamp)
+        }
+        if (-not $timestampParsed) {
+            $unattributedKedaRecordCount++
             continue
         }
-        $type = if ($text -match '(?i)\b(error|failed|failure)\b') { 'Error' } else { 'Event' }
-        $jobName = if ($text.Contains($scalerJob)) { $scalerJob } else { $null }
+        $timestamp = $timestamp.ToUniversalTime()
+        if ($timestamp -lt $StartTime.ToUniversalTime() -or $timestamp -gt $EndTime.ToUniversalTime()) {
+            continue
+        }
+        $ruleName = [string](@($properties.scalerName, $properties.ScalerName,
+            $properties.scaleRuleName, $properties.ScaleRuleName, $properties.ruleName, $properties.RuleName) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -First 1)
+        $jobName = [string](@($properties.containerAppJobName, $properties.ContainerAppJobName,
+            $properties.jobName, $properties.JobName) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -First 1)
+        if ($ruleName -cne 'github-runner' -or $jobName -cne $scalerJob) {
+            $unattributedKedaRecordCount++
+            continue
+        }
+        $eventType = [string](@($properties.type, $properties.Type, $properties.level,
+            $properties.Level, $properties.severity, $properties.Severity, $properties.status,
+            $properties.Status) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+            Select-Object -First 1)
+        $type = if ($eventType -match '^(?i:error|failed|failure)$') { 'Error' } else { 'Event' }
         $events += [pscustomobject]@{
-            timeGeneratedUtc = if ($timestamp) { $timestamp.ToString('o') } else { $null }
-            eventSource = 'Keda'
+            timeGeneratedUtc = $timestamp.ToString('o')
+            eventSource = $source
             type = $type
-            reason = '[redacted]'
+            ruleName = $ruleName
             jobName = $jobName
         }
     }
     $result = [pscustomobject]@{
         sampleCount = $events.Count
         errorCount = @($events | Where-Object { $_.type -eq 'Error' }).Count
-        unscopedEventCount = $unscopedEventCount
+        unattributedKedaRecordCount = $unattributedKedaRecordCount
         events = $events
     }
     $raw = $null
     $records = $null
-    $text = $null
     return $result
 }
 
@@ -266,6 +481,9 @@ function Wait-KedaEvents {
         }
         Start-Sleep -Seconds 15
     } while ([DateTime]::UtcNow -lt $deadline)
+    if ($events.sampleCount -eq 0) {
+        throw 'No timestamped, structured KEDA events attributed to the exact github-runner rule and spike job were observed.'
+    }
     return $events
 }
 
@@ -339,97 +557,96 @@ function Write-Evidence {
     $evidence | ConvertTo-Json -Depth 20 | Set-Content -Path $evidencePath -Encoding utf8
 }
 
+if ($Mode -eq 'Validate') {
+    return
+}
+
 if ($Mode -eq 'CleanupResources') {
     $deleted = [System.Collections.Generic.List[string]]::new()
     try {
         Assert-ApprovedContext
         $resources = Get-AzResources
-        $groupState = Get-AzJson @('group', 'show', '--name', $resourceGroup)
-        $unexpected = @($resources | Where-Object { $_.name -notin $resourceNames })
-        if ($unexpected.Count -gt 0) {
-            throw 'Unexpected resources are present in the issue #8 group; refusing cleanup.'
-        }
-        $nestedResources = @(
-            "$virtualNetwork/$subnet", "$virtualNetwork/$keyVaultSubnet",
-            "$networkSecurityGroup/DenyGitHubApiForSpike8", "$networkSecurityGroup/AllowPrivateEndpointHttps",
-            "$networkSecurityGroup/AllowGitHubApiHttps",
-            "$networkSecurityGroup/AllowAzurePlatformDns", "$networkSecurityGroup/AllowAzureCloudHttps",
-            "$networkSecurityGroup/DenyInternetOutbound", "$networkSecurityGroup/DenyRfc1918",
-            "$keyVaultName/gh-runner-app-key", "$privateEndpoint/default",
-            "$privateDnsZone/$privateDnsLink", "$workflowIdentity/github-platform-prod"
-        )
-        $untagged = @($resources | Where-Object {
-            $_.name -notin $nestedResources -and $_.tags.'spike-id' -cne '8'
-        })
-        if ($untagged.Count -gt 0) {
-            throw 'A named resource lacks the issue #8 ownership tag; refusing cleanup.'
-        }
-
-        $vaultResource = @($resources | Where-Object name -eq $keyVaultName)
-        if ($vaultResource.Count -eq 1) {
-            $identity = Get-AzJson @('identity', 'show', '--resource-group', $resourceGroup, '--name', $keyVaultIdentity)
-            $workflowIdentityObject = Get-AzJson @('identity', 'show', '--resource-group', $resourceGroup, '--name', $workflowIdentity)
-            $assignments = Get-KeyVaultAssignments -VaultId $vaultResource[0].id
-            $unexpectedAssignments = @($assignments | Where-Object {
-                -not (
-                    ($_.principalId -eq $identity.principalId -and $_.roleDefinitionId -match '/4633458b-17de-408a-b874-0445c86b69e6$') -or
-                    ($_.principalId -eq $workflowIdentityObject.principalId -and $_.roleDefinitionId -match '/b86a8fe4-44ce-4948-aee5-eccb2c155cd7$')
-                )
-            })
-            if ($unexpectedAssignments.Count -gt 0 -or $assignments.Count -ne 2) {
-                throw 'Unexpected Key Vault role assignments exist; refusing cleanup.'
-            }
-            foreach ($assignment in $assignments) {
-                $null = Invoke-Az @('role', 'assignment', 'delete', '--ids', $assignment.id)
-            }
-        }
-        $workflowIdentityResource = @($resources | Where-Object name -eq $workflowIdentity)
-        $groupAssignments = @(Get-AzJson @('role', 'assignment', 'list', '--scope', $groupState.id) |
-            Where-Object { $_.scope -eq $groupState.id })
-        if ($workflowIdentityResource.Count -eq 1) {
-            $workflowIdentityObject = Get-AzJson @('identity', 'show', '--resource-group', $resourceGroup, '--name', $workflowIdentity)
-            if ($groupAssignments.Count -ne 1 -or
-                $groupAssignments[0].principalId -ne $workflowIdentityObject.principalId -or
-                $groupAssignments[0].roleDefinitionId -notmatch '/b24988ac-6180-42a0-ab88-20f7382dd24c$') {
-                throw 'Unexpected direct role assignments exist on the issue #8 resource group; refusing cleanup.'
-            }
-            $null = Invoke-Az @('role', 'assignment', 'delete', '--ids', $groupAssignments[0].id)
-        } elseif ($groupAssignments.Count -ne 0) {
-            throw 'An issue #8 resource-group assignment remains without its expected workflow identity; refusing cleanup.'
-        }
-
-        $deleteOrder = @(
-            $scalerJob, $probeJob, $environment, $networkSecurityGroup, $natGateway, $publicIp,
-            $privateEndpoint, $keyVaultName, $keyVaultIdentity, $workflowIdentity, $virtualNetwork,
-            "$privateDnsZone/$privateDnsLink", $privateDnsZone
-        )
-        foreach ($name in $deleteOrder) {
-            $resource = @($resources | Where-Object name -eq $name)
-            if ($resource.Count -eq 1) {
-                $null = Invoke-Az @('resource', 'delete', '--ids', $resource[0].id)
-                $deleted.Add($resource[0].id)
-            } elseif ($resource.Count -gt 1) {
-                throw "More than one explicitly named resource '$name' exists; refusing cleanup."
-            }
-        }
         if ($evidencePath -and (Test-Path $evidencePath)) {
             $evidence = Get-Content -Raw -Path $evidencePath | ConvertFrom-Json
+        }
+        if (-not $evidence) {
+            $evidence = [pscustomobject]@{
+                issue = 8
+                subscriptionId = $subscriptionId
+                resourceGroup = $resourceGroup
+                workflowPrincipalId = $null
+                workloadPrincipalId = $null
+            }
+        }
+        $cleanupPlan = Get-CleanupResourcePlan -Resources $resources
+
+        $workflowIdentityResource = @($resources | Where-Object name -eq $workflowIdentity)
+        if ($workflowIdentityResource.Count -eq 1) {
+            $workflowIdentityObject = Get-AzJson @('identity', 'show', '--resource-group', $resourceGroup, '--name', $workflowIdentity)
+            $evidence.workflowPrincipalId = $workflowIdentityObject.principalId
+        }
+        $workloadIdentityResource = @($resources | Where-Object name -eq $keyVaultIdentity)
+        if ($workloadIdentityResource.Count -eq 1) {
+            $workloadIdentityObject = Get-AzJson @('identity', 'show', '--resource-group', $resourceGroup, '--name', $keyVaultIdentity)
+            $evidence.workloadPrincipalId = $workloadIdentityObject.principalId
+        }
+
+        foreach ($resource in @($cleanupPlan | Where-Object {
+            $_.name -in @($scalerJob, $probeJob, $environment)
+        })) {
+            $null = Invoke-Az @('resource', 'delete', '--ids', $resource.id)
+            $deleted.Add($resource.id)
+        }
+
+        $vnetResource = @($resources | Where-Object name -eq $virtualNetwork)
+        if ($vnetResource.Count -eq 1) {
+            $subnetState = Get-AzJson @(
+                'network', 'vnet', 'subnet', 'show', '--resource-group', $resourceGroup,
+                '--vnet-name', $virtualNetwork, '--name', $subnet
+            )
+            if ($subnetState.networkSecurityGroup) {
+                $null = Invoke-Az @(
+                    'network', 'vnet', 'subnet', 'update', '--resource-group', $resourceGroup,
+                    '--vnet-name', $virtualNetwork, '--name', $subnet, '--remove', 'networkSecurityGroup'
+                )
+            }
+            if ($subnetState.natGateway) {
+                $null = Invoke-Az @(
+                    'network', 'vnet', 'subnet', 'update', '--resource-group', $resourceGroup,
+                    '--vnet-name', $virtualNetwork, '--name', $subnet, '--remove', 'natGateway'
+                )
+            }
+        }
+
+        foreach ($resource in @($cleanupPlan | Where-Object {
+            $_.name -notin @($scalerJob, $probeJob, $environment)
+        })) {
+            $null = Invoke-Az @('resource', 'delete', '--ids', $resource.id)
+            $deleted.Add($resource.id)
+        }
+        if ($evidencePath -and (Test-Path $evidencePath)) {
             $evidence | Add-Member -NotePropertyName cleanup -NotePropertyValue ([pscustomobject]@{
                 attemptedAtUtc = [DateTime]::UtcNow.ToString('o')
                 resourceGroupDeleted = $false
                 deletedResourceIds = @($deleted)
-                status = 'success'
+                outstandingNamedResourceIds = @($resources |
+                    Where-Object { $_.name -in @($keyVaultName, $keyVaultIdentity, $workflowIdentity) } |
+                    ForEach-Object { $_.id })
+                workflowPrincipalId = $evidence.workflowPrincipalId
+                workloadPrincipalId = $evidence.workloadPrincipalId
+                status = 'operator-cleanup-required'
             }) -Force
             Write-Evidence
         }
-        Write-Output "Deleted $($deleted.Count) explicitly named issue #8 resources; resource group retained for operator cleanup."
+        Write-Output "Deleted $($deleted.Count) explicitly named issue #8 resources. Operator cleanup is still required for the private Key Vault, identities, and their scoped role assignments."
     } catch {
         if ($evidencePath -and (Test-Path $evidencePath)) {
-            $evidence = Get-Content -Raw -Path $evidencePath | ConvertFrom-Json
             $evidence | Add-Member -NotePropertyName cleanup -NotePropertyValue ([pscustomobject]@{
                 attemptedAtUtc = [DateTime]::UtcNow.ToString('o')
                 resourceGroupDeleted = $false
                 deletedResourceIds = @($deleted)
+                workflowPrincipalId = $evidence.workflowPrincipalId
+                workloadPrincipalId = $evidence.workloadPrincipalId
                 status = 'failed'
                 errorCode = Get-AllowlistedErrorCode -Message $_.Exception.Message
             }) -Force
@@ -453,6 +670,10 @@ $evidence = [ordered]@{
     scalerAuthentication = 'GitHub App secrets referenced; secret values are not recorded.'
     scalerPollingObservation = 'not-observed; configuration and aggregate NAT counters do not prove a successful poll.'
     syntheticRunUrl = $env:SYNTHETIC_RUN_URL
+    syntheticRunObservations = @()
+    syntheticRunEvidenceMode = $null
+    workflowPrincipalId = $null
+    workloadPrincipalId = $null
     diagnosticImage = $curlImage
     natMetric = 'ByteCount'
     natMetricPhases = @()
@@ -464,18 +685,25 @@ $evidence = [ordered]@{
 }
 
 try {
-    Assert-ApprovedContext
+    if ($env:CAPACITY_RECOVERED -cne 'confirmed-recovered') {
+        throw 'Do not make Azure calls until the issue #7 swedencentral capacity blocker is confirmed resolved.'
+    }
     if ($env:GITHUB_REF -ne 'refs/heads/main' -or $env:SPIKE_CONFIRMATION -ne 'run-spike8') {
         throw 'Run only from main and provide the exact run-spike8 confirmation.'
     }
     if ($env:SYNTHETIC_RUN_URL -notmatch '^https://github\.com/jonathan-vella/ghr-smoke/actions/runs/\d+$') {
         throw 'Provide the URL of the manually dispatched, queued ghr-smoke synthetic run.'
     }
+    Assert-ApprovedContext
     foreach ($name in @('GH_APP_ID', 'GH_APP_INSTALLATION_ID', 'GH_APP_PRIVATE_KEY')) {
         if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
             throw "Required platform-prod secret '$name' is unavailable."
         }
     }
+    $script:githubInstallationToken = New-GitHubInstallationToken
+    $initialSyntheticRun = Get-SyntheticRunState -RunUrl $env:SYNTHETIC_RUN_URL
+    $evidence.syntheticRunObservations += $initialSyntheticRun
+    $evidence.syntheticRunEvidenceMode = 'GitHub App Actions API readback; installation is limited to ghr-smoke.'
     $existing = Get-AzResources
     $expectedPrerequisites = @(
         $virtualNetwork, "$virtualNetwork/$keyVaultSubnet", $keyVaultName, $keyVaultIdentity,
@@ -506,6 +734,8 @@ try {
     $uami = Get-AzJson @('identity', 'show', '--resource-group', $resourceGroup, '--name', $keyVaultIdentity)
     $workflowIdentityObject = Get-AzJson @('identity', 'show', '--resource-group', $resourceGroup, '--name', $workflowIdentity)
     $workflowPrincipalId = $workflowIdentityObject.principalId
+    $evidence.workflowPrincipalId = $workflowPrincipalId
+    $evidence.workloadPrincipalId = $uami.principalId
     $keyVaultAssignments = Get-KeyVaultAssignments -VaultId $keyVault.id
     $allowedKeyVaultAssignments = @($keyVaultAssignments | Where-Object {
         ($_.principalId -eq $uami.principalId -and $_.roleDefinitionId -match '/4633458b-17de-408a-b874-0445c86b69e6$') -or
@@ -574,28 +804,26 @@ try {
         '--location', $location, '--public-ip-addresses', $publicIp, '--idle-timeout', '10', '--tags'
     ) + $tags)
     $networkRules = @(
-        @{ name = 'AllowPrivateEndpointHttps'; priority = '100'; protocol = 'Tcp'; destination = @('10.252.8.32/27'); ports = @('443'); access = 'Allow' },
-        @{ name = 'AllowAzurePlatformDns'; priority = '105'; protocol = 'Udp'; destination = @('AzurePlatformDNS'); ports = @('53'); access = 'Allow' },
-        @{ name = 'AllowAzureCloudHttps'; priority = '110'; protocol = 'Tcp'; destination = @('AzureCloud'); ports = @('443'); access = 'Allow' },
-        @{ name = 'DenyRfc1918'; priority = '130'; protocol = '*'; destination = @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'); ports = @('*'); access = 'Deny' },
-        @{ name = 'DenyInternetOutbound'; priority = '200'; protocol = '*'; destination = @('Internet'); ports = @('*'); access = 'Deny' }
+        @{ name = 'AllowAcaSubnetDependencies'; priority = '100'; protocol = '*'; destination = @('10.252.8.0/27'); ports = @('*'); access = 'Allow' },
+        @{ name = 'AllowPrivateEndpointHttps'; priority = '110'; protocol = 'Tcp'; destination = @('10.252.8.32/27'); ports = @('443'); access = 'Allow' },
+        @{ name = 'AllowAzurePlatformDns'; priority = '120'; protocol = 'Udp'; destination = @('AzurePlatformDNS'); ports = @('53'); access = 'Allow' },
+        @{ name = 'AllowMicrosoftContainerRegistry'; priority = '130'; protocol = 'Tcp'; destination = @('MicrosoftContainerRegistry'); ports = @('443'); access = 'Allow' },
+        @{ name = 'AllowAzureFrontDoorFirstParty'; priority = '140'; protocol = 'Tcp'; destination = @('AzureFrontDoor.FirstParty'); ports = @('443'); access = 'Allow' },
+        @{ name = 'AllowAzureActiveDirectory'; priority = '150'; protocol = 'Tcp'; destination = @('AzureActiveDirectory'); ports = @('443'); access = 'Allow' },
+        @{ name = 'AllowAzureMonitor'; priority = '160'; protocol = 'Tcp'; destination = @('AzureMonitor'); ports = @('443'); access = 'Allow' },
+        @{ name = 'AllowGitHubApiHttps'; priority = '170'; protocol = 'Tcp'; destination = $apiPrefixes; ports = @('443'); access = 'Allow' },
+        @{ name = 'DenyRfc1918'; priority = '4000'; protocol = '*'; destination = @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'); ports = @('*'); access = 'Deny' },
+        @{ name = 'DenyInternetOutbound'; priority = '4090'; protocol = '*'; destination = @('Internet'); ports = @('*'); access = 'Deny' }
     )
     foreach ($rule in $networkRules) {
         $null = Invoke-Az (@(
             'network', 'nsg', 'rule', 'create', '--resource-group', $resourceGroup,
             '--nsg-name', $networkSecurityGroup, '--name', $rule.name,
             '--priority', $rule.priority, '--direction', 'Outbound', '--access', $rule.access,
-            '--protocol', $rule.protocol, '--source-address-prefixes', '*', '--source-port-ranges', '*',
+            '--protocol', $rule.protocol, '--source-address-prefixes', $rule.source, '--source-port-ranges', '*',
             '--destination-address-prefixes'
         ) + $rule.destination + @('--destination-port-ranges') + $rule.ports)
     }
-    $null = Invoke-Az (@(
-        'network', 'nsg', 'rule', 'create', '--resource-group', $resourceGroup,
-        '--nsg-name', $networkSecurityGroup, '--name', 'AllowGitHubApiHttps',
-        '--priority', '120', '--direction', 'Outbound', '--access', 'Allow',
-        '--protocol', 'Tcp', '--source-address-prefixes', '*', '--source-port-ranges', '*',
-        '--destination-address-prefixes'
-    ) + $apiPrefixes + @('--destination-port-ranges', '443', '--description', 'GitHub API dependency for the bounded issue 8 scaler and probe.'))
     $null = Invoke-Az @(
         'network', 'vnet', 'subnet', 'update', '--resource-group', $resourceGroup,
         '--vnet-name', $virtualNetwork, '--name', $subnet,
@@ -819,6 +1047,7 @@ try {
         appKeyValueRecorded = $false
     }
 
+    $evidence.syntheticRunObservations += Get-SyntheticRunState -RunUrl $env:SYNTHETIC_RUN_URL
     $activeStart = [DateTime]::UtcNow
     $activeDeadline = $activeStart.AddMinutes(3)
     do {
@@ -843,6 +1072,7 @@ try {
         }
     })
     $evidence.kedaEvents.allow = Wait-KedaEvents -StartTime $activeStart -EndTime $activeEnd
+    $evidence.syntheticRunObservations += Get-SyntheticRunState -RunUrl $env:SYNTHETIC_RUN_URL
     $evidence.scalerPollingObservation = if ($executions.Count -gt 0) {
         'A scaler-triggered Container Apps execution was observed while the supplied custom-label ghr-smoke run was queued; individual GitHub API responses were not captured.'
     } else {
@@ -851,13 +1081,15 @@ try {
     if ($executions.Count -eq 0) {
         throw 'KEDA did not start an execution during the bounded allow phase; stopping before the deny comparison.'
     }
+    $evidence.syntheticRunObservations += Get-SyntheticRunState -RunUrl $env:SYNTHETIC_RUN_URL
+    $denyRule = Get-GitHubApiDenyRule -ApiPrefixes $apiPrefixes
     $denyRuleArgs = @(
         'network', 'nsg', 'rule', 'create', '--resource-group', $resourceGroup,
-        '--nsg-name', $networkSecurityGroup, '--name', 'DenyGitHubApiForSpike8',
-        '--priority', '90', '--direction', 'Outbound', '--access', 'Deny', '--protocol', 'Tcp',
-        '--source-address-prefixes', '*', '--source-port-ranges', '*',
+        '--nsg-name', $networkSecurityGroup, '--name', $denyRule.name,
+        '--priority', [string]$denyRule.priority, '--direction', 'Outbound', '--access', $denyRule.access, '--protocol', $denyRule.protocol,
+        '--source-address-prefixes', $denyRule.source, '--source-port-ranges', '*',
         '--destination-address-prefixes'
-    ) + $apiPrefixes + @('--destination-port-ranges', '443', '--description', 'Temporary issue 8 GitHub API deny test.')
+    ) + $denyRule.destination + @('--destination-port-ranges') + $denyRule.ports + @('--description', 'Temporary issue 8 GitHub API deny test.')
     $null = Invoke-Az $denyRuleArgs
     Start-ProbeExecution -ExpectedStatus 'Failed'
     $denyStart = [DateTime]::UtcNow
@@ -875,7 +1107,7 @@ try {
         destinationPrefixes = $apiPrefixes
         destinationPort = 443
         nsgRuleName = 'DenyGitHubApiForSpike8'
-        nsgRulePriority = 90
+        nsgRulePriority = $denyRule.priority
         nsgRuleProtocol = 'Tcp'
         probeSucceededBeforeDeny = $true
         probeFailedDuringDeny = $true
@@ -883,6 +1115,7 @@ try {
         kedaPollOriginConclusion = 'manual-review-required'
     }
     $evidence.kedaEvents.deny = Wait-KedaEvents -StartTime $denyStart -EndTime $denyEnd
+    $evidence.syntheticRunObservations += Get-SyntheticRunState -RunUrl $env:SYNTHETIC_RUN_URL
     $denyExecutionsResult = Invoke-ContainerAppsApi -Method GET -ResourcePath "$jobBasePath/$scalerJob/executions"
     $denyExecutions = @($denyExecutionsResult.value)
     $evidence.scaleRuleExecutionsDuringDeny = $denyExecutions.Count
@@ -928,6 +1161,8 @@ try {
 "@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
     }
 } finally {
+    $script:githubInstallationToken = $null
+    $env:GH_APP_PRIVATE_KEY = $null
     if ($evidence -and -not $evidence.finishedAtUtc) {
         $evidence.finishedAtUtc = [DateTime]::UtcNow.ToString('o')
     }

@@ -1,0 +1,32 @@
+{
+  "subscriptionId": "b47d2942-f5ad-4d3c-b28e-c23e4f83d97e",
+  "resourceGroup": "rg-ghrunners-prod-swc",
+  "location": "swedencentral",
+  "addressSpace": "10.60.0.0/22",
+  "subnets": {
+    "aca": "10.60.0.0/27",
+    "acrAgents": "10.60.0.32/27",
+    "privateEndpoints": "10.60.0.64/27",
+    "consumerPrivateEndpoints": "10.60.0.128/26"
+  },
+  "privateDnsZones": [
+    "privatelink.blob.core.windows.net",
+    "privatelink.file.core.windows.net",
+    "privatelink.queue.core.windows.net",
+    "privatelink.table.core.windows.net",
+    "privatelink.vaultcore.azure.net",
+    "privatelink.azurecr.io"
+  ],
+  "governanceTags": {
+    "application": "ghrunners",
+    "environment": "prod",
+    "workload": "gh-runners",
+    "owner": "jonathan-vella",
+    "costcenter": "platform-engineering",
+    "tech-contact": "jonathan-vella",
+    "technical-contact": "jonathan-vella",
+    "sla": "development",
+    "backup-policy": "none",
+    "maint-window": "none"
+  }
+}
