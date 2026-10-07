@@ -11,3 +11,4 @@ Planned ADRs from the M1 spikes:
 | [0003](0003-egress-requirements.md) | Egress requirements (KEDA polling path; proposed) | `spike-keda-egress` |
 | 0004 | Runner secret isolation (init container, EmptyDir, identitySettings) | `spike-job-identity-init` |
 | 0005 | Runner labels and `runs-on` syntax | `spike-jit-labels` |
+| [0006](0006-vmss-flex-spike.md) | Bounded VMSS Flex protocol (proposed; code preparation only) | [#60](https://github.com/jonathan-vella/azure-gh-runners/issues/60) |

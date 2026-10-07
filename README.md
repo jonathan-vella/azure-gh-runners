@@ -30,6 +30,8 @@ Both were written while evaluating `apex-vnext` as the first consumer.
 
 Install Node.js/npm, the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), PowerShell 7, and Python 3.
 Hook tests additionally require Bash, git, jq, and curl on Linux, or Linux Docker on Windows.
+The [VMSS spike preparation](spikes/vmss-flex/README.md) client checks require Linux Docker on every host;
+they compile the pinned Go integration inside a digest-pinned builder without installing Go locally.
 Then run:
 
 ```powershell
@@ -47,7 +49,8 @@ ARM parameters document contains typed consumer deployment fields and a serializ
 not consume it until consumer-job infrastructure is implemented. The registry currently has no active consumers, so
 validation does not need GitHub access; when entries are added, install GitHub CLI and authenticate with access to
 each registered repository. Files ending in `.sample` are examples, not active entries. It also compiles the issue-9
-spike templates and runs its offline PowerShell/Python unit tests. Validation does not deploy resources.
+spike templates and runs its offline PowerShell/Python unit tests, plus issue-60 offline budget/cleanup tests
+and the pinned Go client build/vet/tests. Validation does not deploy resources.
 
 ## At a glance
 

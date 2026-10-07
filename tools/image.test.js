@@ -55,7 +55,7 @@ test('runner is unprivileged and the inherited runtime contract stays unchanged'
   assert.match(installer, /id -u runner/);
   assert.match(installer, /id -g runner/);
   assert.match(installer, /usermod --groups users runner/);
-  assert.match(installer, /rm \/usr\/bin\/dockerd/);
+  assert.match(installer, /rm -f \/usr\/bin\/dockerd/);
   assert.match(verifier, /sudo -n true/);
   assert.match(verifier, /\/var\/run\/docker\.sock/);
   assert.match(verifier, /\/home\/runner\/bin\/Runner\.Listener --version/);

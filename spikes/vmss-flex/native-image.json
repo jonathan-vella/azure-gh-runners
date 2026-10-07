@@ -1,0 +1,19 @@
+{
+  "distribution": "Ubuntu 24.04 LTS",
+  "build": "20260926",
+  "architecture": "amd64",
+  "vhd": {
+    "url": "https://cloud-images.ubuntu.com/noble/20260926/noble-server-cloudimg-amd64-azure.vhd.tar.gz",
+    "sha256": "3543723afd820d7a8a64ea7399376856a95ce15200439c38447170652a60a5f3"
+  },
+  "testRootfs": {
+    "url": "https://cloud-images.ubuntu.com/noble/20260926/noble-server-cloudimg-amd64-root.tar.xz",
+    "sha256": "820311e238ea34d76a8ca2643d6c01065212e9417109e7397d70472a236df261"
+  },
+  "runnerArchive": {
+    "version": "2.338.0",
+    "url": "https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-linux-x64-2.338.0.tar.gz",
+    "sha256": "af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32"
+  },
+  "gitPpaFingerprint": "F911AB184317630C59970973E363C90F8F1B6217"
+}
