@@ -45,8 +45,9 @@ before a fresh environment create because the first environment remained in `Fai
 (`ManagedEnvironmentNotReadyForAppCreation`); it did not re-test regional capacity.
 
 The one-off source used was `infra/spike-kv-ref-pe.bicep`; it was removed after the isolated resource group was deleted.
-The secure parameter file `%TEMP%\\issue7-kvref-696be5.parameters.json` was also removed. **No reusable deployment or
-cleanup script/template is currently committed.**
+The secure parameter file `%TEMP%\\issue7-kvref-696be5.parameters.json` was also removed. The reusable, sanitized
+experiment is now in `infra/spike7/main.bicep` with the bounded local runner in `infra/spike7/Invoke-Spike.ps1`.
+`tools/validate-spike7.mjs` checks local artifact invariants without Azure access.
 
 ## Consequences
 
@@ -57,10 +58,23 @@ cleanup script/template is currently committed.**
   profiles are supported, changing from Consumption to a paid Dedicated profile does not address the reported
   region-capacity error and would change the cost model. Do not treat it as a workaround; retry the Consumption
   environment only after capacity recovery is coordinated.
+- The reusable experiment pins AVM modules to exact stable versions: VNet `0.10.2`, private DNS zone `0.8.1`,
+  user-assigned identity `0.6.0`, Key Vault `0.14.2`, private endpoint `0.12.1`, ACA managed environment `0.16.0`,
+  and ACA job `0.7.2`. These are the latest stable tags checked in the public Bicep registry when the artifact was
+  authored; the native private-DNS link and Key Vault secret resource APIs are pinned to `2024-06-01` and
+  `2026-02-01`, respectively. The diagnostic image is pinned to Azure CLI `2.91.0` digest
+  `sha256:933eb8dcb81aecb6f77e03c5b8660f0a1dfa9e1d16525763a27f86ff3b83a044`, verified from the MCR manifest.
 - Re-run the controlled comparison in `swedencentral` when ACA capacity is available: use a synthetic secret, verify
   its value in the job using a non-secret comparison result, and compare Key Vault bypass `None` with
   `AzureServices` while keeping public network access disabled.
-- Leave issue #7 open until both acceptance criteria are supported by job-execution evidence and the isolated spike
+- After the coordinator confirms capacity recovery, the bounded rerun sequence is:
+  `.\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered`,
+  followed by the same command with `-Action Test`; use `-Action Cleanup` to remove only the tagged issue-7
+  resource group. Each ARM command supplies the approved subscription explicitly. Deploy requires the exact absent
+  resource group, creates a random synthetic value into an ACL-restricted temporary secure parameter file, and removes
+  that file in a `finally` block. The test action is bounded, emits execution statuses only, and restores bypass to
+  `None` without ever enabling public access.
+- Leave issue #7 open until all acceptance criteria are supported by job-execution evidence and the isolated spike
   resources are confirmed deleted.
 
 ## Status
