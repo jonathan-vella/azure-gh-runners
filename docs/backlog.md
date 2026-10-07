@@ -6,20 +6,19 @@ See [Roadmap](roadmap.md) for milestone exit criteria and [PRD](prd.md) for requ
 ## Dual-backend planning
 
 The planning tracker is [#59](https://github.com/jonathan-vella/azure-gh-runners/issues/59). The primary backend is
-unresolved. The owner-authorized additional non-zonal D4 attempt used reviewed source
-`e934066c3c1cb43fa33cf7ee835389f03de48389`. ARM validation was asynchronously accepted, but the installed CLI's
-validation wait raised before `begin_create_or_update`; a local mock confirmed one validation call and zero create
-calls on that error path. The original exit was 1 (`Unclassified`), readback was `DeploymentNotFound`, and independent
-diagnosis was `DeploymentAbsentOwnedGroupEmpty`. The underlying cause cannot be established from the safely reduced
-error. Cleanup succeeded and the exact `rg-ghrunners-spike7-swc` resource group was verified absent. No ACA
-environment create or job run occurred; this is not evidence of ACA capacity failure. See
+unresolved. The latest owner-authorized non-zonal D4 attempt used reviewed source
+`e934066c3c1cb43fa33cf7ee835389f03de48389`. Observed activity shows the ARM validation action was asynchronously
+accepted, with no deployment write or ACA managed-environment write observed and inventory confirming zero
+deployments/resources. The original CLI exit was 1 (`Unclassified`); readback was `DeploymentNotFound`, and
+independent diagnosis was `DeploymentAbsentOwnedGroupEmpty`. Offline mocks show that an accepted asynchronous
+validation can later return an error before deployment creation, but this is only a possible control-flow explanation,
+not evidence of what happened in the real attempt. The actual cause is unknown. Cleanup succeeded and the exact
+`rg-ghrunners-spike7-swc` resource group was verified absent. No ACA environment create or job run occurred; this is
+not evidence of ACA capacity failure. See
 [the recorded D4 outcome](https://github.com/jonathan-vella/azure-gh-runners/issues/7#issuecomment-6045915111).
-One further D4 attempt is pending coordinator confirmation that the error-observability/lifecycle fix has merged and
-the read-only preflight passes on that merged commit. If run, it is a single non-zonal D4 attempt (0–3 nodes) in an
-isolated resource group with mandatory cleanup; a non-capacity failure gets no retry. Until the coordinator reports
-that attempt has run, record it as pending, not exhausted. Apply the conditional rule in the roadmap; do not set
-backend defaults, change the active consumer contract, or reprioritize/relabel ACA work until evidence selects a
-primary.
+The additional D4 authorization has been consumed; no further retry is authorized. Apply the conditional rule in the
+roadmap; do not set backend defaults, change the active consumer contract, or reprioritize/relabel ACA work until
+evidence selects a primary.
 
 The additive schema issue #63 may proceed independently of the D4 outcome and VMSS spike. It must not set a default or
 alter existing ACA entries. All runtime/tooling changes and persistent VMSS implementation remain gated by the accepted
@@ -506,12 +505,13 @@ visible alongside the existing work items.
   permissions if the deployment identity is insufficient.
 - **ADR #61 and shared docs #62:** record the reviewed spike outcome and exact D4 evidence rule. Only an actual
   environment and job success selects ACA primary; repeated actual capacity failure selects VMSS primary; any other
-  evidence leaves primary/defaults unresolved. The additional authorized attempt's ARM validation was asynchronously
-  accepted, but its wait failed before any deployment create call; a local mock confirmed zero create calls on this
-  error path. The original exit was 1 and the safely reduced cause remains unclassified. Independent cleanup
-  succeeded and the exact `rg-ghrunners-spike7-swc` group was verified absent. No ACA environment/job was created,
-  so this is not a capacity verdict. One further attempt is pending lifecycle-fix merge and successful read-only
-  preflight; if run, it is single-attempt with cleanup and no retry for a non-capacity failure.
+  evidence leaves primary/defaults unresolved. The latest authorized attempt's ARM validation action was
+  asynchronously accepted; no deployment write, ACA managed-environment write, deployment inventory, or resource
+  inventory was observed. Original CLI exit was 1 (`Unclassified`), readback was `DeploymentNotFound`, and independent
+  diagnosis found `DeploymentAbsentOwnedGroupEmpty`. Offline mocks establish a possible validation-error-before-create
+  path only, not the actual cause, which remains unknown. Cleanup succeeded and the exact
+  `rg-ghrunners-spike7-swc` group was verified absent. No ACA environment/job was created, so this is not a capacity
+  verdict. The additional D4 authorization has been consumed; no further retry is authorized.
 - **Schema #63:** may proceed before the D4 decision and VMSS spike, but stays additive, has no default, and preserves
   current ACA entries. Tooling #64 and backend flags #65 depend on the accepted ADR; flags additionally require a
   conclusive primary decision before choosing defaults. An explicitly assigned consumer on a disabled backend must

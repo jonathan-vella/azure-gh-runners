@@ -46,19 +46,17 @@ graph LR
 
 ## Backend decision and gates
 
-The primary backend and active defaults are **unresolved**. The owner-authorized additional non-zonal ACA D4 attempt
-used reviewed source `e934066c3c1cb43fa33cf7ee835389f03de48389`. ARM validation was asynchronously accepted, but the
-installed CLI's validation wait raised before `begin_create_or_update`; a local mock confirmed one validation call and
-zero create calls on that error path. The original exit was 1 (`Unclassified`), readback was
-`DeploymentNotFound`, and independent diagnosis was `DeploymentAbsentOwnedGroupEmpty`. The underlying cause cannot be
-established from the safely reduced error. Independent cleanup succeeded and the exact `rg-ghrunners-spike7-swc`
-resource group was verified absent. No ACA environment create or job run was observed. This is not evidence of ACA
-capacity failure and does not select VMSS as primary. See
+The primary backend and active defaults are **unresolved**. The latest owner-authorized non-zonal ACA D4 attempt used
+reviewed source `e934066c3c1cb43fa33cf7ee835389f03de48389`. Observed activity shows the ARM validation action was
+asynchronously accepted; no deployment write or ACA managed-environment write was observed, and inventory confirmed
+zero deployments/resources. The original CLI exit was 1 (`Unclassified`), readback was `DeploymentNotFound`, and
+independent diagnosis was `DeploymentAbsentOwnedGroupEmpty`. Offline mocks demonstrate that an accepted asynchronous
+validation can later return an error before deployment creation, but this is only a possible control-flow explanation,
+not evidence of what happened in the real attempt. The actual cause is unknown. Cleanup succeeded and the exact
+`rg-ghrunners-spike7-swc` resource group was verified absent. No ACA environment create or job run was observed. This
+is not evidence of ACA capacity failure and does not select VMSS as primary. See
 [the recorded D4 outcome](https://github.com/jonathan-vella/azure-gh-runners/issues/7#issuecomment-6045915111).
-One further D4 attempt is pending the error-observability/lifecycle fix merging and successful read-only preflight on
-that merged commit. If run, it is a single non-zonal D4 attempt (0–3 nodes) in an isolated resource group with
-mandatory cleanup; a non-capacity failure gets no retry. Unless the coordinator reports that attempt has run, its
-status remains pending.
+The additional D4 authorization has been consumed; no further retry is authorized.
 
 Apply the approved conditional rule:
 
