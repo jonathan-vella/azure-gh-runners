@@ -32,9 +32,141 @@ var tags = {
 var vnetName = 'vnet-ghrunners-spike7'
 var vaultName = 'kvghr7${runSuffix}'
 var environmentName = 'cae-ghr7-${runSuffix}'
-var jobName = 'caj-ghr7-${runSuffix}'
 var dnsZoneName = 'privatelink.vaultcore.azure.net'
+var acaSubnetPrefix = '10.79.0.0/23'
+var peSubnetPrefix = '10.79.2.0/24'
+var natGatewayName = 'nat-ghr7-${runSuffix}'
+var networkSecurityGroupName = 'nsg-ghr7-${runSuffix}'
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+
+module outboundPublicIp 'br/public:avm/res/network/public-ip-address:0.13.0' = {
+  name: 'nat-pip-${runSuffix}'
+  params: {
+    name: 'pip-ghr7-${runSuffix}'
+    location: location
+    publicIPAllocationMethod: 'Static'
+    skuName: 'Standard'
+    skuTier: 'Regional'
+    tags: tags
+  }
+}
+
+module natGateway 'br/public:avm/res/network/nat-gateway:2.1.1' = {
+  name: 'nat-gateway-${runSuffix}'
+  params: {
+    name: natGatewayName
+    location: location
+    availabilityZone: -1
+    publicIpResourceIds: [
+      outboundPublicIp.outputs.resourceId
+    ]
+    tags: tags
+  }
+}
+
+module acaNetworkSecurityGroup 'br/public:avm/res/network/network-security-group:0.5.3' = {
+  name: 'aca-nsg-${runSuffix}'
+  params: {
+    name: networkSecurityGroupName
+    location: location
+    securityRules: [
+      {
+        name: 'Allow-ACA-Platform'
+        properties: {
+          access: 'Allow'
+          destinationAddressPrefix: acaSubnetPrefix
+          destinationPortRange: '*'
+          direction: 'Outbound'
+          priority: 100
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+        }
+      }
+      {
+        name: 'Allow-KeyVault-PrivateEndpoint'
+        properties: {
+          access: 'Allow'
+          destinationAddressPrefix: peSubnetPrefix
+          destinationPortRange: '443'
+          direction: 'Outbound'
+          priority: 110
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+        }
+      }
+      {
+        name: 'Allow-Platform-DNS'
+        properties: {
+          access: 'Allow'
+          destinationAddressPrefix: '168.63.129.16/32'
+          destinationPortRanges: [
+            '53'
+          ]
+          direction: 'Outbound'
+          priority: 120
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+        }
+      }
+      {
+        name: 'Allow-HTTPS-Egress-Via-NAT'
+        properties: {
+          access: 'Allow'
+          destinationAddressPrefix: 'Internet'
+          destinationPortRange: '443'
+          direction: 'Outbound'
+          priority: 130
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+        }
+      }
+      {
+        name: 'Deny-RFC1918-10'
+        properties: {
+          access: 'Deny'
+          destinationAddressPrefix: '10.0.0.0/8'
+          destinationPortRange: '*'
+          direction: 'Outbound'
+          priority: 200
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+        }
+      }
+      {
+        name: 'Deny-RFC1918-172'
+        properties: {
+          access: 'Deny'
+          destinationAddressPrefix: '172.16.0.0/12'
+          destinationPortRange: '*'
+          direction: 'Outbound'
+          priority: 210
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+        }
+      }
+      {
+        name: 'Deny-RFC1918-192'
+        properties: {
+          access: 'Deny'
+          destinationAddressPrefix: '192.168.0.0/16'
+          destinationPortRange: '*'
+          direction: 'Outbound'
+          priority: 220
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+        }
+      }
+    ]
+    tags: tags
+  }
+}
 
 module virtualNetwork 'br/public:avm/res/network/virtual-network:0.10.2' = {
   name: 'vnet-${runSuffix}'
@@ -47,12 +179,14 @@ module virtualNetwork 'br/public:avm/res/network/virtual-network:0.10.2' = {
     subnets: [
       {
         name: 'snet-aca'
-        addressPrefix: '10.79.0.0/23'
+        addressPrefix: acaSubnetPrefix
         delegation: 'Microsoft.App/environments'
+        natGatewayResourceId: natGateway.outputs.resourceId
+        networkSecurityGroupResourceId: acaNetworkSecurityGroup.outputs.resourceId
       }
       {
         name: 'snet-pe'
-        addressPrefix: '10.79.2.0/24'
+        addressPrefix: peSubnetPrefix
         privateEndpointNetworkPolicies: 'Disabled'
       }
     ]
@@ -183,66 +317,7 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.16.
   ]
 }
 
-module diagnosticJob 'br/public:avm/res/app/job:0.7.2' = {
-  name: 'aca-job-${runSuffix}'
-  params: {
-    name: jobName
-    location: location
-    environmentResourceId: containerAppsEnvironment.outputs.resourceId
-    triggerType: 'Manual'
-    managedIdentities: {
-      userAssignedResourceIds: [
-        testIdentity.outputs.resourceId
-      ]
-    }
-    replicaRetryLimit: 0
-    replicaTimeout: 300
-    manualTriggerConfig: {
-      parallelism: 1
-      replicaCompletionCount: 1
-    }
-    secrets: [
-      {
-        name: 'probe'
-        identity: testIdentity.outputs.resourceId
-        keyVaultUrl: '${keyVault.outputs.uri}secrets/probe'
-      }
-    ]
-    containers: [
-      {
-        name: 'probe'
-        image: 'mcr.microsoft.com/azure-cli@sha256:933eb8dcb81aecb6f77e03c5b8660f0a1dfa9e1d16525763a27f86ff3b83a044'
-        command: [
-          '/bin/sh'
-          '-c'
-        ]
-        args: [
-          'actual="$(printf "%s" "$PROBE_SECRET" | sha256sum | cut -d " " -f 1)"; if [ "$actual" = "$EXPECTED_SHA256" ]; then printf "RESULT=match\\n"; else printf "RESULT=mismatch\\n"; exit 1; fi'
-        ]
-        env: [
-          {
-            name: 'PROBE_SECRET'
-            secretRef: 'probe'
-          }
-          {
-            name: 'EXPECTED_SHA256'
-            value: probeDigest
-          }
-        ]
-        resources: {
-          cpu: '0.25'
-          memory: '0.5Gi'
-        }
-      }
-    ]
-    tags: tags
-  }
-  dependsOn: [
-    probeSecretResource
-    privateEndpoint
-  ]
-}
-
 output keyVaultName string = vaultName
 output containerAppsEnvironmentName string = environmentName
-output diagnosticJobName string = jobName
+output testIdentityName string = 'mi-ghr7-${runSuffix}'
+output probeDigest string = probeDigest

@@ -33,8 +33,10 @@ $ownerTag = @{
     'maint-window' = 'none'
 }
 $templatePath = Join-Path $PSScriptRoot 'main.bicep'
+$jobTemplatePath = Join-Path $PSScriptRoot 'job.bicep'
 $maxExecutionWait = [TimeSpan]::FromMinutes([Math]::Min($TimeoutMinutes, 10))
 $pollSeconds = 15
+Import-Module (Join-Path $PSScriptRoot 'Comparison.psm1') -Force
 
 function Invoke-AzJson {
     param([Parameter(Mandatory)][string[]] $Arguments)
@@ -50,7 +52,10 @@ function Invoke-AzJson {
 }
 
 function Invoke-AzBounded {
-    param([Parameter(Mandatory)][string[]] $Arguments)
+    param(
+        [Parameter(Mandatory)][string[]] $Arguments,
+        [ValidateRange(1, 2700)][int] $TimeoutSeconds = ($TimeoutMinutes * 60)
+    )
 
     $azCommand = Get-Command az -CommandType Application -ErrorAction Stop
     $pythonPath = (Resolve-Path (Join-Path (Split-Path $azCommand.Source) '..\python.exe')).Path
@@ -71,7 +76,7 @@ function Invoke-AzBounded {
     }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
-    $timeoutMilliseconds = [int][Math]::Min($TimeoutMinutes * 60 * 1000, [int]::MaxValue)
+    $timeoutMilliseconds = $TimeoutSeconds * 1000
     if (-not $process.WaitForExit($timeoutMilliseconds)) {
         $process.Kill($true)
         $process.WaitForExit()
@@ -80,6 +85,14 @@ function Invoke-AzBounded {
     $null = $stdoutTask.GetAwaiter().GetResult()
     $null = $stderrTask.GetAwaiter().GetResult()
     return $process.ExitCode
+}
+
+function Get-RemainingTestSeconds {
+    $remaining = [int][Math]::Floor(($script:testDeadline - [DateTimeOffset]::UtcNow).TotalSeconds)
+    if ($remaining -lt 1) {
+        throw 'The bounded comparison time budget expired.'
+    }
+    return $remaining
 }
 
 function Assert-ApprovedScope {
@@ -162,6 +175,58 @@ function Get-ResourceGroupResource {
     return $matches[0]
 }
 
+function Set-KeyVaultBypass {
+    param(
+        [Parameter(Mandatory)][string] $VaultId,
+        [Parameter(Mandatory)][ValidateSet('None', 'AzureServices')][string] $Bypass
+    )
+
+    $null = & az resource update --subscription $approvedSubscription --ids $VaultId `
+        --set "properties.networkAcls.bypass=$Bypass" --only-show-errors --output none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Azure rejected the requested trusted-services bypass setting: $Bypass."
+    }
+    $vault = Invoke-AzJson @('resource', 'show', '--subscription', $approvedSubscription, '--ids', $VaultId)
+    if ($vault.properties.publicNetworkAccess -cne 'Disabled' -or
+        $vault.properties.networkAcls.defaultAction -cne 'Deny' -or
+        $vault.properties.networkAcls.bypass -cne $Bypass) {
+        throw "Key Vault policy readback did not match bypass=$Bypass with public access disabled."
+    }
+}
+
+function New-FreshDiagnosticJob {
+    param(
+        [Parameter(Mandatory)][string] $Bypass,
+        [Parameter(Mandatory)][string] $EnvironmentId,
+        [Parameter(Mandatory)][string] $IdentityId,
+        [Parameter(Mandatory)][string] $KeyVaultSecretUrl,
+        [Parameter(Mandatory)][string] $ProbeDigest
+    )
+
+    $mode = if ($Bypass -ceq 'None') { 'none' } else { 'svc' }
+    $jobName = "caj-ghr7-$script:runSuffix-$mode-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $deploymentName = "issue7-$mode-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $exitCode = Invoke-AzBounded @(
+        'deployment', 'group', 'create', '--subscription', $approvedSubscription,
+        '--resource-group', $approvedResourceGroup, '--name', $deploymentName,
+        '--template-file', $jobTemplatePath,
+        '--parameters', "jobName=$jobName", "location=$approvedLocation",
+        "environmentResourceId=$EnvironmentId", "identityResourceId=$IdentityId",
+        "keyVaultSecretUrl=$KeyVaultSecretUrl", "probeDigest=$ProbeDigest",
+        '--only-show-errors', '--output', 'none'
+    ) -TimeoutSeconds (Get-RemainingTestSeconds)
+    if ($exitCode -ne 0) {
+        $deploymentState = & az deployment group show --subscription $approvedSubscription `
+            --resource-group $approvedResourceGroup --name $deploymentName `
+            --query 'properties.error.code' --output tsv 2>$null
+        if ($LASTEXITCODE -eq 0 -and $deploymentState -match '^[A-Za-z0-9._-]+$') {
+            throw "Fresh diagnostic job deployment failed with Azure error code: $deploymentState."
+        }
+        throw 'Fresh diagnostic job deployment failed; no deployment output was emitted.'
+    }
+    return $jobName
+}
+
 function Invoke-JobAndWait {
     param([Parameter(Mandatory)][string] $JobName)
 
@@ -176,6 +241,9 @@ function Invoke-JobAndWait {
 
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     do {
+        if ($script:testDeadline -and [DateTimeOffset]::UtcNow -ge $script:testDeadline) {
+            throw 'The bounded comparison time budget expired while awaiting the ACA execution.'
+        }
         Start-Sleep -Seconds $pollSeconds
         $execution = Invoke-AzJson @(
             'containerapp', 'job', 'execution', 'show', '--subscription', $approvedSubscription,
@@ -183,12 +251,11 @@ function Invoke-JobAndWait {
             '--job-execution-name', $executionName
         )
         $status = [string]$execution.properties.status
-        if ($status -in @('Succeeded', 'Failed', 'Stopped')) {
-            Write-Output "Job execution status: $status"
-            if ($status -cne 'Succeeded') {
-                throw 'The digest-comparison job did not succeed; no container logs or values were emitted.'
-            }
-            return
+        if ($status -in @('Succeeded', 'Failed')) {
+            return $status
+        }
+        if ($status -ceq 'Stopped') {
+            throw 'The ACA execution was stopped before producing a comparison result.'
         }
     } while ($timer.Elapsed -lt $maxExecutionWait)
 
@@ -266,6 +333,7 @@ switch ($Action) {
 
     'Test' {
         Assert-CapacityGate
+        $script:testDeadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
         [void](Get-TaggedResourceGroup)
         $deployment = Invoke-AzJson @(
             'deployment', 'group', 'show', '--subscription', $approvedSubscription,
@@ -276,12 +344,20 @@ switch ($Action) {
         }
         $outputs = $deployment.properties.outputs
         $vaultName = [string]$outputs.keyVaultName.value
-        $jobName = [string]$outputs.diagnosticJobName.value
-        if ($vaultName -notmatch '^kvghr7[a-f0-9]{8}$' -or $jobName -notmatch '^caj-ghr7-[a-f0-9]{8}$') {
+        $script:runSuffix = $vaultName.Substring(6)
+        $environmentName = [string]$outputs.containerAppsEnvironmentName.value
+        $identityName = [string]$outputs.testIdentityName.value
+        $probeDigest = [string]$outputs.probeDigest.value
+        if ($vaultName -notmatch '^kvghr7[a-f0-9]{8}$' -or
+            $environmentName -notmatch '^cae-ghr7-[a-f0-9]{8}$' -or
+            $identityName -notmatch '^mi-ghr7-[a-f0-9]{8}$' -or
+            $probeDigest -notmatch '^[a-f0-9]{64}$') {
             throw 'Deployment outputs do not match the issue-7 resource naming contract.'
         }
 
         $vault = Get-ResourceGroupResource -Name $vaultName
+        $environment = Get-ResourceGroupResource -Name $environmentName
+        $identity = Get-ResourceGroupResource -Name $identityName
         $vaultState = Invoke-AzJson @(
             'resource', 'show', '--subscription', $approvedSubscription, '--ids', $vault.id
         )
@@ -291,31 +367,20 @@ switch ($Action) {
             throw 'Key Vault must remain public-disabled, default-deny, and bypass=None before the comparison.'
         }
 
-        try {
-            Write-Output 'Testing Key Vault trusted-services bypass=None.'
-            Invoke-JobAndWait -JobName $jobName
-
-            $null = & az resource update --subscription $approvedSubscription --ids $vault.id `
-                --set 'properties.networkAcls.bypass=AzureServices' --only-show-errors --output none 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                throw 'Could not enable the controlled AzureServices bypass comparison.'
+        $comparison = Invoke-SpikeBypassComparison `
+            -SetBypass {
+                param($bypass)
+                Set-KeyVaultBypass -VaultId $vault.id -Bypass $bypass
+            } `
+            -RunCase {
+                param($bypass)
+                $jobName = New-FreshDiagnosticJob -Bypass $bypass `
+                    -EnvironmentId $environment.id -IdentityId $identity.id `
+                    -KeyVaultSecretUrl "$($vaultState.properties.vaultUri)secrets/probe" `
+                    -ProbeDigest $probeDigest
+                Invoke-JobAndWait -JobName $jobName
             }
-            $updatedVault = Invoke-AzJson @('resource', 'show', '--subscription', $approvedSubscription, '--ids', $vault.id)
-            if ($updatedVault.properties.publicNetworkAccess -cne 'Disabled' -or
-                $updatedVault.properties.networkAcls.defaultAction -cne 'Deny' -or
-                $updatedVault.properties.networkAcls.bypass -cne 'AzureServices') {
-                throw 'AzureServices comparison configuration did not preserve the public-disabled, default-deny policy.'
-            }
-            Write-Output 'Testing Key Vault trusted-services bypass=AzureServices; public access remains disabled.'
-            Invoke-JobAndWait -JobName $jobName
-        } finally {
-            $null = & az resource update --subscription $approvedSubscription --ids $vault.id `
-                --set 'properties.networkAcls.bypass=None' --only-show-errors --output none 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                throw 'Failed to restore Key Vault trusted-services bypass=None; public network access was not changed.'
-            }
-        }
-        Write-Output 'Comparison completed; interpret the two execution statuses as evidence only after review.'
+        Write-Output "Comparison summary: None=$($comparison.None); AzureServices=$($comparison.AzureServices)."
     }
 
     'Cleanup' {

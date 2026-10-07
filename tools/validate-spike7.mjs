@@ -2,33 +2,49 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const template = await readFile(new URL('../infra/spike7/main.bicep', import.meta.url), 'utf8');
+const jobTemplate = await readFile(new URL('../infra/spike7/job.bicep', import.meta.url), 'utf8');
 const runner = await readFile(new URL('../infra/spike7/Invoke-Spike.ps1', import.meta.url), 'utf8');
+const comparison = await readFile(new URL('../infra/spike7/Comparison.psm1', import.meta.url), 'utf8');
 
 const requiredTemplateText = [
+  "'br/public:avm/res/network/public-ip-address:0.13.0'",
+  "'br/public:avm/res/network/nat-gateway:2.1.1'",
+  "'br/public:avm/res/network/network-security-group:0.5.3'",
   "'br/public:avm/res/network/virtual-network:0.10.2'",
   "'br/public:avm/res/network/private-dns-zone:0.8.1'",
   "'br/public:avm/res/managed-identity/user-assigned-identity:0.6.0'",
   "'br/public:avm/res/key-vault/vault:0.14.2'",
   "'br/public:avm/res/network/private-endpoint:0.12.1'",
   "'br/public:avm/res/app/managed-environment:0.16.0'",
-  "'br/public:avm/res/app/job:0.7.2'",
-  'mcr.microsoft.com/azure-cli@sha256:933eb8dcb81aecb6f77e03c5b8660f0a1dfa9e1d16525763a27f86ff3b83a044',
   '@secure()',
   "publicNetworkAccess: 'Disabled'",
   "bypass: 'None'",
   "defaultAction: 'Deny'",
   "internal: true",
+  "natGatewayResourceId: natGateway.outputs.resourceId",
+  "networkSecurityGroupResourceId: acaNetworkSecurityGroup.outputs.resourceId",
   "privateLinkServiceId: keyVault.outputs.resourceId",
   "privateDnsZoneResourceId: resourceId('Microsoft.Network/privateDnsZones', dnsZoneName)",
   "roleDefinitionIdOrName: keyVaultSecretsUserRoleId",
-  "name: 'PROBE_SECRET'",
-  "name: 'EXPECTED_SHA256'",
-  'RESULT=match',
-  'RESULT=mismatch',
 ];
 
 for (const expected of requiredTemplateText) {
   assert.ok(template.includes(expected), `Spike template is missing required invariant: ${expected}`);
+}
+
+assert.ok(jobTemplate.includes("'br/public:avm/res/app/job:0.7.2'"));
+assert.ok(jobTemplate.includes('mcr.microsoft.com/azure-cli@sha256:933eb8dcb81aecb6f77e03c5b8660f0a1dfa9e1d16525763a27f86ff3b83a044'));
+assert.ok(jobTemplate.includes('RESULT=match'));
+assert.ok(jobTemplate.includes('RESULT=mismatch'));
+assert.ok(jobTemplate.includes("name: 'PROBE_SECRET'"));
+assert.ok(jobTemplate.includes("name: 'EXPECTED_SHA256'"));
+for (const [permit, deny] of [
+  ['Allow-KeyVault-PrivateEndpoint', 'Deny-RFC1918-10'],
+  ['Allow-HTTPS-Egress-Via-NAT', 'Deny-RFC1918-10'],
+  ['Deny-RFC1918-10', 'Deny-RFC1918-172'],
+  ['Deny-RFC1918-172', 'Deny-RFC1918-192'],
+]) {
+  assert.ok(template.indexOf(permit) < template.indexOf(deny), `${permit} must precede ${deny}`);
 }
 
 assert.match(runner, /b47d2942-f5ad-4d3c-b28e-c23e4f83d97e/);
@@ -37,12 +53,16 @@ assert.match(runner, /rg-ghrunners-spike7-swc/);
 assert.match(runner, /if \(\$SubscriptionId -cne \$approvedSubscription\)/);
 assert.match(runner, /ConfirmCapacityRecovered/);
 assert.match(runner, /SetAccessRuleProtection\(\$true, \$false\)/);
-assert.match(runner, /--set 'properties\.networkAcls\.bypass=AzureServices'/);
-assert.match(runner, /--set 'properties\.networkAcls\.bypass=None'/);
+assert.match(runner, /New-FreshDiagnosticJob/);
+assert.match(runner, /Invoke-SpikeBypassComparison/);
+assert.match(runner, /probeDigest=\$ProbeDigest/);
+assert.match(comparison, /finally/);
+assert.match(comparison, /Neither trusted-services configuration resolved the probe/);
 assert.match(runner, /properties\.publicNetworkAccess -cne 'Disabled'/);
 assert.doesNotMatch(runner, /purge|Delete-AzKeyVault/);
 assert.doesNotMatch(template, /publicNetworkAccess:\s*'Enabled'/);
-assert.doesNotMatch(template, /Microsoft\.App\/jobs\/start\/action/);
-assert.doesNotMatch(template, /printenv|echo\s+\$PROBE_SECRET/);
+assert.doesNotMatch(template, /natGatewayResourceId: null/);
+assert.doesNotMatch(jobTemplate, /Microsoft\.App\/jobs\/start\/action/);
+assert.doesNotMatch(jobTemplate, /printenv|echo\s+\$PROBE_SECRET/);
 
 console.log('Issue-7 local artifact invariants passed.');

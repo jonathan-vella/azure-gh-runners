@@ -58,15 +58,25 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
   profiles are supported, changing from Consumption to a paid Dedicated profile does not address the reported
   region-capacity error and would change the cost model. Do not treat it as a workaround; retry the Consumption
   environment only after capacity recovery is coordinated.
-- The reusable experiment pins AVM modules to exact stable versions: VNet `0.10.2`, private DNS zone `0.8.1`,
-  user-assigned identity `0.6.0`, Key Vault `0.14.2`, private endpoint `0.12.1`, ACA managed environment `0.16.0`,
-  and ACA job `0.7.2`. These are the latest stable tags checked in the public Bicep registry when the artifact was
-  authored; the native private-DNS link and Key Vault secret resource APIs are pinned to `2024-06-01` and
-  `2026-02-01`, respectively. The diagnostic image is pinned to Azure CLI `2.91.0` digest
+- The reusable experiment pins AVM modules to exact stable versions: public IP `0.13.0`, NAT Gateway `2.1.1`,
+  NSG `0.5.3`, VNet `0.10.2`, private DNS zone `0.8.1`, user-assigned identity `0.6.0`, Key Vault `0.14.2`,
+  private endpoint `0.12.1`, ACA managed environment `0.16.0`, and ACA job `0.7.2`. These are the latest stable tags
+  checked in the public Bicep registry when the artifact was authored. The native private-DNS link and Key Vault
+  secret resource APIs are pinned to `2024-06-01` and `2026-02-01`; the latter was confirmed in the approved
+  subscription's `Microsoft.KeyVault` provider API versions and `Sweden Central` locations. The diagnostic image is
+  pinned to Azure CLI `2.91.0` digest
   `sha256:933eb8dcb81aecb6f77e03c5b8660f0a1dfa9e1d16525763a27f86ff3b83a044`, verified from the MCR manifest.
+- The ACA subnet has the test's only NAT egress IP and an attached NSG: narrowly allow ACA platform-subnet traffic,
+  Key Vault PE HTTPS, platform DNS, and HTTPS egress before explicit RFC1918 denies. The private-endpoint subnet has
+  no public egress association. No inbound public endpoint is created.
 - Re-run the controlled comparison in `swedencentral` when ACA capacity is available: use a synthetic secret, verify
   its value in the job using a non-secret comparison result, and compare Key Vault bypass `None` with
-  `AzureServices` while keeping public network access disabled.
+  `AzureServices` while keeping public network access disabled. Each bypass leg creates a new, uniquely named ACA job
+  only after setting and verifying that leg's Key Vault policy, so success cannot come from reusing a pre-existing
+  job's cached secret reference. A terminal job failure is recorded as that leg's failed result and the second leg
+  still runs; deployment/start/polling/stopped-execution errors abort the comparison after recording only the error
+  type. The bypass is restored to `None` in `finally`. If neither leg succeeds, the experiment fails and reports both
+  terminal statuses.
 - After the coordinator confirms capacity recovery, the bounded rerun sequence is:
   `.\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered`,
   followed by the same command with `-Action Test`; use `-Action Cleanup` to remove only the tagged issue-7
@@ -74,6 +84,21 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
   resource group, creates a random synthetic value into an ACL-restricted temporary secure parameter file, and removes
   that file in a `finally` block. The test action is bounded, emits execution statuses only, and restores bypass to
   `None` without ever enabling public access.
+- Use an outer `try/finally` so the owned spike group is cleaned up after a test failure. If the deployment client
+  times out, it is killed at the configured bound, but the ARM deployment may still be active: first inspect that
+  deployment's terminal state with the explicit approved subscription, then run cleanup; do not blindly retry or
+  delete an active deployment.
+
+  ```powershell
+  try {
+      .\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered
+      .\infra\spike7\Invoke-Spike.ps1 -Action Test -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered
+  } finally {
+      # On a deployment timeout, verify the ARM deployment is terminal before cleanup.
+      .\infra\spike7\Invoke-Spike.ps1 -Action Cleanup -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc
+  }
+  ```
+
 - Leave issue #7 open until all acceptance criteria are supported by job-execution evidence and the isolated spike
   resources are confirmed deleted.
 
