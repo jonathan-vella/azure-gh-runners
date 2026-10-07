@@ -13,6 +13,199 @@ function Assert-Equal {
     }
 }
 
+$d4Environment = [pscustomobject]@{
+    properties = [pscustomobject]@{
+        provisioningState = 'Succeeded'
+        zoneRedundant = $false
+        workloadProfiles = @(
+            [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
+            [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 3 }
+        )
+    }
+}
+$d4Profile = Assert-EnvironmentProfile -EnvironmentState $d4Environment -ExpectedProfile D4
+Assert-Equal $d4Profile.minimumCount 0 'D4 minimumCount readback'
+Assert-Equal $d4Profile.maximumCount 3 'D4 maximumCount readback'
+$consumptionEnvironment = [pscustomobject]@{
+    properties = [pscustomobject]@{
+        provisioningState = 'Succeeded'
+        zoneRedundant = $false
+        workloadProfiles = @([pscustomobject]@{
+            name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1
+        })
+    }
+}
+$consumptionProfile = Assert-EnvironmentProfile -EnvironmentState $consumptionEnvironment -ExpectedProfile Consumption
+Assert-Equal $consumptionProfile.maximumCount 1 'Consumption default remains unchanged'
+Assert-Equal $consumptionEnvironment.properties.zoneRedundant $false 'Consumption remains non-zonal'
+
+$fakePwsh = Get-Command pwsh -CommandType Application -ErrorAction Stop |
+    Select-Object -First 1 -ExpandProperty Source
+$fakeAzPath = Join-Path ([System.IO.Path]::GetTempPath()) "issue7-fake-az-$([guid]::NewGuid().ToString('N')).ps1"
+$fakeAzScript = @'
+if ($args -contains 'exists') {
+    if ($env:SPIKE7_FAKE_AZ_OUTPUT -eq 'read-failure') {
+        [Console]::Error.Write('SENSITIVE EXISTENCE READ FAILURE')
+        exit 4
+    }
+    [Console]::Out.Write($env:SPIKE7_FAKE_AZ_OUTPUT)
+} elseif ($args -contains 'fail') {
+    [Console]::Error.Write('SENSITIVE FAKE AZ FAILURE')
+    exit 7
+} elseif ($args -contains 'hang') {
+    Start-Sleep -Seconds 30
+} elseif ($env:SPIKE7_FAKE_AZ_TAG_MISMATCH -eq '1') {
+    [Console]::Out.Write('{"id":"/subscriptions/b47d2942-f5ad-4d3c-b28e-c23e4f83d97e/resourceGroups/rg-ghrunners-spike7-swc","location":"swedencentral","tags":{"application":"unexpected"}}')
+} else {
+    [Console]::Out.Write('{"ok":true}')
+}
+'@
+[System.IO.File]::WriteAllText($fakeAzPath, $fakeAzScript)
+$previousFakeAzOutput = $env:SPIKE7_FAKE_AZ_OUTPUT
+$previousTagMismatch = $env:SPIKE7_FAKE_AZ_TAG_MISMATCH
+function script:Get-BoundedAzureCli {
+    return [pscustomobject]@{
+        fileName = $script:fakePwsh
+        prefix = $script:fakePrefix
+    }
+}
+$script:fakePwsh = $fakePwsh
+$script:fakeAzPath = $fakeAzPath
+$script:fakePrefix = @('-NoProfile', '-File', $fakeAzPath)
+$script:actionDeadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+try {
+    $fakeResult = Invoke-AzJson -Arguments @('synthetic', 'read')
+    Assert-Equal $fakeResult.ok $true 'JSON Azure CLI calls run through the bounded wrapper'
+    Assert-Equal (Invoke-AzBounded -Arguments @('synthetic', 'run')) 0 'Output-suppressed Azure CLI call uses the same wrapper'
+
+    $env:SPIKE7_FAKE_AZ_OUTPUT = 'false'
+    Assert-Equal ($null -eq (Get-OptionalTaggedResourceGroup)) $true 'Cleanup treats exact absent group as idempotent success'
+
+    $env:SPIKE7_FAKE_AZ_OUTPUT = 'unknown'
+    $ambiguousReadRejected = $false
+    try {
+        $null = Get-OptionalTaggedResourceGroup
+    } catch {
+        $ambiguousReadRejected = $_.Exception.Message -like '*ambiguous*'
+    }
+    Assert-Equal $ambiguousReadRejected $true 'Cleanup fails closed on ambiguous group existence'
+
+    $env:SPIKE7_FAKE_AZ_OUTPUT = 'read-failure'
+    $failedReadRejected = $false
+    try {
+        $null = Get-OptionalTaggedResourceGroup
+    } catch {
+        $failedReadRejected = $_.Exception.Message -like '*refusing to continue*' -and
+            $_.Exception.Message -notmatch 'SENSITIVE EXISTENCE READ FAILURE'
+    }
+    Assert-Equal $failedReadRejected $true 'Cleanup fails closed on failed existence reads without leaking diagnostics'
+
+    $env:SPIKE7_FAKE_AZ_OUTPUT = 'true'
+    $env:SPIKE7_FAKE_AZ_TAG_MISMATCH = '1'
+    $ownershipMismatchRejected = $false
+    try {
+        $null = Get-OptionalTaggedResourceGroup
+    } catch {
+        $ownershipMismatchRejected = $_.Exception.Message -like '*ownership tag mismatch*'
+    }
+    Assert-Equal $ownershipMismatchRejected $true 'Cleanup fails closed on resource ownership mismatch'
+
+    $sanitizedFailure = $false
+    try {
+        $null = Invoke-AzJson -Arguments @('synthetic', 'fail')
+    } catch {
+        $sanitizedFailure = $_.Exception.Message -notmatch 'SENSITIVE FAKE AZ FAILURE'
+    }
+    Assert-Equal $sanitizedFailure $true 'Azure CLI failure diagnostics are suppressed'
+
+    $script:actionDeadline = [DateTimeOffset]::UtcNow.AddSeconds(2)
+    $timeoutWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $timeoutRejected = $false
+    $timeoutMessage = $null
+    try {
+        $script:fakePrefix = @('-NoProfile', '-File', $fakeAzPath)
+        $null = Invoke-AzProcess -Arguments @('synthetic', 'hang')
+    } catch {
+        $timeoutMessage = $_.Exception.Message
+        $timeoutRejected = $timeoutMessage -like '*timed out and was terminated*'
+    } finally {
+        $timeoutWatch.Stop()
+    }
+    if (-not $timeoutRejected) {
+        throw "Synthetic timeout was not sanitized as expected: $timeoutMessage"
+    }
+    Assert-Equal ($timeoutWatch.Elapsed.TotalSeconds -lt 10) $true 'Synthetic subprocess timeout remains bounded'
+} finally {
+    if ($null -eq $previousFakeAzOutput) {
+        Remove-Item Env:\SPIKE7_FAKE_AZ_OUTPUT -ErrorAction SilentlyContinue
+    } else {
+        $env:SPIKE7_FAKE_AZ_OUTPUT = $previousFakeAzOutput
+    }
+    if ($null -eq $previousTagMismatch) {
+        Remove-Item Env:\SPIKE7_FAKE_AZ_TAG_MISMATCH -ErrorAction SilentlyContinue
+    } else {
+        $env:SPIKE7_FAKE_AZ_TAG_MISMATCH = $previousTagMismatch
+    }
+    if (Test-Path -LiteralPath $fakeAzPath) {
+        Remove-Item -LiteralPath $fakeAzPath -Force
+    }
+}
+
+foreach ($invalidEnvironment in @(
+    [pscustomobject]@{
+        properties = [pscustomobject]@{
+            provisioningState = 'Succeeded'; zoneRedundant = $false
+            workloadProfiles = @(
+                [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
+                [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 2 }
+            )
+        }
+    },
+    [pscustomobject]@{
+        properties = [pscustomobject]@{
+            provisioningState = 'Succeeded'; zoneRedundant = $true
+            workloadProfiles = @(
+                [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
+                [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 3 }
+            )
+        }
+    },
+    [pscustomobject]@{
+        properties = [pscustomobject]@{
+            provisioningState = 'Succeeded'; zoneRedundant = $true
+            workloadProfiles = @([pscustomobject]@{
+                name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1
+            })
+        }
+    },
+    [pscustomobject]@{
+        properties = [pscustomobject]@{
+            provisioningState = 'Succeeded'; zoneRedundant = $false
+            workloadProfiles = @(
+                [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
+                [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 3; zones = @('1') }
+            )
+        }
+    },
+    [pscustomobject]@{
+        properties = [pscustomobject]@{
+            provisioningState = 'Succeeded'; zoneRedundant = $false; zones = @('1')
+            workloadProfiles = @(
+                [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
+                [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 3 }
+            )
+        }
+    }
+)) {
+    $rejected = $false
+    try {
+        $null = Assert-EnvironmentProfile -EnvironmentState $invalidEnvironment -ExpectedProfile D4
+    } catch {
+        $rejected = $true
+    }
+    Assert-Equal $rejected $true 'Invalid D4 profile readback rejected'
+}
+
 function Invoke-MockedComparison {
     param(
         [string[]] $Statuses,
@@ -148,7 +341,7 @@ $recordResult = {
 $result = Invoke-SpikeBypassComparison -SetBypass $setBypass -RunCase $runProvisioningCase -RecordResult $recordResult
 Assert-Equal $result.None 'Failed' 'Provisioning denial is expected'
 Assert-Equal $result.AzureServices 'Succeeded' 'Comparison continues after provisioning denial'
-Assert-Equal $script:recordedResults[0].Stage 'provisioning' 'Provisioning stage recorded'
+Assert-Equal $script:recordedResults[0].Stage 'job-provisioning' 'Job provisioning stage recorded'
 Assert-Equal $script:recordedResults[0].Code 'ForbiddenByFirewall' 'Only documented code recorded'
 Assert-Equal ($script:recordedResults[0].JobName -match '^caj-ghr7-abcdef12-none-[a-f0-9]{8}$') $true 'Fresh failed job name recorded'
 Assert-Equal ($null -eq $script:recordedResults[0].ExecutionName) $true 'No execution claimed for provisioning denial'

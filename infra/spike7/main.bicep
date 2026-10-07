@@ -5,6 +5,12 @@ targetScope = 'resourceGroup'
 @maxLength(8)
 param runSuffix string
 
+@allowed([
+  'Consumption'
+  'D4'
+])
+param workloadProfileName string = 'Consumption'
+
 @secure()
 @description('Synthetic throwaway value used only by this spike.')
 param probeSecret string
@@ -38,6 +44,26 @@ var peSubnetPrefix = '10.79.2.0/24'
 var natGatewayName = 'nat-ghr7-${runSuffix}'
 var networkSecurityGroupName = 'nsg-ghr7-${runSuffix}'
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+var consumptionWorkloadProfile = {
+  name: 'Consumption'
+  workloadProfileType: 'Consumption'
+  minimumCount: 0
+  maximumCount: 1
+}
+var d4WorkloadProfile = {
+  name: 'D4'
+  workloadProfileType: 'D4'
+  minimumCount: 0
+  maximumCount: 3
+}
+var workloadProfiles = workloadProfileName == 'D4'
+  ? [
+      consumptionWorkloadProfile
+      d4WorkloadProfile
+    ]
+  : [
+      consumptionWorkloadProfile
+    ]
 
 module outboundPublicIp 'br/public:avm/res/network/public-ip-address:0.13.0' = {
   name: 'nat-pip-${runSuffix}'
@@ -302,14 +328,8 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.16.
     internal: true
     publicNetworkAccess: 'Disabled'
     infrastructureSubnetResourceId: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'snet-aca')
-    workloadProfiles: [
-      {
-        name: 'Consumption'
-        workloadProfileType: 'Consumption'
-        minimumCount: 0
-        maximumCount: 1
-      }
-    ]
+    zoneRedundant: false
+    workloadProfiles: workloadProfiles
     tags: tags
   }
   dependsOn: [
@@ -321,3 +341,4 @@ output keyVaultName string = vaultName
 output containerAppsEnvironmentName string = environmentName
 output testIdentityName string = 'mi-ghr7-${runSuffix}'
 output probeDigest string = probeDigest
+output workloadProfileName string = workloadProfileName

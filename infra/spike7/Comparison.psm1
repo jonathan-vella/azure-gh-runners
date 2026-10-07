@@ -18,7 +18,7 @@ function Invoke-SpikeBypassComparison {
                 & $SetBypass $bypass
                 $result = & $RunCase $bypass
                 if ($result.Status -notin @('Succeeded', 'Failed') -or
-                    $result.Stage -notin @('provisioning', 'execution')) {
+                    $result.Stage -notin @('environment-provisioning', 'job-provisioning', 'execution')) {
                     throw 'The diagnostic callback returned a non-terminal status.'
                 }
                 & $RecordResult $bypass $result
@@ -116,6 +116,13 @@ function Write-SpikeComparisonEvidence {
         jobName = $Result.JobName; executionName = $Result.ExecutionName
         deploymentName = $Result.DeploymentName; status = $Result.Status
         stage = $Result.Stage; code = $Result.Code
+        environmentProvisioningState = $Result.EnvironmentProvisioningState
+        workloadProfileName = $Result.WorkloadProfileName
+        workloadProfileType = $Result.WorkloadProfileType
+        minimumCount = $Result.MinimumCount
+        maximumCount = $Result.MaximumCount
+        zoneRedundant = $Result.ZoneRedundant
+        jobWorkloadProfileName = $Result.JobWorkloadProfileName
     })
     [System.IO.File]::WriteAllText(
         $Path, (ConvertTo-Json -InputObject @($Records.ToArray()) -Depth 4)

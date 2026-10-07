@@ -14,6 +14,8 @@ establish the private-endpoint behavior required by this platform:
 - [Jobs in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/jobs)
 - [Networking in an Azure Container Apps environment](https://learn.microsoft.com/en-us/azure/container-apps/networking)
 - [Configure virtual networks in Container Apps environments](https://learn.microsoft.com/en-us/azure/container-apps/custom-virtual-networks)
+- [Workload profiles in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/workload-profiles-overview)
+- [Zone redundancy in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/how-to-zone-redundancy)
 - [Troubleshoot the AKSCapacityHeavyUsage error](https://learn.microsoft.com/en-us/troubleshoot/azure/azure-kubernetes/error-codes/akscapacityheavyusage-error)
 - [Manage Container Apps workload profiles with the Azure CLI](https://learn.microsoft.com/en-us/azure/container-apps/workload-profiles-manage-cli)
 
@@ -54,10 +56,19 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
 - Keep this behavior as a blocker for dependent platform decisions. Do not claim the `keyVaultUrl` private-endpoint
   path works or that trusted-services bypass is required or unnecessary.
 - Keep production networking and Key Vault policy unchanged. The spike never enabled public network access.
-- The read-only regional profile listing included Dedicated `D4` and `E4` profiles in `swedencentral`. Although those
-  profiles are supported, changing from Consumption to a paid Dedicated profile does not address the reported
-  region-capacity error and would change the cost model. Do not treat it as a workaround; retry the Consumption
-  environment only after capacity recovery is coordinated.
+- The read-only regional profile listing included Dedicated `D4` and `E4` profiles in `swedencentral`. The operator
+  has authorized one isolated alternative-profile attempt with `D4`, `minimumCount=0`, `maximumCount=3`, and
+  `zoneRedundant=false`, with no zone pinning. This authorization is not confirmation that regional capacity recovered
+  and is not evidence of capacity recovery. No D4 deployment or job execution has yet been attempted. Because
+  `minimumCount=0` can provision the managed environment without allocating any D4 node, environment provisioning
+  must be recorded separately from successful D4 job placement and execution; only execution evidence can show that a
+  D4 node was actually allocated. The job's `workloadProfileName` and the environment's profile/count/zone readback
+  must match before comparison; `D4` provides 4 vCPU and 16 GiB per node in Sweden Central, and
+  `zoneRedundant=false` is explicit with no zone pinning
+  ([workload profiles](https://learn.microsoft.com/en-us/azure/container-apps/workload-profiles-overview);
+  [zone redundancy](https://learn.microsoft.com/en-us/azure/container-apps/how-to-zone-redundancy)). Consumption
+  remains non-zonal as in the original template's effective default; its profile counts and separate
+  capacity-recovery gate are unchanged.
 - The reusable experiment pins AVM modules to exact stable versions: public IP `0.13.0`, NAT Gateway `2.1.1`,
   NSG `0.5.3`, VNet `0.10.2`, private DNS zone `0.8.1`, user-assigned identity `0.6.0`, Key Vault `0.14.2`,
   private endpoint `0.12.1`, ACA managed environment `0.16.0`, and ACA job `0.7.2`. These are the latest stable tags
@@ -72,7 +83,8 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
 - Re-run the controlled comparison in `swedencentral` when ACA capacity is available: use a synthetic secret, verify
   its value in the job using a non-secret comparison result, and compare Key Vault bypass `None` with
   `AzureServices` while keeping public network access disabled. Each bypass leg creates a new, uniquely named ACA job
-  only after setting and verifying that leg's Key Vault policy, so success cannot come from reusing a pre-existing
+  on the selected profile only after the managed environment's exact profile/count/zone settings have been read back
+  and that leg's Key Vault policy verified, so success cannot come from reusing a pre-existing
   job's cached secret reference. A terminal job failure is recorded as that leg's failed result and the second leg
   still runs. Provisioning failure continues only when every failed ARM operation targets that fresh job and its
   structured error tree has only documented Key Vault `ForbiddenByFirewall` leaves, with only
@@ -85,19 +97,33 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
   operational failures and abort. No new runtime evidence is claimed. Start/polling/stopped-execution errors also
   abort. The bypass is restored to `None` in `finally`. If neither leg succeeds, the experiment fails and reports
   both terminal statuses.
-  Test requires `-EvidencePath` pointing to a new JSON file: each leg persists its fresh job name, deployment name,
-  execution name (null when provisioning failed), UTC timestamp, status, stage, and sanitized code before acceptance
-  is evaluated. Operational failures are recorded too; raw provider messages, secrets, and container logs are never
-  persisted. Local mocks exercise the actual provisioning callback with structured network denial versus unrelated
-  deployment failures, in addition to the terminal-status cases.
-- After the coordinator confirms capacity recovery, the bounded rerun sequence is:
-  `.\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered`,
-  followed by the same command with `-Action Test -EvidencePath .\issue7-comparison.json`;
-  use `-Action Cleanup` to remove only the tagged issue-7
-  resource group. Each ARM command supplies the approved subscription explicitly. Deploy requires the exact absent
+  Test requires `-EvidencePath` pointing to a new JSON file: each comparison leg persists its fresh job name,
+  deployment name, execution name (null when job provisioning failed), environment provisioning state, exact
+  workload-profile readback, job workload-profile readback, UTC timestamp, status, stage, and sanitized code before
+  acceptance is evaluated. Resource-group deployment failures, `job-provisioning`, and `execution` are reported as
+  separate stages; successful environment provisioning by itself is not reported as node allocation. Operational
+  failures are recorded too; raw provider
+  messages, secrets, and container logs are never persisted. Local mocks exercise the actual profile readback guard,
+  structured network denial versus unrelated deployment failures, and terminal-status cases.
+- After this follow-up is reviewed and merged and the coordinator directs the attempt, the operator-authorized D4
+  sequence is:
+  `.\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -Profile D4 -ConfirmD4ProfileAttempt`,
+  followed by the same command with `-Action Test -Profile D4 -ConfirmD4ProfileAttempt -EvidencePath .\issue7-d4-comparison.json`.
+  This explicit D4 confirmation does not mean capacity recovered. For a later Consumption retry, continue to require
+  the coordinator's separate capacity-recovery confirmation and `-ConfirmCapacityRecovered`. Use `-Action Cleanup`
+  only for the exact tagged issue-7 resource group after the attempt; each ARM command supplies the approved
+  subscription explicitly. Deploy requires the exact absent
   resource group, creates a random synthetic value into an ACL-restricted temporary secure parameter file, and removes
-  that file in a `finally` block. The test action is bounded, emits sanitized statuses/stages/codes only, and restores bypass to
-  `None` without ever enabling public access.
+  that file in a `finally` block. The test action is bounded, emits only sanitized statuses, stages, codes, and profile
+  readback metadata, and restores bypass to `None` without ever enabling public access.
+- Every Azure CLI subprocess in the spike runner, including account/scope checks, deployment diagnostics, environment
+  and job readbacks, Key Vault updates, resource-group existence/deletion, and cleanup polling, goes through one
+  wrapper using the shared KEDA bounded-process helper. Each subprocess is limited by the remaining action deadline;
+  redirected output is drained, timed-out process trees are killed and termination confirmed, streams/process handles
+  are disposed, and CLI diagnostics are reduced to an allowlisted error code or suppressed. Cleanup treats an exact
+  resource-group absence as idempotent success, while a failed/ambiguous existence read or ownership mismatch stops
+  without deletion. Local tests exercise a real synthetic hanging subprocess and assert runtime call paths cannot
+  bypass the wrapper.
 - Use an outer `try/finally` so the owned spike group is cleaned up after a test failure. If the deployment client
   times out, it is killed at the configured bound, but the ARM deployment may still be active: first inspect that
   deployment's terminal state with the explicit approved subscription, then run cleanup; do not blindly retry or
@@ -105,8 +131,8 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
 
   ```powershell
   try {
-      .\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered
-      .\infra\spike7\Invoke-Spike.ps1 -Action Test -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered -EvidencePath .\issue7-comparison.json
+      .\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -Profile D4 -ConfirmD4ProfileAttempt
+      .\infra\spike7\Invoke-Spike.ps1 -Action Test -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -Profile D4 -ConfirmD4ProfileAttempt -EvidencePath .\issue7-d4-comparison.json
   } finally {
       # On a deployment timeout, verify the ARM deployment is terminal before cleanup.
       .\infra\spike7\Invoke-Spike.ps1 -Action Cleanup -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc
