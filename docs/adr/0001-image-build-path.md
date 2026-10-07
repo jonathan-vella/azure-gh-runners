@@ -29,28 +29,42 @@ subscription-level quota.
 
 ## Decision
 
-**Proposed experiment; build-path decision blocked.** This ADR remains unaccepted because no GitHub-hosted build or
-agent-pool GHCR pull has been observed. The repository now contains a bounded manual workflow to test the local
-source-context and exact checked-out Git commit against a private Premium ACR. A pinned, digest-qualified official
-`actions-runner` base image provides the GHCR pull probe. The experiment scaffold does not claim that either test
-passes.
+**Proposed; evidence recorded, decision not accepted.** The bounded GitHub-hosted experiment ran as
+[workflow run 37658270199](https://github.com/jonathan-vella/azure-gh-runners/actions/runs/37658270199) on
+`18bd21c48630d672026f68a88ef0158f01563397`. It created the isolated network and agent pools, ran both build
+contexts, and cleaned up. The pinned Git-context build succeeded as ACR task `dt1`; it used the digest-pinned GHCR
+`actions-runner` base image, demonstrating that this task could pull that image. This is evidence for a
+commit-pinned Git-context route, not for the local source-context route.
 
-The workflow must first be merged to the default branch before `workflow_dispatch` can run; the runtime evidence will
-therefore follow review and merge of the scaffold, not precede it. The temporary app uses one federated credential
-with the exact `main` branch subject, no client password/certificate, and no production identity or GitHub App
-secret. Its `Contributor` assignment is limited to the explicitly named, tagged spike resource group; `AcrPush` and
-`Container Registry Tasks Contributor` are limited to that resource group's test registry.
+The local source-context command exited 1 without returning an ACR task run ID. Its underlying cause is unknown;
+this does not establish that upload failed because of private networking. S1 reached `Succeeded`. S2 remained
+`Creating` at the bounded check and its availability is unresolved. The experiment's public `/v2/` probe returned
+HTTP 401, an authentication challenge that does not establish whether unauthenticated registry data access is
+enabled or blocked. Accordingly, a successful source-context build or S2 provisioning is not a prerequisite to
+considering the demonstrated Git-context alternative, but the outstanding failure cause and S2 availability mean
+the issue's investigation is not complete and no path is accepted here.
+
+Before testing, the workflow's successful scope assertion read back and checked the Azure subscription ID, tenant ID,
+and name (`shared`); resource-group existence, location (`swedencentral`), required ownership tags, and absence of
+a prior-run marker; and registry location, Premium SKU, `publicNetworkAccess=Disabled`, and
+`adminUserEnabled=false`. These are the exact ARM properties verified by that assertion. The evidence does not
+establish ACR private-endpoint/data-plane reachability or that the public endpoint rejects unauthenticated access.
+Raw task logs were not retained or emitted, so no more specific cause can be stated for the local source-context
+failure.
+
+The workflow deleted and verified the exact spike resource group. Subsequent external cleanup verified the group,
+temporary Entra app/service principal (including its federated credential), and scoped role assignments absent.
+
+The workflow is merged to the default branch and its runtime evidence is recorded above. Its temporary app used one
+federated credential with the exact `main` branch subject, no client password/certificate, and no production identity
+or GitHub App secret. Its `Contributor` assignment was limited to the explicitly named, tagged spike resource group;
+`AcrPush` and `Container Registry Tasks Contributor` were limited to that resource group's test registry.
 
 ## Consequences
 
-- Keep issue #6 open until source-context upload, Git-context, GHCR pull, S1/S2, and cleanup results are recorded.
-- Before dispatch, run `tools/spike-acr-agentpool.ps1 -Action Setup` from an authenticated Azure CLI session in the
-  approved `shared` subscription and a `gh` session able to read this repository's metadata and OIDC customization.
-  Setup derives the subject prefix from that metadata and fails on any configuration mismatch. It refuses to reuse
-  an existing group or app and prints the non-secret client ID.
-- After this workflow is merged to `main`, dispatch `.github/workflows/spike-acr-agentpool.yml` on `main` with all
-  three required inputs: `client_id`, `resource_group` (`rg-ghrunners-spike6-swc`), and `registry_name`
-  (`ghrunners6jv20261007`).
+- Keep issue #6 open. The Git-context path and GHCR pull have positive evidence, but the local source-context failure
+  is undiagnosed, S2 readiness/quota is unresolved, and the public-probe result is inconclusive. No accepted build-path
+  decision is made.
 - The workflow serializes runs against the fixed spike resource group without canceling a resource-owning run. It
   claims the group with its workflow run ID and refuses a group carrying a prior run marker. It asserts subscription,
   tenant, region, ownership tags, Premium SKU, disabled public access, and disabled admin access before testing.
@@ -74,9 +88,10 @@ secret. Its `Contributor` assignment is limited to the explicitly named, tagged 
   only the observed `:ref:refs/heads/main` suffix; no environment or event suffix is inferred. See the
   [GitHub OIDC reference](https://docs.github.com/en/actions/reference/security/oidc). The two prior AADSTS700213
   runs do not constitute evidence for any pool or build criterion.
-- Do not choose ACR Tasks or the documented fallback until the GH-hosted run URLs, ACR task run IDs/statuses,
-  public-endpoint probe, pool states, and cleanup assertions have been reviewed and added here.
+- Do not represent the local source-context route, S2 availability, public endpoint behavior, or private-endpoint
+  data-plane reachability as proven. Any later decision should weigh the demonstrated Git-context route against the
+  issue's remaining questions and the documented GitHub-hosted build -> private GHCR -> `az acr import` fallback.
 
 ## Status
 
-Proposed — experiment scaffold only; results are incomplete and no build-path decision is accepted.
+Proposed — experiment results are recorded, but investigation is incomplete and no build-path decision is accepted.
