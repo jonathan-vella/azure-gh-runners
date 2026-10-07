@@ -1,0 +1,24 @@
+{
+  "name": "example-vmss",
+  "repo": "jonathan-vella/example-vmss",
+  "visibility": "public",
+  "backend": "vmss",
+  "vmSku": "Standard_D2ls_v5",
+  "maxRunners": 2,
+  "jobTimeoutMinutes": 360,
+  "labels": [
+    "ghr-example-vmss"
+  ],
+  "allowedEvents": [
+    "workflow_dispatch",
+    "schedule",
+    "push"
+  ],
+  "allowedRefs": [
+    "refs/heads/main"
+  ],
+  "allowedWorkflows": [
+    "jonathan-vella/example-vmss/.github/workflows/private-ci.yml@refs/heads/main"
+  ],
+  "notes": "Example only; VMSS runtime behavior remains gated on the accepted primary-backend ADR."
+}

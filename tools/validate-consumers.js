@@ -170,6 +170,13 @@ function validateRegistry(entries, metadataProvider = getGitHubRepoMetadata) {
       continue;
     }
 
+    if (consumer.backend === 'vmss') {
+      errors.push(
+        `${filename}: backend "vmss" is schema-preparation only and cannot be used by the active registry until backend runtime support is implemented.`,
+      );
+      continue;
+    }
+
     if (filename !== `${consumer.name}.json`) {
       errors.push(`${filename}: filename must be exactly "${consumer.name}.json".`);
     }

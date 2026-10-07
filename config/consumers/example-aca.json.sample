@@ -1,0 +1,25 @@
+{
+  "name": "example-aca",
+  "repo": "jonathan-vella/example-aca",
+  "visibility": "public",
+  "backend": "aca",
+  "labels": [
+    "ghr-example-aca"
+  ],
+  "cpu": 0.5,
+  "memory": "1Gi",
+  "maxExecutions": 1,
+  "replicaTimeoutSeconds": 3600,
+  "allowedEvents": [
+    "workflow_dispatch",
+    "schedule",
+    "push"
+  ],
+  "allowedRefs": [
+    "refs/heads/main"
+  ],
+  "allowedWorkflows": [
+    "jonathan-vella/example-aca/.github/workflows/private-ci.yml@refs/heads/main"
+  ],
+  "notes": "Example only; explicit ACA backend selection does not change runtime behavior until the primary-backend ADR is accepted."
+}

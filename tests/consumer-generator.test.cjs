@@ -74,6 +74,20 @@ test('emits an ARM parameters document with the exact normalized hook policy', (
   assert.equal(Object.hasOwn(consumer, 'notes'), false);
 });
 
+test('explicit ACA generation is identical to legacy generation', () => {
+  withDirectory((directory) => {
+    const registry = path.join(directory, 'registry');
+    const output = path.join(directory, 'generated', 'consumers.json');
+    writeConsumers(registry, [['example.json', sample]]);
+    generateConsumers({ directory: registry, destination: output, metadataProvider: provider });
+    const legacy = fs.readFileSync(output, 'utf8');
+
+    writeConsumers(registry, [['example.json', { ...sample, backend: 'aca' }]]);
+    generateConsumers({ directory: registry, destination: output, metadataProvider: provider });
+    assert.equal(fs.readFileSync(output, 'utf8'), legacy);
+  });
+});
+
 test('normalizes consumers and set-valued fields independent of source ordering', () => {
   const reordered = {
     ...sample,
@@ -198,6 +212,23 @@ test('refuses invalid JSON, schema violations, and policy violations without rep
       /public repositories cannot allow event "pull_request"/,
     );
     assert.equal(fs.readFileSync(output, 'utf8'), 'preserve this\n');
+  });
+});
+
+test('refuses active VMSS consumers without writing deployment parameters', () => {
+  withDirectory((directory) => {
+    const registry = path.join(directory, 'registry');
+    const output = path.join(directory, 'generated', 'consumers.json');
+    const vmss = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'config', 'consumers', 'example-vmss.json.sample'), 'utf8'),
+    );
+    writeConsumers(registry, [['example.json', { ...vmss, name: 'example' }]]);
+
+    assert.throws(
+      () => generateConsumers({ directory: registry, destination: output, metadataProvider: provider }),
+      /backend "vmss" is schema-preparation only.*cannot be used by the active registry/,
+    );
+    assert.equal(fs.existsSync(output), false);
   });
 });
 
