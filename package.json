@@ -7,6 +7,6 @@
     "validate:markdown": "markdownlint-cli2 \"**/*.md\""
   },
   "devDependencies": {
-    "markdownlint-cli2": "0.18.1"
+    "markdownlint-cli2": "0.23.3"
   }
 }
