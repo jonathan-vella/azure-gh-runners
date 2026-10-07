@@ -86,7 +86,8 @@ local check.
   resource group, which must be deleted afterward.
 - **Keep RBAC changes exact.** Only after the controller-RBAC runbook PR in issue #69 is merged may the one-time
   condition update authorized by this decision for `sp-ghrunners-platform-prod` at `rg-ghrunners-prod-swc` add
-  `Virtual Machine Contributor` (`b24988ac-6180-42a0-ab88-20f7382dd24c`) and `Network Contributor`
+  [Virtual Machine Contributor](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/compute#virtual-machine-contributor)
+  (`9980e02c-c2be-4d73-94e8-173b1dc7cf3c`) and `Network Contributor`
   (`4d97b98b-1d4f-4787-a291-c67834d212e7`). Preserve the existing `AcrPull`, `AcrPush`, and Key Vault Secrets User
   allowlist; stop on any unexpected state. This does not authorize other scopes, roles, identities, or condition
   changes.
