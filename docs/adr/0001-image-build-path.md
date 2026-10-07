@@ -31,8 +31,8 @@ subscription-level quota.
 
 **Proposed; evidence recorded, decision not accepted.** The bounded GitHub-hosted experiment ran as
 [workflow run 37658270199](https://github.com/jonathan-vella/azure-gh-runners/actions/runs/37658270199) on
-`18bd21c48630d672026f68a88ef0158f01563397`. It created the isolated network and agent pools, ran both build
-contexts, and cleaned up. The pinned Git-context build succeeded as ACR task `dt1`; it used the digest-pinned GHCR
+`18bd21c48630d672026f68a88ef0158f01563397`. It created the isolated network, attempted both pool tiers, ran both
+build contexts, and cleaned up. The pinned Git-context build succeeded as ACR task `dt1`; it used the digest-pinned GHCR
 `actions-runner` base image, demonstrating that this task could pull that image. This is evidence for a
 commit-pinned Git-context route, not for the local source-context route.
 
