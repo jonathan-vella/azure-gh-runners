@@ -60,9 +60,8 @@ test before treating it as a control. This is an architecture change, not a regi
 - Preserve the documented Log Analytics exception: standard Azure Monitor ingestion and query endpoints are enabled
   without AMPLS; workspace local authentication is disabled and Entra/Azure RBAC governs access. This is not an
   inbound workload endpoint and must not be described as blanket private-endpoint-only access.
-- `npm ci` reported five high-severity dependency audit findings. Their package-level details were not assessed or
-  remediated in this documentation change; track and resolve current findings through the repository's
-  dependency-maintenance process before release. Do not interpret this document as a clean dependency scan.
+- Unresolved dependency audit findings remain a release concern. Assess and remediate them through the repository's
+  dependency-maintenance process before release. This document does not claim a clean dependency scan.
 
 ## Related material
 
