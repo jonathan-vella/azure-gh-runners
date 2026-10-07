@@ -90,6 +90,7 @@ assert.match(processModule, /process\.Dispose\(\)/);
 assert.match(processModule, /Kill\(\$true\)/);
 assert.match(lifecycleModule, /exact recorded principal and role/);
 assert.match(functionalTests, /hung child process is terminated/);
+assert.match(functionalTests, /Windows prefers az\.cmd and its bundled Python/);
 assert.match(functionalTests, /Runtime emits every shared NSG rule/);
 assert.match(functionalTests, /Runtime NSG rule includes its source subnet/);
 assert.match(functionalTests, /Repeated cleanup is an empty no-op/);

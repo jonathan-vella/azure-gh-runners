@@ -151,4 +151,49 @@ $stopwatch.Stop()
 Assert-Equal $timeoutRejected $true 'A hung child process is terminated'
 Assert-Equal ($stopwatch.Elapsed.TotalSeconds -lt 5) $true 'Subprocess timeout is enforced inside the caller'
 
+$cliRoot = Join-Path ([System.IO.Path]::GetTempPath()) "keda-az-$([guid]::NewGuid().ToString('N'))"
+$cliBin = Join-Path $cliRoot 'wbin'
+try {
+    $null = New-Item -ItemType Directory -Path $cliBin
+    $azCmd = Join-Path $cliBin 'az.cmd'
+    $azBare = Join-Path $cliBin 'az'
+    $bundledPython = Join-Path $cliRoot 'python.exe'
+    foreach ($file in @($azCmd, $azBare, $bundledPython)) { $null = New-Item -ItemType File -Path $file }
+    $multipleCommands = @([pscustomobject]@{ Source = $azBare }, [pscustomobject]@{ Source = $azCmd })
+
+    $windowsCli = Get-BoundedAzureCli -Candidates $multipleCommands -OnWindows $true
+    Assert-Equal ($windowsCli.fileName -is [string]) $true 'Windows Azure CLI resolves one Python path'
+    Assert-Equal $windowsCli.fileName $bundledPython 'Windows prefers az.cmd and its bundled Python'
+    Assert-Equal ($windowsCli.prefix -join ' ') '-IBm azure.cli' 'Windows Azure CLI module prefix'
+
+    $linuxCli = Get-BoundedAzureCli -Candidates $multipleCommands -OnWindows $false
+    Assert-Equal $linuxCli.fileName $azBare 'Non-Windows keeps the first executable'
+    Assert-Equal @($linuxCli.prefix).Count 0 'Non-Windows executable has no prefix'
+
+    $null = New-Item -ItemType File -Path (Join-Path $cliBin 'python.exe')
+    $ambiguousPythonRejected = $false
+    try {
+        $null = Get-BoundedAzureCli -Candidates $multipleCommands -OnWindows $true
+    } catch {
+        $ambiguousPythonRejected = $_.Exception.Message -like '*single managed Python*'
+    }
+    Assert-Equal $ambiguousPythonRejected $true 'Ambiguous bundled Python fails closed'
+
+    $unsupportedRejected = $false
+    try {
+        $null = Get-BoundedAzureCli -Candidates @([pscustomobject]@{ Source = $azBare }) -OnWindows $true
+    } catch {
+        $unsupportedRejected = $_.Exception.Message -like '*supported Azure CLI*'
+    }
+    Assert-Equal $unsupportedRejected $true 'Windows rejects extensionless-only Azure CLI'
+} finally {
+    Remove-Item -LiteralPath $cliRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+if (Get-Command az -CommandType Application -ErrorAction SilentlyContinue) {
+    $installedCli = Get-BoundedAzureCli
+    Assert-Equal ($installedCli.fileName -is [string]) $true 'Installed Azure CLI resolves one path'
+    Assert-Equal (Test-Path -LiteralPath $installedCli.fileName -PathType Leaf) $true 'Installed Azure CLI path exists'
+}
+
 Write-Output 'KEDA spike functional harness tests passed.'
