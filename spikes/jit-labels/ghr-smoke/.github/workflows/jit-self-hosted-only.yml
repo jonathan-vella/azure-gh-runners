@@ -1,0 +1,16 @@
+name: Spike 10 - self-hosted label must not scale
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  should-remain-queued:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: Fail if a runner without the spike label is assigned
+        run: |
+          printf 'Unexpected runner selected: %s\n' "$RUNNER_NAME"
+          exit 1

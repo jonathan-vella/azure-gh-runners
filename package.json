@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "validate": "npm run validate:bicep && npm run validate:markdown",
-    "validate:bicep": "az bicep build --file infra/main.bicep --stdout && az bicep build-params --file infra/main.bicepparam --stdout && az bicep lint --file infra/main.bicep",
+    "validate:bicep": "az bicep build --file infra/main.bicep --stdout && az bicep build-params --file infra/main.bicepparam --stdout && az bicep lint --file infra/main.bicep && az bicep build --file spikes/jit-labels/job.bicep --stdout && az bicep lint --file spikes/jit-labels/job.bicep",
     "validate:markdown": "markdownlint-cli2 \"**/*.md\""
   },
   "devDependencies": {

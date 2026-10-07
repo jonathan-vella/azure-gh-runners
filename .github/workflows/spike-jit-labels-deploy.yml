@@ -1,0 +1,193 @@
+name: Spike 10 - Deploy isolated JIT label job
+
+on:
+  workflow_dispatch:
+    inputs:
+      environmentResourceId:
+        description: Existing internal ACA environment ID in the spike 10 resource group
+        required: true
+        type: string
+      infrastructureSubnetId:
+        description: ACA infrastructure subnet ID
+        required: true
+        type: string
+      natGatewayResourceId:
+        description: Dedicated spike 10 NAT Gateway ID
+        required: true
+        type: string
+      natPublicIpAddress:
+        description: Dedicated spike 10 NAT egress IPv4 address
+        required: true
+        type: string
+      initImageReference:
+        description: Init image reference ending in @sha256:<64 hex characters>
+        required: true
+        type: string
+      runnerImageReference:
+        description: Runner image reference ending in @sha256:<64 hex characters>
+        required: true
+        type: string
+      pullIdentityResourceId:
+        description: User-assigned identity for ACR pull and Key Vault resolution
+        required: true
+        type: string
+      keyVaultAppKeySecretUrl:
+        description: Versionless Key Vault URL for the GitHub App private key
+        required: true
+        type: string
+      capacityConfirmed:
+        description: Confirm that isolated ACA environment capacity is available in swedencentral
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: spike10-jit-label-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main' && inputs.capacityConfirmed
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: platform-prod
+    steps:
+      - name: Check out reviewed spike template
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Sign in to the approved shared subscription
+        uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Validate isolated network and deploy the diagnostic job
+        env:
+          ENVIRONMENT_ID: ${{ inputs.environmentResourceId }}
+          INFRASTRUCTURE_SUBNET_ID: ${{ inputs.infrastructureSubnetId }}
+          NAT_GATEWAY_ID: ${{ inputs.natGatewayResourceId }}
+          NAT_PUBLIC_IP: ${{ inputs.natPublicIpAddress }}
+          INIT_IMAGE: ${{ inputs.initImageReference }}
+          RUNNER_IMAGE: ${{ inputs.runnerImageReference }}
+          PULL_IDENTITY_ID: ${{ inputs.pullIdentityResourceId }}
+          APP_KEY_SECRET_URL: ${{ inputs.keyVaultAppKeySecretUrl }}
+          APP_ID: ${{ secrets.GH_APP_ID }}
+          INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+
+          readonly resource_group="rg-ghrunners-spike10-swc"
+          readonly expected_prefix="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${resource_group}/"
+
+          for resource_id in \
+            "$ENVIRONMENT_ID" \
+            "$INFRASTRUCTURE_SUBNET_ID" \
+            "$NAT_GATEWAY_ID" \
+            "$PULL_IDENTITY_ID"; do
+            case "$resource_id" in
+              "$expected_prefix"*) ;;
+              *)
+                echo "An infrastructure resource is outside the dedicated issue 10 resource group." >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          for image_reference in "$INIT_IMAGE" "$RUNNER_IMAGE"; do
+            if ! [[ "$image_reference" =~ @sha256:[0-9a-f]{64}$ ]]; then
+              echo "Both diagnostic images must be pinned by a full SHA-256 digest." >&2
+              exit 1
+            fi
+          done
+
+          if [[ "$APP_KEY_SECRET_URL" != https://*/*/secrets/* ]]; then
+            echo "The GitHub App key must be referenced through a Key Vault secret URL." >&2
+            exit 1
+          fi
+
+          environment_json="$(az resource show --ids "$ENVIRONMENT_ID" --api-version 2025-01-01 --output json)"
+          jq -e \
+            --arg subnet "$INFRASTRUCTURE_SUBNET_ID" \
+            '.properties.publicNetworkAccess == "Disabled"
+              and .properties.vnetConfiguration.internal == true
+              and .properties.vnetConfiguration.infrastructureSubnetId == $subnet
+              and (.properties.workloadProfiles | type == "array" and length > 0)' \
+            <<<"$environment_json" >/dev/null
+
+          subnet_json="$(az network vnet subnet show --ids "$INFRASTRUCTURE_SUBNET_ID" --output json)"
+          jq -e \
+            --arg nat "$NAT_GATEWAY_ID" \
+            '.natGateway.id == $nat
+              and ([.delegations[]?.serviceName] | any(. == "Microsoft.App/environments"))' \
+            <<<"$subnet_json" >/dev/null
+
+          nat_json="$(az network nat gateway show --ids "$NAT_GATEWAY_ID" --output json)"
+          jq -e \
+            '.publicIpAddresses | length == 1' \
+            <<<"$nat_json" >/dev/null
+          actual_public_ip_id="$(jq -r '.publicIpAddresses[0].id' <<<"$nat_json")"
+          actual_public_ip="$(az network public-ip show --ids "$actual_public_ip_id" --query ipAddress --output tsv)"
+          if [[ "$actual_public_ip" != "$NAT_PUBLIC_IP" ]]; then
+            echo "The supplied NAT egress address does not match the dedicated NAT Gateway." >&2
+            exit 1
+          fi
+
+          registry_host="${INIT_IMAGE%%/*}"
+          runner_registry_host="${RUNNER_IMAGE%%/*}"
+          if [[ "$registry_host" != "$runner_registry_host" ]]; then
+            echo "Both diagnostic images must use the same dedicated private registry." >&2
+            exit 1
+          fi
+
+          registry_name="${registry_host%%.*}"
+          registry_id="$(az acr show --name "$registry_name" --query id --output tsv)"
+          case "$registry_id" in
+            "$expected_prefix"*) ;;
+            *)
+              echo "The image registry is outside the dedicated issue 10 resource group." >&2
+              exit 1
+              ;;
+          esac
+          registry_json="$(az resource show --ids "$registry_id" --api-version 2023-07-01 --output json)"
+          jq -e '.properties.publicNetworkAccess == "Disabled"' <<<"$registry_json" >/dev/null
+
+          vault_host="${APP_KEY_SECRET_URL#https://}"
+          vault_name="${vault_host%%.*}"
+          vault_id="$(az keyvault show --name "$vault_name" --query id --output tsv)"
+          case "$vault_id" in
+            "$expected_prefix"*) ;;
+            *)
+              echo "The Key Vault is outside the dedicated issue 10 resource group." >&2
+              exit 1
+              ;;
+          esac
+          vault_json="$(az resource show --ids "$vault_id" --api-version 2023-07-01 --output json)"
+          jq -e '.properties.publicNetworkAccess == "Disabled"' <<<"$vault_json" >/dev/null
+
+          az deployment group create \
+            --name "spike10-jit-labels-${GITHUB_RUN_ID}" \
+            --resource-group "$resource_group" \
+            --mode Incremental \
+            --template-file spikes/jit-labels/job.bicep \
+            --parameters \
+              environmentResourceId="$ENVIRONMENT_ID" \
+              infrastructureSubnetId="$INFRASTRUCTURE_SUBNET_ID" \
+              natGatewayResourceId="$NAT_GATEWAY_ID" \
+              natPublicIpAddress="$NAT_PUBLIC_IP" \
+              initImageReference="$INIT_IMAGE" \
+              runnerImageReference="$RUNNER_IMAGE" \
+              pullIdentityResourceId="$PULL_IDENTITY_ID" \
+              keyVaultAppKeySecretUrl="$APP_KEY_SECRET_URL" \
+              appId="$APP_ID" \
+              installationId="$INSTALLATION_ID" \
+              owner="jonathan-vella" \
+              repo="ghr-smoke" \
+              customLabel="ghr-smoke-jit-label-spike" \
+            --query properties.outputs \
+            --output json

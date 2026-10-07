@@ -1,0 +1,18 @@
+name: Spike 10 - match custom runner label
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  verify-label-match:
+    runs-on: ghr-smoke-jit-label-spike
+    timeout-minutes: 5
+    steps:
+      - name: Report selected runner
+        run: |
+          printf 'Runner name: %s\n' "$RUNNER_NAME"
+          printf 'Runner OS: %s\n' "$RUNNER_OS"
+          printf 'Runner architecture: %s\n' "$RUNNER_ARCH"
+          sleep 45

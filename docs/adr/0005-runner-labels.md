@@ -3,55 +3,64 @@
 ## Context
 
 The platform's KEDA `github-runner` scaler is intended to use `noDefaultLabels: true`, while the runner is registered
-through GitHub's repository JIT configuration endpoint. The issue #10 acceptance criteria require live evidence of
-the labels GitHub registers, the matching `runs-on` form, and whether a job using only `self-hosted` wakes the pool.
+through GitHub's repository JIT configuration endpoint. Issue #10 requires evidence of the labels GitHub registers,
+the matching `runs-on` form, and whether a job using only `self-hosted` wakes the pool.
 
 GitHub documents the JIT endpoint's `labels` request field as custom labels to add and its response as containing both
-the runner metadata (including labels) and `encoded_jit_config` ([REST API](https://docs.github.com/en/rest/actions/self-hosted-runners#create-a-configuration-for-a-just-in-time-runner-for-a-repository)).
+runner metadata (including labels) and `encoded_jit_config` ([REST API](https://docs.github.com/en/rest/actions/self-hosted-runners#create-a-configuration-for-a-just-in-time-runner-for-a-repository)).
 GitHub also documents that self-hosted runners automatically receive the `self-hosted` and OS/architecture labels
 ([label documentation](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/use-in-a-workflow#using-default-labels-to-route-jobs)).
 The config is a sensitive bootstrap credential and must not be logged, persisted, or committed.
 
 The latest stable KEDA release at authoring time is v2.21.0. Its
 [GitHub runner scaler implementation](https://github.com/kedacore/keda/blob/v2.21.0/pkg/scalers/github_runner_scaler.go)
-checks every queued job label against the configured labels and adds reserved defaults only when
-`noDefaultLabels` is false. This matches the intended custom-label-only behavior, but does not establish which KEDA
-version Azure Container Apps runs. The older
-[KEDA issue #6127](https://github.com/kedacore/keda/issues/6127) reported the opposite behavior on v2.14.0.
+checks every queued-job label against the configured labels and adds reserved defaults only when `noDefaultLabels` is
+false. This is implementation evidence, not proof of the KEDA version or runtime behavior in Azure Container Apps.
+KEDA issue [#6127](https://github.com/kedacore/keda/issues/6127) reported the opposite behavior on v2.14.0.
 
-The current repository does not yet contain the ACA runner job or a synthetic workflow in `ghr-smoke`, so live
-scale-up behavior cannot be tested in this repository state.
+The isolated diagnostic job and two trusted `workflow_dispatch` templates are prepared under `spikes/jit-labels/`.
+They are not deployed or installed in `ghr-smoke` by this PR.
 
 ## Decision
 
 **Proposed, pending live verification.** Configure JIT with the consumer-specific label only (for example,
-`ghr-smoke`) and configure KEDA with the same label and `noDefaultLabels: true`. Consumer jobs should request both
-`self-hosted` and the consumer-specific label:
+`ghr-smoke-jit-label-spike`) and configure KEDA with that same label and `noDefaultLabels: true`. The matching
+synthetic job should request the custom label only:
 
 ```yaml
-runs-on: [self-hosted, ghr-smoke]
+runs-on: ghr-smoke-jit-label-spike
 ```
 
-This form is expected to match the registered runner while ensuring the KEDA rule can key on the consumer-specific
-label. A job requesting only `self-hosted` is expected not to match that custom-label-only rule.
+GitHub's label routing matches a job's requested labels against runner labels; `self-hosted` is a default runner label,
+not a required token in the `runs-on` expression. KEDA v2.21.0's `noDefaultLabels` option omits reserved labels from
+the configured scaler labels. Its current matching implementation requires every job label to exist in that
+configured set. Consequently a custom-only job label is expected to both match the runner and wake the scaler, while a
+job requesting only `self-hosted` is expected not to match the custom-only scaler rule.
 
-The workflow `spike-jit-runner-labels.yml` is a bounded, manual probe for the protected `platform-prod` environment.
-It may run only from `main`, requires that environment's reviewer approval, scopes its installation token to the
-`ghr-smoke` repository and Administration: write, asks GitHub to add only a unique custom label, prints only returned
-runner metadata and labels, and deletes/verifies removal of the temporary registration. It never reads, prints, or
-stores `encoded_jit_config`.
+The protected workflow `spike-jit-labels-deploy.yml` deploys only the `caj-ghr-spike10-jit-labels` diagnostic job to
+the dedicated `rg-ghrunners-spike10-swc` group. It is manual, main-only, requires explicit capacity confirmation and
+approval of `platform-prod`, and validates that the environment is internal/public-disabled, the dedicated subnet
+uses the supplied NAT Gateway, and both images are digest-pinned. The user-assigned identity is set to lifecycle
+`None` for job containers; the App key is resolved from Key Vault into the init container only. The two smoke workflow
+templates are trusted manual jobs with no secrets or third-party actions.
 
 ## Consequences
 
-- Do not treat the actual JIT label set, exact `runs-on` matching, or Azure Container Apps scaler behavior as proven
-  until the probe and isolated scale test have completed and their run links/results are recorded here.
-- The JIT label probe can establish the actual labels returned by GitHub, including whether `self-hosted` appears.
-- The runner job and queue tests must verify that `[self-hosted, <consumer-label>]` starts the pool and that
-  `self-hosted` alone does not. They require the isolated issue #10 test setup; no other spike resources or production
-  resources may be reused or changed.
-- The runner-registration cleanup is part of the probe's success condition.
+- Do not treat the actual JIT label set, exact `runs-on` matching, or ACA scaler behavior as proven until the isolated
+  observer completes and its workflow/execution URLs and label observations are recorded here.
+- The observer records labels from the registered JIT runner while the matching workflow is active, confirms that the
+  matching job creates exactly one successful ACA execution, and checks automatic ephemeral-runner deregistration.
+- The observer then requires the `self-hosted`-only workflow to remain queued for two minutes with no new ACA execution
+  and cancels the queued run. Any unexpected test runner left registered is removed by its captured ID and reported as
+  a failed auto-cleanup assertion.
+- The runner job and queue tests must verify that `runs-on: <consumer-label>` starts the pool and `self-hosted` alone
+  does not. They require the isolated issue #10 setup; no other spike resources or production resources may be reused
+  or changed.
+- The pinned image is GitHub's `actions-runner` v2.338.0 image digest verified on 2026-10-07. Re-check the latest
+  stable runner release before changing the pin.
 
 ## Status
 
-Proposed; not accepted. The protected environment requires an authorized human reviewer, and this PR cannot access
-its secrets. Live JIT and KEDA evidence remains outstanding.
+Proposed; not accepted. The protected environment requires an authorized human reviewer, the isolated ACA environment
+failed to provision in `swedencentral` because of regional capacity, and no live JIT/scaler test has run. Do not
+deploy, switch region, or relax network controls while that blocker remains.
