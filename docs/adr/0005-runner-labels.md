@@ -18,8 +18,9 @@ checks every queued-job label against the configured labels and adds reserved de
 false. This is implementation evidence, not proof of the KEDA version or runtime behavior in Azure Container Apps.
 KEDA issue [#6127](https://github.com/kedacore/keda/issues/6127) reported the opposite behavior on v2.14.0.
 
-The isolated diagnostic job and two trusted `workflow_dispatch` templates are prepared under `spikes/jit-labels/`.
-They are not deployed or installed in `ghr-smoke` by this PR.
+The isolated diagnostic job, two trusted `workflow_dispatch` templates, and a fail-closed job-start hook are prepared
+under `spikes/jit-labels/`. The hook allows only those two workflows, from `jonathan-vella/ghr-smoke`, with
+`workflow_dispatch` on `refs/heads/main`. The templates are not deployed or installed in `ghr-smoke` by this PR.
 
 ## Decision
 
@@ -37,12 +38,23 @@ the configured scaler labels. Its current matching implementation requires every
 configured set. Consequently a custom-only job label is expected to both match the runner and wake the scaler, while a
 job requesting only `self-hosted` is expected not to match the custom-only scaler rule.
 
-The protected workflow `spike-jit-labels-deploy.yml` deploys only the `caj-ghr-spike10-jit-labels` diagnostic job to
+The protected workflows include an OIDC-claims diagnostic that prints only allowlisted claims (never the JWT) and
+`spike-jit-labels-deploy.yml`, which deploys only the `caj-ghr-spike10-jit-labels` diagnostic job to
 the dedicated `rg-ghrunners-spike10-swc` group. It is manual, main-only, requires explicit capacity confirmation and
-approval of `platform-prod`, and validates that the environment is internal/public-disabled, the dedicated subnet
-uses the supplied NAT Gateway, and both images are digest-pinned. The user-assigned identity is set to lifecycle
-`None` for job containers; the App key is resolved from Key Vault into the init container only. The two smoke workflow
-templates are trusted manual jobs with no secrets or third-party actions.
+approval of `platform-prod`, uses a temporary identity with only scoped Contributor/Managed Identity Operator grants,
+and validates the approved subscription, region/API availability, internal/public-disabled environment, delegated
+subnet/NSG/NAT, private registry/Key Vault, and digest-pinned images. The job has a run-ID ownership tag and a bounded
+observation window with guarded cleanup. The user-assigned identity is lifecycle `None` for job containers; the App
+key is resolved from Key Vault into the init container only. The two smoke workflow templates are trusted manual jobs
+with no secrets or third-party actions.
+
+The JIT API requires `runner_group_id`; the scaffold supplies `1`, which GitHub's repository endpoint example shows
+as the default group. Acceptance of that group ID for the personal-account `ghr-smoke` repository remains to be
+confirmed by the live, authorized API request. Repository OIDC customization metadata was read back as
+`use_default: true`, `use_immutable_subject: true`, with prefix
+`repo:jonathan-vella@25802147/azure-gh-runners@1408821667`. The isolated identity FIC therefore uses the standard
+environment suffix `:environment:platform-prod`; the operator script verifies the live template and reads the FIC
+back before granting roles. Do not alter the existing production FIC as part of issue #10.
 
 ## Consequences
 

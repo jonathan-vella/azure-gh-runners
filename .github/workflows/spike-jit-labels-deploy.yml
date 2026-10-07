@@ -3,6 +3,14 @@ name: Spike 10 - Deploy isolated JIT label job
 on:
   workflow_dispatch:
     inputs:
+      deploymentClientId:
+        description: Client ID of the temporary identity scoped only to the spike-10 resource group
+        required: true
+        type: string
+      deploymentPrincipalObjectId:
+        description: Service principal object ID printed by the temporary identity preparation script
+        required: true
+        type: string
       environmentResourceId:
         description: Existing internal ACA environment ID in the spike 10 resource group
         required: true
@@ -32,7 +40,7 @@ on:
         required: true
         type: string
       keyVaultAppKeySecretUrl:
-        description: Versionless Key Vault URL for the GitHub App private key
+        description: Versionless URL in the spike-10 Key Vault for the GitHub App private key
         required: true
         type: string
       capacityConfirmed:
@@ -40,6 +48,11 @@ on:
         required: true
         type: boolean
         default: false
+      observationWindowMinutes:
+        description: Keep the temporary scaler available for this many minutes (5-45)
+        required: true
+        type: number
+        default: 45
 
 permissions:
   contents: read
@@ -53,21 +66,24 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main' && inputs.capacityConfirmed
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
     environment: platform-prod
     steps:
       - name: Check out reviewed spike template
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Sign in to the approved shared subscription
+      - name: Sign in as the temporary spike-scoped identity
+        id: azure-login
         uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ inputs.deploymentClientId }}
+          tenant-id: 30bac921-1547-4b1e-8445-72455da783f1
+          subscription-id: b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
 
-      - name: Validate isolated network and deploy the diagnostic job
+      - name: Validate scope, region, network and private dependencies; deploy job
         env:
+          DEPLOYMENT_CLIENT_ID: ${{ inputs.deploymentClientId }}
+          DEPLOYMENT_OBJECT_ID: ${{ inputs.deploymentPrincipalObjectId }}
           ENVIRONMENT_ID: ${{ inputs.environmentResourceId }}
           INFRASTRUCTURE_SUBNET_ID: ${{ inputs.infrastructureSubnetId }}
           NAT_GATEWAY_ID: ${{ inputs.natGatewayResourceId }}
@@ -78,12 +94,39 @@ jobs:
           APP_KEY_SECRET_URL: ${{ inputs.keyVaultAppKeySecretUrl }}
           APP_ID: ${{ secrets.GH_APP_ID }}
           INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
-          SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          SUBSCRIPTION_ID: b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
+          TENANT_ID: 30bac921-1547-4b1e-8445-72455da783f1
+          OBSERVATION_WINDOW_MINUTES: ${{ inputs.observationWindowMinutes }}
         run: |
           set -euo pipefail
 
+          az_checked() {
+            local output
+            if ! output="$(az "$@" 2>/dev/null)"; then
+              echo "Azure CLI operation failed; details are suppressed to avoid exposing configuration." >&2
+              return 1
+            fi
+            printf '%s' "$output"
+          }
+
           readonly resource_group="rg-ghrunners-spike10-swc"
+          readonly location="swedencentral"
+          readonly job_name="caj-ghr-spike10-jit-labels"
           readonly expected_prefix="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${resource_group}/"
+
+          if ! [[ "$OBSERVATION_WINDOW_MINUTES" =~ ^[0-9]+$ ]] ||
+             (( OBSERVATION_WINDOW_MINUTES < 5 || OBSERVATION_WINDOW_MINUTES > 45 )); then
+            echo "Observation window must be between 5 and 45 minutes." >&2
+            exit 1
+          fi
+          if ! [[ "$DEPLOYMENT_CLIENT_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+            echo "A valid temporary spike-scoped client ID is required." >&2
+            exit 1
+          fi
+          if ! [[ "$DEPLOYMENT_OBJECT_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+            echo "A valid temporary service-principal object ID is required." >&2
+            exit 1
+          fi
 
           for resource_id in \
             "$ENVIRONMENT_ID" \
@@ -106,33 +149,101 @@ jobs:
             fi
           done
 
-          if [[ "$APP_KEY_SECRET_URL" != https://*/*/secrets/* ]]; then
-            echo "The GitHub App key must be referenced through a Key Vault secret URL." >&2
+          if ! [[ "$APP_KEY_SECRET_URL" =~ ^https://([a-zA-Z0-9-]+)\.vault\.azure\.net/secrets/([a-zA-Z0-9-]+)$ ]]; then
+            echo "The App key must use a versionless secret URL in Azure public cloud." >&2
+            exit 1
+          fi
+          vault_name="${BASH_REMATCH[1]}"
+
+          account="$(az_checked account show --subscription "$SUBSCRIPTION_ID" --output json)"
+          jq -e \
+            --arg subscription "$SUBSCRIPTION_ID" \
+            --arg tenant "$TENANT_ID" \
+            '.id == $subscription and .tenantId == $tenant and .name == "shared"' \
+            <<<"$account" >/dev/null
+
+          assignments="$(az_checked role assignment list \
+            --assignee-object-id "$DEPLOYMENT_OBJECT_ID" \
+            --all \
+            --include-inherited \
+            --subscription "$SUBSCRIPTION_ID" \
+            --output json)"
+          jq -e \
+            --arg scope "${expected_prefix%/}" \
+            --arg identity "$PULL_IDENTITY_ID" \
+            'length == 2
+              and any(.[]; (.scope | ascii_downcase) == ($scope | ascii_downcase) and .roleDefinitionName == "Contributor")
+              and any(.[]; (.scope | ascii_downcase) == ($identity | ascii_downcase) and .roleDefinitionName == "Managed Identity Operator")
+              and all(.[]; ((.scope | ascii_downcase) == ($scope | ascii_downcase) and .roleDefinitionName == "Contributor")
+                or ((.scope | ascii_downcase) == ($identity | ascii_downcase) and .roleDefinitionName == "Managed Identity Operator"))' \
+            <<<"$assignments" >/dev/null
+
+          if existing_job="$(az containerapp job show \
+            --name "$job_name" \
+            --resource-group "$resource_group" \
+            --subscription "$SUBSCRIPTION_ID" \
+            --only-show-errors \
+            --output json 2>&1)"; then
+            echo "The named issue 10 job already exists; refusing to overwrite or delete pre-existing state." >&2
+            exit 1
+          elif [[ "$existing_job" != *ResourceNotFound* && "$existing_job" != *ContainerAppJobNotFound* ]]; then
+            echo "Unable to confirm the named issue 10 job is absent; refusing deployment." >&2
             exit 1
           fi
 
-          environment_json="$(az resource show --ids "$ENVIRONMENT_ID" --api-version 2025-01-01 --output json)"
+          provider="$(az_checked provider show --namespace Microsoft.App --output json)"
+          jq -e \
+            --arg location "$location" \
+            '.resourceTypes[]
+              | select(.resourceType == "jobs")
+              | (.apiVersions | any(. == "2026-07-01"))
+                and (.locations | any(gsub("[^A-Za-z]"; "") | ascii_downcase ==
+                  ($location | gsub("[^A-Za-z]"; "") | ascii_downcase)))' \
+            <<<"$provider" >/dev/null
+
+          environment_json="$(az_checked resource show --ids "$ENVIRONMENT_ID" --output json)"
+          jq -e \
+            --arg location "$location" \
+            '.location | gsub("[^A-Za-z]"; "") | ascii_downcase ==
+              ($location | gsub("[^A-Za-z]"; "") | ascii_downcase)' \
+            <<<"$environment_json" >/dev/null
           jq -e \
             --arg subnet "$INFRASTRUCTURE_SUBNET_ID" \
-            '.properties.publicNetworkAccess == "Disabled"
+            '.properties.provisioningState == "Succeeded"
+              and .properties.publicNetworkAccess == "Disabled"
               and .properties.vnetConfiguration.internal == true
               and .properties.vnetConfiguration.infrastructureSubnetId == $subnet
               and (.properties.workloadProfiles | type == "array" and length > 0)' \
             <<<"$environment_json" >/dev/null
 
-          subnet_json="$(az network vnet subnet show --ids "$INFRASTRUCTURE_SUBNET_ID" --output json)"
+          subnet_json="$(az_checked network vnet subnet show \
+            --ids "$INFRASTRUCTURE_SUBNET_ID" \
+            --subscription "$SUBSCRIPTION_ID" \
+            --output json)"
           jq -e \
             --arg nat "$NAT_GATEWAY_ID" \
             '.natGateway.id == $nat
-              and ([.delegations[]?.serviceName] | any(. == "Microsoft.App/environments"))' \
+              and ([.delegations[]?.serviceName] | any(. == "Microsoft.App/environments"))
+              and (.networkSecurityGroup.id | type == "string" and length > 0)' \
             <<<"$subnet_json" >/dev/null
-
-          nat_json="$(az network nat gateway show --ids "$NAT_GATEWAY_ID" --output json)"
+          nsg_id="$(jq -r '.networkSecurityGroup.id' <<<"$subnet_json")"
+          nsg_json="$(az_checked network nsg show --ids "$nsg_id" --subscription "$SUBSCRIPTION_ID" --output json)"
           jq -e \
-            '.publicIpAddresses | length == 1' \
-            <<<"$nat_json" >/dev/null
+            '[.securityRules[]?, .defaultSecurityRules[]?]
+              | map(select(.direction == "Inbound" and .access == "Allow"))
+              | map([.sourceAddressPrefix // "", (.sourceAddressPrefixes // [])[]])
+              | flatten
+              | all(.[]; . != "*" and ascii_downcase != "internet")' \
+            <<<"$nsg_json" >/dev/null
+
+          nat_json="$(az_checked network nat gateway show --ids "$NAT_GATEWAY_ID" --subscription "$SUBSCRIPTION_ID" --output json)"
+          jq -e '.provisioningState == "Succeeded" and (.publicIpAddresses | length == 1)' <<<"$nat_json" >/dev/null
           actual_public_ip_id="$(jq -r '.publicIpAddresses[0].id' <<<"$nat_json")"
-          actual_public_ip="$(az network public-ip show --ids "$actual_public_ip_id" --query ipAddress --output tsv)"
+          actual_public_ip="$(az_checked network public-ip show \
+            --ids "$actual_public_ip_id" \
+            --subscription "$SUBSCRIPTION_ID" \
+            --query ipAddress \
+            --output tsv)"
           if [[ "$actual_public_ip" != "$NAT_PUBLIC_IP" ]]; then
             echo "The supplied NAT egress address does not match the dedicated NAT Gateway." >&2
             exit 1
@@ -146,7 +257,8 @@ jobs:
           fi
 
           registry_name="${registry_host%%.*}"
-          registry_id="$(az acr show --name "$registry_name" --query id --output tsv)"
+          registry_json="$(az_checked acr show --name "$registry_name" --subscription "$SUBSCRIPTION_ID" --output json)"
+          registry_id="$(jq -r '.id' <<<"$registry_json")"
           case "$registry_id" in
             "$expected_prefix"*) ;;
             *)
@@ -154,12 +266,15 @@ jobs:
               exit 1
               ;;
           esac
-          registry_json="$(az resource show --ids "$registry_id" --api-version 2023-07-01 --output json)"
-          jq -e '.properties.publicNetworkAccess == "Disabled"' <<<"$registry_json" >/dev/null
+          jq -e \
+            --arg login_server "$registry_host" \
+            '.provisioningState == "Succeeded"
+              and .publicNetworkAccess == "Disabled"
+              and (.loginServer | ascii_downcase == ($login_server | ascii_downcase))' \
+            <<<"$registry_json" >/dev/null
 
-          vault_host="${APP_KEY_SECRET_URL#https://}"
-          vault_name="${vault_host%%.*}"
-          vault_id="$(az keyvault show --name "$vault_name" --query id --output tsv)"
+          vault_json="$(az_checked keyvault show --name "$vault_name" --subscription "$SUBSCRIPTION_ID" --output json)"
+          vault_id="$(jq -r '.id' <<<"$vault_json")"
           case "$vault_id" in
             "$expected_prefix"*) ;;
             *)
@@ -167,12 +282,36 @@ jobs:
               exit 1
               ;;
           esac
-          vault_json="$(az resource show --ids "$vault_id" --api-version 2023-07-01 --output json)"
-          jq -e '.properties.publicNetworkAccess == "Disabled"' <<<"$vault_json" >/dev/null
+          jq -e \
+            --arg vault_uri "https://${vault_name}.vault.azure.net/" \
+            '.properties.provisioningState == "Succeeded"
+              and .properties.publicNetworkAccess == "Disabled"
+              and .properties.vaultUri == $vault_uri' \
+            <<<"$vault_json" >/dev/null
 
-          az deployment group create \
+          pull_identity="$(az_checked identity show --ids "$PULL_IDENTITY_ID" --subscription "$SUBSCRIPTION_ID" --output json)"
+          pull_identity_object_id="$(jq -r '.principalId' <<<"$pull_identity")"
+          pull_assignments="$(az_checked role assignment list \
+            --assignee-object-id "$pull_identity_object_id" \
+            --all \
+            --include-inherited \
+            --subscription "$SUBSCRIPTION_ID" \
+            --output json)"
+          jq -e \
+            --arg registry "$registry_id" \
+            --arg vault "$vault_id" \
+            'length == 2
+              and any(.[]; (.scope | ascii_downcase) == ($registry | ascii_downcase) and .roleDefinitionName == "AcrPull")
+              and any(.[]; (.scope | ascii_downcase) == ($vault | ascii_downcase) and .roleDefinitionName == "Key Vault Secrets User")
+              and all(.[]; ((.scope | ascii_downcase) == ($registry | ascii_downcase) and .roleDefinitionName == "AcrPull")
+                or ((.scope | ascii_downcase) == ($vault | ascii_downcase) and .roleDefinitionName == "Key Vault Secrets User"))' \
+            <<<"$pull_assignments" >/dev/null
+
+          echo "SPIKE10_DEPLOYMENT_ATTEMPTED=true" >> "$GITHUB_ENV"
+          az_checked deployment group create \
             --name "spike10-jit-labels-${GITHUB_RUN_ID}" \
             --resource-group "$resource_group" \
+            --subscription "$SUBSCRIPTION_ID" \
             --mode Incremental \
             --template-file spikes/jit-labels/job.bicep \
             --parameters \
@@ -189,5 +328,70 @@ jobs:
               owner="jonathan-vella" \
               repo="ghr-smoke" \
               customLabel="ghr-smoke-jit-label-spike" \
-            --query properties.outputs \
-            --output json
+              deploymentRunId="$GITHUB_RUN_ID" \
+            --output none
+
+      - name: Keep scaler available for the bounded observation window
+        env:
+          OBSERVATION_WINDOW_MINUTES: ${{ inputs.observationWindowMinutes }}
+        run: sleep "$((OBSERVATION_WINDOW_MINUTES * 60))"
+
+      - name: Remove only the job created by this workflow run
+        if: always() && steps.azure-login.outcome == 'success' && env.SPIKE10_DEPLOYMENT_ATTEMPTED == 'true'
+        env:
+          SUBSCRIPTION_ID: b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
+        run: |
+          set -euo pipefail
+          az_checked() {
+            local output
+            if ! output="$(az "$@" 2>/dev/null)"; then
+              echo "Scoped cleanup operation failed; details are suppressed." >&2
+              return 1
+            fi
+            printf '%s' "$output"
+          }
+
+          if job_json="$(az containerapp job show \
+            --name caj-ghr-spike10-jit-labels \
+            --resource-group rg-ghrunners-spike10-swc \
+            --subscription "$SUBSCRIPTION_ID" \
+            --only-show-errors \
+            --output json 2>&1)"; then
+            :
+          elif [[ "$job_json" == *ResourceNotFound* || "$job_json" == *ContainerAppJobNotFound* ]]; then
+            echo "Issue 10 job is absent; nothing to clean up."
+            exit 0
+          else
+            echo "Unable to confirm issue 10 job state; operator cleanup is required." >&2
+            exit 1
+          fi
+          marker="$(jq -r '.tags["spike-deployment-run-id"] // empty' <<<"$job_json")"
+          if [[ "$marker" != "$GITHUB_RUN_ID" ]]; then
+            echo "Issue 10 job ownership marker does not match this workflow run; refusing deletion." >&2
+            exit 1
+          fi
+
+          az_checked containerapp job delete \
+            --name caj-ghr-spike10-jit-labels \
+            --resource-group rg-ghrunners-spike10-swc \
+            --subscription "$SUBSCRIPTION_ID" \
+            --yes \
+            --output none
+          for attempt in {1..12}; do
+            if job_state="$(az containerapp job show \
+              --name caj-ghr-spike10-jit-labels \
+              --resource-group rg-ghrunners-spike10-swc \
+              --subscription "$SUBSCRIPTION_ID" \
+              --only-show-errors \
+              --output json 2>&1)"; then
+              sleep 5
+            elif [[ "$job_state" == *ResourceNotFound* || "$job_state" == *ContainerAppJobNotFound* ]]; then
+              echo "Issue 10 diagnostic job deletion verified."
+              exit 0
+            else
+              echo "Unable to verify issue 10 job deletion; operator cleanup is required." >&2
+              exit 1
+            fi
+          done
+          echo "Issue 10 job deletion was not confirmed; use the documented operator cleanup." >&2
+          exit 1

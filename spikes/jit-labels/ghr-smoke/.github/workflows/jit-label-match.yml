@@ -2,8 +2,17 @@ name: Spike 10 - match custom runner label
 
 on:
   workflow_dispatch:
+    inputs:
+      spike_nonce:
+        description: Unique observer-generated nonce
+        required: true
+        type: string
 
+run-name: Spike 10 label match - ${{ inputs.spike_nonce }}
 permissions: {}
+concurrency:
+  group: spike10-jit-label-observation
+  cancel-in-progress: false
 
 jobs:
   verify-label-match:

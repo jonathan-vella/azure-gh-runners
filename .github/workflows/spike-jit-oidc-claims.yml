@@ -1,0 +1,24 @@
+name: Spike 10 - inspect OIDC subject claims
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+
+concurrency:
+  group: spike10-oidc-subject-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  inspect-claims:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    environment: platform-prod
+    steps:
+      - name: Check out reviewed claims filter
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Request and print only allowlisted OIDC claims
+        run: node spikes/jit-labels/oidc-claims.mjs

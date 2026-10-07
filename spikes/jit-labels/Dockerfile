@@ -8,6 +8,8 @@ ENTRYPOINT ["/home/runner/externals/node20/bin/node", "/opt/spike10/jit-config.m
 FROM runner-base AS jit-runner
 USER root
 COPY --chown=runner:docker run-jit.sh /opt/spike10/run-jit.sh
-RUN chmod 0555 /opt/spike10/run-jit.sh
+COPY pre-job-policy.sh /opt/spike10/pre-job-policy.sh
+RUN chmod 0555 /opt/spike10/run-jit.sh /opt/spike10/pre-job-policy.sh
+ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/spike10/pre-job-policy.sh
 USER runner
 ENTRYPOINT ["/opt/spike10/run-jit.sh"]

@@ -42,6 +42,9 @@ param customLabel string
 @description('The isolated ACA environment and job location.')
 param location string = 'swedencentral'
 
+@description('GitHub Actions run ID that owns this temporary diagnostic job.')
+param deploymentRunId string
+
 var jobName = 'caj-ghr-spike10-jit-labels'
 var registryServer = split(initImageReference, '/')[0]
 var appKeySecretName = 'github-app-private-key'
@@ -185,8 +188,19 @@ resource job 'Microsoft.App/jobs@2026-07-01' = {
     }
   }
   tags: {
+    application: 'ghrunners'
+    environment: 'spike'
+    workload: 'gh-runners'
+    owner: 'jonathan-vella'
+    costcenter: 'platform-engineering'
+    'tech-contact': 'jonathan-vella'
+    'technical-contact': 'jonathan-vella'
+    sla: 'development'
+    'backup-policy': 'none'
+    'maint-window': 'none'
     'spike-id': '10'
     'spike-name': 'jit-runner-labels'
+    'spike-deployment-run-id': deploymentRunId
   }
 }
 
