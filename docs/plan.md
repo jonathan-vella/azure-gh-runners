@@ -69,7 +69,7 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 ### 3. Platform IaC (Bicep/AVM)
 
 - **iac-network**: VNet, the 4 subnets, NSGs (lateral-deny rules), NAT Gateway + PIP, private DNS zones + VNet links (zone list from config).
-- **iac-observability**: Log Analytics workspace, plus diagnostic settings on every resource (ACR, KV, ACA env, NAT, NSG flow logs if desired).
+- **iac-observability**: Log Analytics workspace and diagnostic settings for supported categories on existing network resources; later resource issues wire their own supported categories. Standard NAT flow logs require StandardV2, and NAT platform metrics are not exportable through diagnostic settings.
 - **iac-identity-kv**: user-assigned MI(s). Key Vault (RBAC, public disabled, purge protection, PE). GitHub App key secret through ARM (`Microsoft.KeyVault/vaults/secrets`).
 - **iac-acr**: ACR Premium (public disabled, admin off, ARM-audience tokens on, trusted services on, PE for registry + data endpoint), agent pool in `snet-acr-agents`, AcrPull for the job MI.
 - **iac-aca-env**: workload-profiles environment, internal, `publicNetworkAccess: Disabled`, VNet-integrated, logs to LAW.

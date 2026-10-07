@@ -30,11 +30,11 @@ Microsoft references:
 
 ## Diagnostic settings pattern
 
-`infra/modules/diagnostic-settings.bicep` is the reusable extension-resource module for future platform resources. A
-caller supplies the target resource ID, workspace resource ID, explicit supported service log categories, and whether
-`AllMetrics` is supported. It does not discover or assume categories, and metrics are omitted unless the caller
-explicitly enables them. Empty requests emit no diagnostic setting. The nested ARM template is needed because a
-generic Bicep module cannot type an arbitrary resource ID as an extension-resource scope.
+`infra/modules/diagnostic-settings.bicep` is the reusable extension-resource module. The root deployment wires it to
+the two network security groups, virtual network, and NAT public IP. A caller supplies an actual target resource ID,
+the workspace resource ID, explicit supported service log categories, and whether `AllMetrics` is supported. Empty
+requests emit no diagnostic setting. The nested ARM template is needed because a generic Bicep module cannot type an
+arbitrary resource ID as an extension-resource scope.
 
 | Parameter | Contract |
 | --- | --- |
@@ -44,18 +44,33 @@ generic Bicep module cannot type an arbitrary resource ID as an extension-resour
 | `logCategories` | Explicit category names verified for this target resource |
 | `enableAllMetrics` | `true` only when the target supports `AllMetrics`; defaults to `false` |
 
-Before wiring a resource module, establish its supported categories from its service documentation or the live
-resource category list (`az monitor diagnostic-settings categories list --resource <resource-id>`). Use
-`tools/diagnostics-contract.mjs` to validate category requests before passing its result to the Bicep module. The
-contract rejects unsupported log/metric categories and duplicates. Enable `AllMetrics` only when the target reports
-that metric category. Category support varies by Azure resource type; do not copy categories from another service.
+`infra/diagnostics-config.json` is the category contract loaded by `infra/main.bicep`; the observability validation
+tests this exact file before deployment. The contract rejects unsupported, duplicate, empty, and malformed category
+requests. Enable `AllMetrics` only when the resource supports metric export through diagnostic settings; platform
+metrics existing in Azure Monitor does not by itself mean they can be exported. Do not copy categories from another
+service.
 
-The network resources and the future Key Vault, ACR, and Container Apps environment do not yet exist in this
-deployment. This work therefore adds the module contract without declaring diagnostic settings against placeholder
-resources. Each owning infrastructure work item must wire the module once it creates a supported resource, using
-that resource's actual categories.
+| Resource | Diagnostic categories configured | Decision |
+| --- | --- | --- |
+| ACA and ACR-agent NSGs | `NetworkSecurityGroupEvent`, `NetworkSecurityGroupFlowEvent`, `NetworkSecurityGroupRuleCounter` | All three published log categories; no `AllMetrics` category is listed for NSGs. |
+| VNet | `VMProtectionAlerts`, `AllMetrics` | Published VNet logs and metrics include these diagnostic categories; the metrics reference marks supported metrics as exportable. |
+| NAT public IP | `DDoSMitigationFlowLogs`, `DDoSMitigationReports`, `DDoSProtectionNotifications`, `AllMetrics` | All published public-IP logs and exportable metrics. DDoS logs contain data only when the relevant protection telemetry is generated. |
+| Standard NAT Gateway | None | `NatGatewayFlowlogsV1` is for StandardV2 NAT Gateways; NAT platform metrics are not exportable through diagnostic settings. Empty settings are not deployed. |
+| Private DNS zones | None | Published zone metrics are not exportable through diagnostic settings. No published resource-log category reference was available to verify an exportable category, so no setting is deployed without one. |
+
+The issue #13–15 resources (Key Vault, ACR, and Container Apps environment) are not yet declared. Their owning
+infrastructure changes must add entries to the shared category contract and wire this module only after verifying
+the resource type's supported categories from Microsoft documentation or the live category list
+(`az monitor diagnostic-settings categories list --resource <resource-id>`).
 
 References:
 
 - [Diagnostic settings in Azure Monitor](https://learn.microsoft.com/azure/azure-monitor/data-collection/diagnostic-settings)
-- [Supported Azure Monitor resource log categories](https://learn.microsoft.com/azure/azure-monitor/reference/logs-index)
+- [Supported NSG log categories](https://learn.microsoft.com/azure/azure-monitor/reference/supported-logs/microsoft-network-networksecuritygroups-logs)
+- [Supported VNet log categories](https://learn.microsoft.com/azure/azure-monitor/reference/supported-logs/microsoft-network-virtualnetworks-logs)
+- [Supported VNet metrics](https://learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-network-virtualnetworks-metrics)
+- [Supported public IP log categories](https://learn.microsoft.com/azure/azure-monitor/reference/supported-logs/microsoft-network-publicipaddresses-logs)
+- [Supported public IP metrics](https://learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-network-publicipaddresses-metrics)
+- [Supported NAT Gateway metrics](https://learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-network-natgateways-metrics)
+- [StandardV2 NAT Gateway Flow Logs](https://learn.microsoft.com/azure/nat-gateway/monitor-nat-gateway-flow-logs)
+- [Supported Private DNS zone metrics](https://learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-network-privatednszones-metrics)
