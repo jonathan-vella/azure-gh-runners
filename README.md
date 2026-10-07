@@ -32,9 +32,12 @@ npm ci
 npm run validate
 ```
 
-`npm run validate` runs consumer schema fixture tests, builds and lints the Bicep scaffold, and checks all Markdown
-with the repository's `.markdownlint-cli2.jsonc` configuration. The Bicep entrypoints are intentionally empty until
-their infrastructure issues are implemented.
+`npm run validate` runs consumer schema and policy tests, validates active `config/consumers/*.json` entries against
+GitHub repository visibility and default-branch metadata, builds and lints the Bicep scaffold, and checks all Markdown
+with the repository's `.markdownlint-cli2.jsonc` configuration. The registry currently has no active consumers, so
+validation does not need GitHub access; when entries are added, install GitHub CLI and authenticate with access to
+each registered repository. Files ending in `.sample` are examples, not active entries. The Bicep entrypoints are
+intentionally empty until their infrastructure issues are implemented.
 
 ## At a glance
 
