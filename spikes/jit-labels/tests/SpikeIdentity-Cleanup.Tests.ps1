@@ -61,6 +61,16 @@ Assert-Throws -Action {
         -FederatedCredentials @([pscustomobject]@{ name = 'unexpected'; issuer = $expected.ExpectedIssuer; subject = $expected.ExpectedSubject; audiences = @($expected.ExpectedAudience) })
 } -Message 'Cleanup must reject an unexpected FIC.'
 Assert-Throws -Action {
+    Assert-SpikeIdentityCleanupState @expected -App $app -ServicePrincipal $servicePrincipal `
+        -Assignments @() `
+        -FederatedCredentials @([pscustomobject]@{
+            name = $expected.ExpectedCredentialName
+            issuer = $expected.ExpectedIssuer
+            subject = $expected.ExpectedSubject
+            audiences = @($expected.ExpectedAudience, 'https://unexpected.example')
+        })
+} -Message 'Cleanup must reject an expected FIC with an unexpected additional audience.'
+Assert-Throws -Action {
     Assert-SpikeIdentityCleanupState @expected `
         -App ([pscustomobject]@{ displayName = $expected.ExpectedDisplayName; passwordCredentials = @(@{ keyId = 'unexpected' }); keyCredentials = @() }) `
         -ServicePrincipal $servicePrincipal -Assignments @() -FederatedCredentials @()

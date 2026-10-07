@@ -26,7 +26,8 @@ Both were written while evaluating `apex-vnext` as the first consumer.
 
 ## Local validation
 
-Install Node.js/npm and the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli). Then run:
+Install Node.js/npm, the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), PowerShell 7, and Python 3.
+Then run:
 
 ```powershell
 npm ci
@@ -41,8 +42,8 @@ Run `npm run generate:consumers` after editing the registry to update `infra/gen
 ARM parameters document contains typed consumer deployment fields and a serialized `policyJson`; `main.bicep` does
 not consume it until consumer-job infrastructure is implemented. The registry currently has no active consumers, so
 validation does not need GitHub access; when entries are added, install GitHub CLI and authenticate with access to
-each registered repository. Files ending in `.sample` are examples, not active entries. Validation does not deploy
-resources.
+each registered repository. Files ending in `.sample` are examples, not active entries. It also compiles the issue-9
+spike templates and runs its offline PowerShell/Python unit tests. Validation does not deploy resources.
 
 ## At a glance
 

@@ -32,10 +32,12 @@ function Assert-SpikeIdentityCleanupState {
     }
     if ($FederatedCredentials.Count -gt 1 -or
         @($FederatedCredentials | Where-Object {
+            $audiences = @($_.audiences)
             $_.name -cne $ExpectedCredentialName -or
             $_.issuer -cne $ExpectedIssuer -or
             $_.subject -cne $ExpectedSubject -or
-            @($_.audiences | Where-Object { $_ -ceq $ExpectedAudience }).Count -ne 1
+            $audiences.Count -ne 1 -or
+            $audiences[0] -cne $ExpectedAudience
         }).Count -gt 0) {
         throw 'The temporary app has unexpected federated credentials; refusing cleanup.'
     }

@@ -38,7 +38,10 @@ $exitCode = $LASTEXITCODE
 exit $exitCode
 '@.Replace('__PAYLOAD__', $payload)
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = Join-Path $PSHOME 'pwsh.exe'
+    $startInfo.FileName = [Environment]::ProcessPath
+    if (-not $startInfo.FileName -or -not (Test-Path -LiteralPath $startInfo.FileName -PathType Leaf)) {
+        throw 'Unable to resolve the current PowerShell executable for bounded command execution.'
+    }
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true

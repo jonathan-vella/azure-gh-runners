@@ -50,6 +50,13 @@ Invoke-BoundedCommand -Command 'gh' -Arguments @('api', 'test') -TimeoutSeconds 
 Assert-True -Condition ($script:ObservedTimeout -le 2) `
     -Message 'A subprocess timeout must not exceed the active observation deadline.'
 $script:commandDeadline = $null
+$powerShellExecutable = [Environment]::ProcessPath
+if (-not $powerShellExecutable -or -not (Test-Path -LiteralPath $powerShellExecutable -PathType Leaf)) {
+    throw 'The current PowerShell executable must be resolvable for bounded subprocesses.'
+}
+if (-not $IsWindows -and [IO.Path]::GetFileName($powerShellExecutable) -eq 'pwsh.exe') {
+    throw 'Non-Windows hosts must not require the Windows pwsh.exe filename.'
+}
 $script:CommandRunner = {
     param($Command, $Arguments, $TimeoutSeconds)
     if ($Command -eq 'az' -and $Arguments -contains 'show') {
