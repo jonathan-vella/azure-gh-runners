@@ -13,6 +13,78 @@ function Assert-Equal {
     }
 }
 
+$d4Environment = [pscustomobject]@{
+    properties = [pscustomobject]@{
+        provisioningState = 'Succeeded'
+        zoneRedundant = $false
+        workloadProfiles = @(
+            [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
+            [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 3 }
+        )
+    }
+}
+$d4Profile = Assert-EnvironmentProfile -EnvironmentState $d4Environment -ExpectedProfile D4
+Assert-Equal $d4Profile.minimumCount 0 'D4 minimumCount readback'
+Assert-Equal $d4Profile.maximumCount 3 'D4 maximumCount readback'
+$consumptionEnvironment = [pscustomobject]@{
+    properties = [pscustomobject]@{
+        provisioningState = 'Succeeded'
+        zoneRedundant = $true
+        workloadProfiles = @([pscustomobject]@{
+            name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1
+        })
+    }
+}
+$consumptionProfile = Assert-EnvironmentProfile -EnvironmentState $consumptionEnvironment -ExpectedProfile Consumption
+Assert-Equal $consumptionProfile.maximumCount 1 'Consumption default remains unchanged'
+
+foreach ($invalidEnvironment in @(
+    [pscustomobject]@{
+        properties = [pscustomobject]@{
+            provisioningState = 'Succeeded'; zoneRedundant = $false
+            workloadProfiles = @(
+                [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
+                [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 2 }
+            )
+        }
+    },
+    [pscustomobject]@{
+        properties = [pscustomobject]@{
+            provisioningState = 'Succeeded'; zoneRedundant = $true
+            workloadProfiles = @(
+                [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
+                [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 3 }
+            )
+        }
+    },
+    [pscustomobject]@{
+        properties = [pscustomobject]@{
+            provisioningState = 'Succeeded'; zoneRedundant = $false
+            workloadProfiles = @(
+                [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
+                [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 3; zones = @('1') }
+            )
+        }
+    },
+    [pscustomobject]@{
+        properties = [pscustomobject]@{
+            provisioningState = 'Succeeded'; zoneRedundant = $false; zones = @('1')
+            workloadProfiles = @(
+                [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
+                [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 3 }
+            )
+        }
+    }
+)) {
+    $rejected = $false
+    try {
+        $null = Assert-EnvironmentProfile -EnvironmentState $invalidEnvironment -ExpectedProfile D4
+    } catch {
+        $rejected = $true
+    }
+    Assert-Equal $rejected $true 'Invalid D4 profile readback rejected'
+}
+
 function Invoke-MockedComparison {
     param(
         [string[]] $Statuses,
@@ -148,7 +220,7 @@ $recordResult = {
 $result = Invoke-SpikeBypassComparison -SetBypass $setBypass -RunCase $runProvisioningCase -RecordResult $recordResult
 Assert-Equal $result.None 'Failed' 'Provisioning denial is expected'
 Assert-Equal $result.AzureServices 'Succeeded' 'Comparison continues after provisioning denial'
-Assert-Equal $script:recordedResults[0].Stage 'provisioning' 'Provisioning stage recorded'
+Assert-Equal $script:recordedResults[0].Stage 'job-provisioning' 'Job provisioning stage recorded'
 Assert-Equal $script:recordedResults[0].Code 'ForbiddenByFirewall' 'Only documented code recorded'
 Assert-Equal ($script:recordedResults[0].JobName -match '^caj-ghr7-abcdef12-none-[a-f0-9]{8}$') $true 'Fresh failed job name recorded'
 Assert-Equal ($null -eq $script:recordedResults[0].ExecutionName) $true 'No execution claimed for provisioning denial'

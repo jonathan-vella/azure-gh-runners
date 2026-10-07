@@ -8,10 +8,15 @@ param(
 
     [string] $ResourceGroupName = 'rg-ghrunners-spike7-swc',
 
+    [ValidateSet('Consumption', 'D4')]
+    [string] $Profile = 'Consumption',
+
     [ValidateRange(1, 45)]
     [int] $TimeoutMinutes = 45,
 
     [switch] $ConfirmCapacityRecovered,
+
+    [switch] $ConfirmD4ProfileAttempt,
 
     [string] $EvidencePath
 )
@@ -126,10 +131,76 @@ function Get-TaggedResourceGroup {
     return $group
 }
 
-function Assert-CapacityGate {
-    if (-not $ConfirmCapacityRecovered) {
-        throw 'No deployment or job run is allowed until capacity recovery is explicitly confirmed.'
+function Assert-ProfileAuthorization {
+    if ($Profile -ceq 'D4') {
+        if (-not $ConfirmD4ProfileAttempt) {
+            throw 'The D4 alternative-profile attempt requires -ConfirmD4ProfileAttempt; this does not assert regional capacity recovery.'
+        }
+        return
     }
+    if (-not $ConfirmCapacityRecovered) {
+        throw 'The Consumption deployment or job run requires explicit confirmation of capacity recovery.'
+    }
+}
+
+function Assert-EnvironmentProfile {
+    param(
+        [Parameter(Mandatory)][object] $EnvironmentState,
+        [Parameter(Mandatory)][ValidateSet('Consumption', 'D4')][string] $ExpectedProfile
+    )
+
+    if (-not $EnvironmentState.properties) {
+        throw 'Managed-environment readback is missing resource properties.'
+    }
+    $properties = $EnvironmentState.properties
+    if ($properties.provisioningState -cne 'Succeeded') {
+        throw 'Managed-environment provisioning has not succeeded.'
+    }
+    $profiles = @($properties.workloadProfiles)
+    $expectedNames = if ($ExpectedProfile -ceq 'D4') {
+        @('Consumption', 'D4')
+    } else {
+        @('Consumption')
+    }
+    $actualNames = @($profiles | ForEach-Object { [string]$_.name } | Sort-Object)
+    if ($profiles.Count -ne $expectedNames.Count -or
+        ($actualNames -join ',') -cne (($expectedNames | Sort-Object) -join ',')) {
+        throw 'Managed environment must expose exactly the expected workload profiles.'
+    }
+
+    if ($ExpectedProfile -ceq 'D4') {
+        $expectedType = 'D4'
+        $expectedMinimum = 0
+        $expectedMaximum = 3
+        if ($properties.zoneRedundant -cne $false) {
+            throw 'D4 environment readback must confirm zoneRedundant=false.'
+        }
+        $pinnedProfiles = @($profiles | Where-Object {
+            @($_.zones | Where-Object { $null -ne $_ }).Count -gt 0
+        })
+        if (@($properties.zones | Where-Object { $null -ne $_ }).Count -gt 0 -or $pinnedProfiles.Count -gt 0) {
+            throw 'D4 environment and profile must not pin availability zones.'
+        }
+    } else {
+        $expectedType = 'Consumption'
+        $expectedMinimum = 0
+        $expectedMaximum = 1
+    }
+
+    $profile = @($profiles | Where-Object { $_.name -ceq $ExpectedProfile })[0]
+    if ($null -eq $profile.minimumCount -or $null -eq $profile.maximumCount -or
+        $profile.name -cne $ExpectedProfile -or $profile.workloadProfileType -cne $expectedType -or
+        [int]$profile.minimumCount -ne $expectedMinimum -or
+        [int]$profile.maximumCount -ne $expectedMaximum) {
+        throw "Managed-environment profile readback did not match the exact $ExpectedProfile profile contract."
+    }
+    if ($ExpectedProfile -ceq 'D4') {
+        $consumptionProfile = @($profiles | Where-Object { $_.name -ceq 'Consumption' })[0]
+        if ([int]$consumptionProfile.minimumCount -ne 0 -or [int]$consumptionProfile.maximumCount -ne 1) {
+            throw 'D4 environment readback did not preserve the Consumption profile defaults.'
+        }
+    }
+    return $profile
 }
 
 function Set-PrivateParametersFile {
@@ -158,6 +229,7 @@ function Set-PrivateParametersFile {
         contentVersion = '1.0.0.0'
         parameters = @{
             runSuffix = @{ value = $script:runSuffix }
+            workloadProfileName = @{ value = $Profile }
             probeSecret = @{ value = $Secret }
             probeDigest = @{ value = $script:secretDigest }
         }
@@ -216,7 +288,8 @@ function New-FreshDiagnosticJob {
         '--template-file', $jobTemplatePath,
         '--parameters', "jobName=$jobName", "location=$approvedLocation",
         "environmentResourceId=$EnvironmentId", "identityResourceId=$IdentityId",
-        "keyVaultSecretUrl=$KeyVaultSecretUrl", "probeDigest=$ProbeDigest",
+        "keyVaultSecretUrl=$KeyVaultSecretUrl", "workloadProfileName=$Profile",
+        "probeDigest=$ProbeDigest",
         '--only-show-errors', '--output', 'none'
     ) -TimeoutSeconds (Get-RemainingTestSeconds)
     if ($exitCode -ne 0) {
@@ -270,6 +343,16 @@ function New-FreshDiagnosticJob {
         } else { 'UnclassifiedDeploymentFailure' }
         throw 'Fresh diagnostic job deployment failed outside the documented Key Vault network-denial allowlist.'
     }
+    $jobState = Invoke-AzJson @(
+        'containerapp', 'job', 'show', '--subscription', $approvedSubscription,
+        '--resource-group', $approvedResourceGroup, '--name', $jobName
+    )
+    if ($jobState.properties.provisioningState -cne 'Succeeded' -or
+        $jobState.properties.workloadProfileName -cne $Profile) {
+        $script:legEvidence.Code = 'WorkloadProfileReadbackMismatch'
+        throw 'Fresh diagnostic job did not read back on the selected workload profile.'
+    }
+    $script:legEvidence.JobWorkloadProfileName = [string]$jobState.properties.workloadProfileName
     return $jobName
 }
 
@@ -316,8 +399,15 @@ function Invoke-DiagnosticCase {
     )
 
     $script:legEvidence = [pscustomobject]@{
-        Status = 'OperationalError'; Stage = 'provisioning'; Code = $null
+        Status = 'OperationalError'; Stage = 'job-provisioning'; Code = $null
         JobName = $null; ExecutionName = $null; DeploymentName = $null
+        EnvironmentProvisioningState = [string]$script:profileReadback.EnvironmentProvisioningState
+        WorkloadProfileName = [string]$script:profileReadback.WorkloadProfileName
+        WorkloadProfileType = [string]$script:profileReadback.WorkloadProfileType
+        MinimumCount = [int]$script:profileReadback.MinimumCount
+        MaximumCount = [int]$script:profileReadback.MaximumCount
+        ZoneRedundant = $script:profileReadback.ZoneRedundant
+        JobWorkloadProfileName = $null
     }
     try {
         $jobName = New-FreshDiagnosticJob -Bypass $Bypass -EnvironmentId $EnvironmentId `
@@ -351,7 +441,7 @@ Assert-ApprovedScope
 
 switch ($Action) {
     'Deploy' {
-        Assert-CapacityGate
+        Assert-ProfileAuthorization
         if ($env:OS -ne 'Windows_NT') {
             throw 'Secure temporary parameter files require Windows ACLs; run this script on Windows.'
         }
@@ -391,9 +481,9 @@ switch ($Action) {
                     --resource-group $approvedResourceGroup --name 'issue7-spike' `
                     --query 'properties.error.code' --output tsv 2>$null
                 if ($LASTEXITCODE -eq 0 -and $deploymentState -match '^[A-Za-z0-9._-]+$') {
-                    throw "Deployment failed with Azure error code: $deploymentState. The owned resource group was retained for explicit cleanup."
+                    throw "Issue-7 infrastructure deployment failed at stage=resource-group-deployment with Azure error code: $deploymentState. The owned resource group was retained for explicit cleanup."
                 }
-                throw 'Deployment failed. The owned resource group was retained for explicit cleanup.'
+                throw 'Issue-7 infrastructure deployment failed at stage=resource-group-deployment. The owned resource group was retained for explicit cleanup.'
             }
         } finally {
             [Array]::Clear($secretBytes, 0, $secretBytes.Length)
@@ -402,19 +492,19 @@ switch ($Action) {
                 Remove-Item -LiteralPath $parameterFile -Force
             }
         }
-        Write-Output 'Deployment completed; secret material and deployment output were not printed.'
+        if ($Profile -ceq 'D4') {
+            Write-Output 'Managed-environment deployment completed with the requested D4 profile (minimumCount=0, maximumCount=3, zoneRedundant=false); this does not establish D4 node allocation or job execution.'
+        } else {
+            Write-Output 'Managed-environment deployment completed with the requested Consumption profile; secret material and deployment output were not printed.'
+        }
     }
 
     'Test' {
-        Assert-CapacityGate
+        Assert-ProfileAuthorization
         if (-not $EvidencePath) {
             throw 'Test requires an explicit -EvidencePath for sanitized per-leg JSON evidence.'
         }
         $evidenceFile = [System.IO.Path]::GetFullPath($EvidencePath)
-        $evidenceStream = [System.IO.File]::Open(
-            $evidenceFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write
-        )
-        $evidenceStream.Dispose()
         $records = [System.Collections.Generic.List[object]]::new()
         $script:testDeadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
         [void](Get-TaggedResourceGroup)
@@ -431,16 +521,34 @@ switch ($Action) {
         $environmentName = [string]$outputs.containerAppsEnvironmentName.value
         $identityName = [string]$outputs.testIdentityName.value
         $probeDigest = [string]$outputs.probeDigest.value
+        $deployedProfileName = [string]$outputs.workloadProfileName.value
         if ($vaultName -notmatch '^kvghr7[a-f0-9]{8}$' -or
             $environmentName -notmatch '^cae-ghr7-[a-f0-9]{8}$' -or
             $identityName -notmatch '^mi-ghr7-[a-f0-9]{8}$' -or
-            $probeDigest -notmatch '^[a-f0-9]{64}$') {
+            $probeDigest -notmatch '^[a-f0-9]{64}$' -or
+            $deployedProfileName -cne $Profile) {
             throw 'Deployment outputs do not match the issue-7 resource naming contract.'
         }
 
         $vault = Get-ResourceGroupResource -Name $vaultName
         $environment = Get-ResourceGroupResource -Name $environmentName
         $identity = Get-ResourceGroupResource -Name $identityName
+        $environmentState = Invoke-AzJson @(
+            'containerapp', 'env', 'show', '--subscription', $approvedSubscription,
+            '--resource-group', $approvedResourceGroup, '--name', $environmentName
+        )
+        $actualProfile = Assert-EnvironmentProfile -EnvironmentState $environmentState -ExpectedProfile $Profile
+        $script:profileReadback = [pscustomobject]@{
+            EnvironmentProvisioningState = [string]$environmentState.properties.provisioningState
+            WorkloadProfileName = [string]$actualProfile.name
+            WorkloadProfileType = [string]$actualProfile.workloadProfileType
+            MinimumCount = [int]$actualProfile.minimumCount
+            MaximumCount = [int]$actualProfile.maximumCount
+            ZoneRedundant = $environmentState.properties.zoneRedundant
+        }
+        $zonePinningReadback = if ($Profile -ceq 'D4') { 'none' } else { 'not-applicable' }
+        Write-Output "Environment profile readback: name=$($script:profileReadback.WorkloadProfileName); type=$($script:profileReadback.WorkloadProfileType); minimumCount=$($script:profileReadback.MinimumCount); maximumCount=$($script:profileReadback.MaximumCount); zoneRedundant=$($script:profileReadback.ZoneRedundant); zonePinning=$zonePinningReadback."
+
         $vaultState = Invoke-AzJson @(
             'resource', 'show', '--subscription', $approvedSubscription, '--ids', $vault.id
         )
@@ -450,6 +558,10 @@ switch ($Action) {
             throw 'Key Vault must remain public-disabled, default-deny, and bypass=None before the comparison.'
         }
 
+        $evidenceStream = [System.IO.File]::Open(
+            $evidenceFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write
+        )
+        $evidenceStream.Dispose()
         $comparison = Invoke-SpikeBypassComparison `
             -SetBypass {
                 param($bypass)

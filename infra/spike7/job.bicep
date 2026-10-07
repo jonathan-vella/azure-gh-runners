@@ -5,6 +5,7 @@ param location string = 'swedencentral'
 param environmentResourceId string
 param identityResourceId string
 param keyVaultSecretUrl string
+param workloadProfileName string = 'Consumption'
 
 @description('Non-secret SHA-256 digest of the synthetic probe value.')
 @minLength(64)
@@ -30,6 +31,7 @@ module diagnosticJob 'br/public:avm/res/app/job:0.7.2' = {
     name: jobName
     location: location
     environmentResourceId: environmentResourceId
+    workloadProfileName: workloadProfileName
     triggerType: 'Manual'
     managedIdentities: {
       userAssignedResourceIds: [
