@@ -1,0 +1,117 @@
+import hashlib
+import json
+import os
+import stat
+import urllib.error
+import urllib.request
+
+
+TOKEN_URL = (
+    "http://169.254.169.254/metadata/identity/oauth2/token"
+    "?api-version=2018-02-01&resource=https%3A%2F%2Fmanagement.azure.com%2F"
+)
+
+
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def assert_canaries_absent(environment, expected_hashes):
+    for value in environment.values():
+        value_hash = hashlib.sha256(value.encode()).hexdigest()
+        require(
+            value_hash not in expected_hashes,
+            "synthetic canary value is present in the container environment",
+        )
+
+
+def assert_environment_isolated(environment):
+    require(
+        "IDENTITY_ENDPOINT" not in environment and "IDENTITY_HEADER" not in environment,
+        "managed identity endpoint environment is available",
+    )
+    require("APP_KEY" not in environment, "app key environment variable is available")
+    assert_canaries_absent(
+        environment,
+        {
+            environment["EXPECTED_APP_KEY_SHA256"],
+            environment["EXPECTED_SCALE_AUTH_SHA256"],
+        },
+    )
+
+
+def build_metadata_opener():
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def assert_metadata_token_denied(open_url=None):
+    request = urllib.request.Request(TOKEN_URL, headers={"Metadata": "true"})
+    open_url = build_metadata_opener().open if open_url is None else open_url
+    try:
+        response = open_url(request, timeout=2)
+        response.close()
+    except urllib.error.HTTPError as error:
+        if error.code != 400:
+            raise RuntimeError(
+                "managed identity token request returned an unclassified HTTP denial"
+            ) from None
+        try:
+            payload = json.loads(error.read().decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise RuntimeError(
+                "managed identity token request returned an unclassified HTTP denial"
+            ) from None
+        if not isinstance(payload, dict) or payload.get("error") != "invalid_request":
+            raise RuntimeError(
+                "managed identity token request returned an unclassified HTTP denial"
+            ) from None
+        description = str(payload.get("error_description", "")).lower()
+        require(
+            "identity not found" in description
+            or "no identity available" in description,
+            "managed identity token request failed for a reason other than missing identity",
+        )
+    except (urllib.error.URLError, TimeoutError):
+        raise RuntimeError(
+            "managed identity token endpoint could not be verified"
+        ) from None
+    else:
+        raise RuntimeError("managed identity token request unexpectedly succeeded")
+
+
+def run(handoff_path="/jit/config", environment=None, open_url=None):
+    environment = os.environ if environment is None else environment
+    require(os.getuid() == 65532, "main UID check failed")
+
+    info = os.stat(handoff_path)
+    require(
+        info.st_uid == 65532
+        and info.st_gid == 65532
+        and stat.S_IMODE(info.st_mode) == 0o400,
+        "handoff ownership or mode check failed",
+    )
+    with open(handoff_path, "rb") as handoff_file:
+        content = handoff_file.read()
+    content_hash = hashlib.sha256(content).hexdigest()
+    require(
+        content_hash == environment["EXPECTED_JIT_SHA256"],
+        "handoff content check failed",
+    )
+
+    assert_environment_isolated(environment)
+    assert_metadata_token_denied(open_url)
+
+    os.unlink(handoff_path)
+    require(not os.path.exists(handoff_path), "handoff file was not deleted")
+
+    print("ASSERT_main_uid_65532=true")
+    print("ASSERT_emptydir_shared_readable_deletable=true")
+    print("ASSERT_jit_file_mode_0400=true")
+    print("ASSERT_identity_environment_absent=true")
+    print("ASSERT_identity_token_request_denied=true")
+    print("ASSERT_app_key_and_scale_canaries_absent_main=true")
+
+
+if __name__ == "__main__":
+    run()
