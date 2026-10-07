@@ -40,7 +40,8 @@ destinations; use FQDN-aware egress controls where available rather than freezin
 - The test uses the real GitHub App credentials from the existing `platform-prod` environment. The pinned workflow
   writes the protected key to the private spike Key Vault through a secure ARM parameter file; it never configures an
   ACA job secret with an inline value, prints the key, or retrieves it.
-- Run the test only from `main` through `platform-prod`, preserving its required reviewer and main-only branch policy.
+- Run the test only from `main` through `platform-prod`, preserving its main-only branch policy. The environment no
+  longer requires a human reviewer; obtain separate explicit authorization for this bounded spike before dispatch.
   Its OIDC credential is a separate issue #8 user-assigned identity with Contributor only at the spike resource-group
   scope and Key Vault Secrets Officer only at the spike vault. Do not broaden the existing production identity.
   The diagnostic ACA job has its own user-assigned identity with Key Vault Secrets User only at that vault, and its
@@ -52,15 +53,15 @@ destinations; use FQDN-aware egress controls where available rather than freezin
   this Azure setup only after the separate issue #7 capacity blocker is resolved. The operator adds the printed
   client ID as the `platform-prod` environment secret `AZURE_SPIKE8_CLIENT_ID`; the tenant and subscription secrets
   remain the existing approved values. No Azure role is added to the production deployment identity.
-- The `oidc-preflight` workflow mode runs only on `main` through the required `platform-prod` reviewer gate and makes
+- The `oidc-preflight` workflow mode runs only on `main` through `platform-prod` and makes
   no Azure calls. It decodes the ephemeral token in memory and logs only the allowlisted issuer, audience, and exact
   immutable repository/environment subject; it never logs the JWT. The verified subject is
   `repo:jonathan-vella@25802147/azure-gh-runners@1408821667:environment:platform-prod`. Use that observed subject to
   create the dedicated workflow identity's federated credential before selecting `test`.
 - Before dispatching the gated test, place `synthetic-queue.yml` in the default branch of private `ghr-smoke`, dispatch
   that workflow, and confirm its `ghr-spike8-probe` job is queued. Pass that queued run's URL to the issue #8 workflow.
-  Dispatch only from `main`, confirm `run-spike8`, and let the required `platform-prod` reviewer approve it; do not
-  bypass the gate. The workflow captures KEDA system-log events and the scale-job execution correlated with the
+  Dispatch only from `main` after the separate explicit spike authorization, and confirm `run-spike8`; the environment
+  itself does not require a reviewer. The workflow captures KEDA system-log events and the scale-job execution correlated with the
   queued custom-label run in both GitHub API allow and deny phases, along with the separate workload probe and NAT
   metrics.
 - The workflow deletes only named issue #8 resources and scoped role assignments. Afterward, remove the
@@ -82,8 +83,8 @@ destinations; use FQDN-aware egress controls where available rather than freezin
   itself attribute bytes to KEDA or `api.github.com`; retain that distinction in any final conclusion.
 - Keep the experiment bounded to 45 minutes. Delete only the dedicated issue #8 resource group and resources created
   for this spike. Do not touch the active issue #6/#7 spike groups or production resources.
-- Do not provision the environment until the separate issue #7 regional Container Apps capacity blocker and the
-  required `platform-prod` reviewer gate are resolved. Do not change regions or enable public access to work around
+- Do not provision the environment until the separate issue #7 regional Container Apps capacity blocker is resolved
+  and the bounded spike has explicit authorization. Do not change regions or enable public access to work around
   capacity constraints.
 - Until those observations exist, acceptance criterion 1 remains open and this ADR cannot be marked accepted.
 
@@ -91,7 +92,9 @@ destinations; use FQDN-aware egress controls where available rather than freezin
 
 **Proposed — empirical evidence is pending.** Official documentation and source inspection establish the API calls
 and workload NAT behavior, but not the origin of the managed scaler's polling traffic. No Azure resources were created
-for this record, and no acceptance criterion is claimed complete.
+for this record, and no acceptance criterion is claimed complete. The 2026-10-07 deployment-gate decision removed the
+`platform-prod` required-reviewer rule but retained its `main`-only restriction. This policy clarification does not
+change the historical evidence or this ADR's Proposed status.
 
 ## References
 

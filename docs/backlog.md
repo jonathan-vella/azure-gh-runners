@@ -76,6 +76,7 @@ Agent-executable architecture, onboarding, operations, and security documentatio
 | [#30](https://github.com/jonathan-vella/azure-gh-runners/issues/30) | `docs-onboarding` | Agent-executable consumer onboarding guide | docs | [#25](https://github.com/jonathan-vella/azure-gh-runners/issues/25) |
 | [#31](https://github.com/jonathan-vella/azure-gh-runners/issues/31) | `docs-operations` | Operations runbook | docs | [#27](https://github.com/jonathan-vella/azure-gh-runners/issues/27) |
 | [#32](https://github.com/jonathan-vella/azure-gh-runners/issues/32) | `docs-security` | Security model and threat analysis | docs, security | [#20](https://github.com/jonathan-vella/azure-gh-runners/issues/20) |
+| [#75](https://github.com/jonathan-vella/azure-gh-runners/issues/75) | `docs-automation-gates` | Document automated merge and deployment gates | docs, security | — |
 
 ## M6 - v1.0 acceptance
 
@@ -128,9 +129,9 @@ Create the resource group and two separate Entra applications/service principals
 Acceptance criteria:
 
 - Resource group `rg-ghrunners-prod-swc` in `swedencentral` in approved subscription `shared` (`b47d2942-f5ad-4d3c-b28e-c23e4f83d97e`, replacing the planned `apex-shared` name), tagged per governance contract
-- Federated credential `repo:jonathan-vella/azure-gh-runners:environment:platform-prod` on `sp-ghrunners-platform-prod` with least-privilege deploy rights on the RG (Contributor + role-assignment write and delete constrained to AcrPull, AcrPush, and Key Vault Secrets User)
+- Federated credential `repo:jonathan-vella/azure-gh-runners:environment:platform-prod` on `sp-ghrunners-platform-prod` with least-privilege deploy rights on the RG (Contributor + role-assignment write and delete constrained to AcrPull, AcrPush, and Key Vault Secrets User). The controller role additions are a separate, one-time condition update only after the issue #69 runbook PR is merged; no other roles or scope changes are authorized.
 - Separate federated credential `repo:jonathan-vella/azure-gh-runners:pull_request` on `sp-ghrunners-whatif`, mapped only to Reader for what-if; repository variable `AZURE_WHATIF_CLIENT_ID`, no GitHub environment on the PR job
-- GitHub environment `platform-prod`: required reviewer, deployment branch `main` only; holds `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+- GitHub environment `platform-prod`: deployment branch `main` only, no required human reviewer; holds `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
 - Runbook `docs/runbooks/bootstrap-identity.md` with exact, re-runnable commands
 
 ### `github-app` — Create and install the runner GitHub App ([#5](https://github.com/jonathan-vella/azure-gh-runners/issues/5))
@@ -375,7 +376,7 @@ Acceptance criteria:
 
 Acceptance criteria:
 
-- Runs only on `main`; environment `platform-prod` with required reviewer
+- Runs only on `main`; environment `platform-prod` is restricted to `main` and has no required human reviewer
 - Builds image if changed, deploys Bicep with the image digest
 - Post-deploy assertions: every PaaS resource has public network access disabled; job count equals registry entries; App key secret present
 - Deployment outputs published to `docs/platform-outputs.md` via PR or job summary

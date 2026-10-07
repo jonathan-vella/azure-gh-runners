@@ -6,6 +6,9 @@ The approved RG, two apps/SPs, federated credentials, and role assignments alrea
 Run the following PowerShell 7 blocks in order to verify them, reconcile the delegation
 condition, and set GitHub identity IDs. Reruns reuse immutable IDs, update the same
 assignment, and overwrite the same GitHub settings; they never create duplicate resources.
+The initial condition handled here allows only AcrPull, AcrPush, and Key Vault Secrets User.
+The separate, one-time controller-role condition update is authorized only after the issue #69
+runbook PR is merged; this file does not provide that procedure or authorize any other changes.
 
 This is not a disaster-recovery provisioning script. A missing resource or unexpected
 trust/role grant is a blocker: stop and obtain approval before recreating anything,
@@ -212,9 +215,9 @@ must stay behind the protected environment.
 
 ## Verify the environment and set the identity IDs
 
-`platform-prod` already requires reviewer `jonathan-vella` and allows only branch
-`main`. Preserve its protection settings and existing `GH_APP_*` secrets; this
-runbook does not create or relax an environment.
+`platform-prod` allows only branch `main` and has no required human reviewer. Preserve the
+main-only branch restriction and existing `GH_APP_*` secrets; this runbook does not create
+or relax an environment.
 
 Client, tenant, and subscription IDs are **non-sensitive identifiers**, not credentials.
 Deployment uses environment secrets to keep the established protected workflow contract.
@@ -225,8 +228,7 @@ and never store an Entra client password. GitHub App private keys are actual sec
 ```powershell
 $environment = Invoke-Gh api "repos/$repo/environments/platform-prod" | ConvertFrom-Json
 $reviewRules = @($environment.protection_rules | Where-Object type -eq 'required_reviewers')
-if ($reviewRules.Count -ne 1 -or @($reviewRules[0].reviewers).Count -ne 1 -or
-    $reviewRules[0].reviewers[0].reviewer.login -cne 'jonathan-vella' -or
+if ($reviewRules.Count -ne 0 -or
     $environment.deployment_branch_policy.protected_branches -ne $false -or
     $environment.deployment_branch_policy.custom_branch_policies -ne $true) {
     throw 'Environment protection mismatch.'

@@ -12,7 +12,7 @@ The GitHub repos are public, are owned by a personal account, and need jobs that
 - **IaC**: Bicep with AVM modules (exact version pins), following apex conventions (CAF naming, governance tags, a single `uniqueSuffix`).
 - **Image**: one generic image built **in Azure** on an **ACR Tasks dedicated agent pool** (preview) inside the VNet, pushed to private ACR Premium.
 - **Auth to GitHub**: one GitHub App owned by the personal account and installed on selected repos. Its key is deployed to Key Vault through ARM (a Bicep secure param).
-- **Platform CI**: GitHub-hosted runners with OIDC. What-if runs on PR; deploy runs on `workflow_dispatch` into a protected environment. This is all ARM, so no VNet is needed.
+- **Platform CI**: GitHub-hosted runners with OIDC. What-if runs on PR; deploy runs on `workflow_dispatch` through the protected, main-only `platform-prod` environment, which has no required human reviewer. This is all ARM, so no VNet is needed.
 - **Consumer network path**: a shared `snet-consumer-pe` subnet plus platform-owned privatelink DNS zones. Consumers create their own private endpoints in that subnet. This is documented precisely enough for an agent to execute.
 - **Public exposure**: no inbound workload endpoints. The NAT Gateway egress IP is the only public IP resource. Log Analytics is a documented exception: standard Azure Monitor ingestion and query endpoints stay enabled without AMPLS, while workspace local authentication is disabled and Azure RBAC governs data access.
 - **Scope**: the platform, a generic onboarding contract, docs, and a throwaway smoke-test consumer repo. **vnext onboarding is a separate follow-up.**
@@ -63,7 +63,7 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 
 ### 2. Azure + GitHub identity bootstrap (one-time, documented runbook)
 
-- **entra-oidc**: two separate Entra apps/SPs, created through Graph/CLI, not Bicep. `sp-ghrunners-platform-prod` trusts only `environment:platform-prod` (Contributor + RBAC Admin on the RG, with both role-assignment write and delete constrained to AcrPull, AcrPush, and Key Vault Secrets User). `sp-ghrunners-whatif` trusts only `pull_request` (Reader on the RG). Never put both credentials on one app: federated credentials authenticate the same SP and do not select different RBAC roles. The PR job has no GitHub environment and uses repository variable `AZURE_WHATIF_CLIENT_ID`; the deploy job uses protected `platform-prod` secrets. See [identity bootstrap](runbooks/bootstrap-identity.md).
+- **entra-oidc**: two separate Entra apps/SPs, created through Graph/CLI, not Bicep. `sp-ghrunners-platform-prod` trusts only `environment:platform-prod` (Contributor + RBAC Admin on the RG, with role-assignment write and delete constrained to the existing AcrPull, AcrPush, and Key Vault Secrets User role IDs). `sp-ghrunners-whatif` trusts only `pull_request` (Reader on the RG). Never put both credentials on one app: federated credentials authenticate the same SP and do not select different RBAC roles. The PR job has no GitHub environment and uses repository variable `AZURE_WHATIF_CLIENT_ID`; the deploy job uses `platform-prod` secrets. The environment allows only `main` and does not require a human reviewer. After the controller-RBAC runbook PR for issue #69 is merged, the one-time condition update authorized by this decision may add `Virtual Machine Contributor` (`b24988ac-6180-42a0-ab88-20f7382dd24c`) and `Network Contributor` (`4d97b98b-1d4f-4787-a291-c67834d212e7`), preserving the existing three-role allowlist and exact RG scope. This is not authorization for any other grant or identity change. See [identity bootstrap](runbooks/bootstrap-identity.md).
 - **github-app**: create the App on the personal account. Permissions: Administration RW, Actions R, Metadata R. No webhook. Install it on selected repos. Store App ID, installation ID, and private key as secrets in the runners repo's `platform-prod` environment.
 
 ### 3. Platform IaC (Bicep/AVM)
@@ -96,7 +96,7 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 ### 6. Platform CI/CD (runners repo)
 
 - **ci-validate**: on PR: markdownlint, `bicep build/lint`, registry validator + generator drift, hook tests, Dockerfile lint (hadolint), what-if (Reader OIDC).
-- **ci-deploy**: `workflow_dispatch` → `platform-prod` environment (required reviewer, `main` only) → image build (if changed) → deploy → post-deploy checks (all resources public-disabled, job count equals registry entries).
+- **ci-deploy**: `workflow_dispatch` from `main` → main-only `platform-prod` environment (no required human reviewer) → image build (if changed) → deploy → post-deploy checks (all resources public-disabled, job count equals registry entries).
 - **ci-maintenance**: weekly image rebuild + redeploy-on-approval. App key rotation reminder issue.
 
 ### 7. Documentation (agent-actionable)

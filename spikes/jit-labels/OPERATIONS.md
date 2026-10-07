@@ -2,7 +2,8 @@
 
 This procedure prepares and tears down only the temporary JIT-label diagnostic deployment. It does not create or use
 production runner resources, change the production deployment identity, read the GitHub App private key, or deploy
-anything while the capacity and `platform-prod` human-review gates remain unresolved.
+anything while the capacity blocker or separate explicit spike-authorization gate remains unresolved. The
+`platform-prod` environment is main-only and does not require a human reviewer.
 
 ## Temporary deployment identity
 
@@ -52,7 +53,9 @@ az role assignment create --assignee-object-id $pullIdentity.principalId --assig
 az role assignment create --assignee-object-id $pullIdentity.principalId --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets User' --scope $vault.id --subscription b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
 ```
 
-GH App secrets are still read only after the protected environment's authorized reviewer approves the deployment run.
+GH App secrets are available to the deployment run through the protected `platform-prod` environment on `main`.
+Because the environment has no required reviewer, record the owner's explicit authorization for the exact bounded
+spike in issue #10 before dispatch; environment branch protection is not that authorization.
 
 ## Deploy, observe, clean up
 
@@ -67,10 +70,12 @@ GH App secrets are still read only after the protected environment's authorized 
    `spikes/jit-labels/ghr-smoke/.github/workflows/` to `ghr-smoke` through its separate reviewed change. The files are
    dispatch-only and the runner image's job-start hook additionally permits only those two workflows, the exact
    `ghr-smoke` repository, `workflow_dispatch`, and `refs/heads/main`.
-3. Manually dispatch **Spike 10 - Deploy isolated JIT label job** from `main`. Enter the temporary `ClientId`, exact
+3. After the owner has explicitly authorized this bounded spike in issue #10, manually dispatch
+   **Spike 10 - Deploy isolated JIT label job** from `main`. The environment's main-only branch policy remains in
+   force but does not require a reviewer; do not treat that policy as spike authorization. Enter the temporary `ClientId`, exact
    resource IDs, versionless Key Vault secret URL, immutable image references, and an observation window from 5 to 45
-   minutes. Select capacity confirmation only after checking capacity. The existing required reviewer must approve
-   `platform-prod`; do not bypass this gate. No resources are deployed while waiting for approval.
+   minutes. Select capacity confirmation only after checking capacity. No resources may be deployed before the
+   explicit spike authorization and capacity preflight are complete.
 4. Once the deployment run enters its bounded observation window, run the observer from PowerShell 7 (`pwsh`) on an
    operator workstation authenticated to the fixed shared subscription and `ghr-smoke`:
    `.\spikes\jit-labels\Observe-JitLabelScale.ps1 -DeploymentRunId <deployment-run-id>`. Use the numeric GitHub Actions run ID from the
