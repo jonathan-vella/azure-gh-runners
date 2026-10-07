@@ -5,6 +5,8 @@ const template = await readFile(new URL('../infra/spike7/main.bicep', import.met
 const jobTemplate = await readFile(new URL('../infra/spike7/job.bicep', import.meta.url), 'utf8');
 const runner = await readFile(new URL('../infra/spike7/Invoke-Spike.ps1', import.meta.url), 'utf8');
 const comparison = await readFile(new URL('../infra/spike7/Comparison.psm1', import.meta.url), 'utf8');
+const lifecycle = await readFile(new URL('../infra/spike7/Lifecycle.psm1', import.meta.url), 'utf8');
+const lifecycleCommand = await readFile(new URL('../infra/spike7/Invoke-Lifecycle.ps1', import.meta.url), 'utf8');
 const boundedProcess = await readFile(new URL('./spikes/keda-egress/Process.psm1', import.meta.url), 'utf8');
 
 const requiredTemplateText = [
@@ -76,6 +78,14 @@ assert.match(runner, /properties\.workloadProfileName -cne \$Profile/);
 assert.match(runner, /workloadProfileName=\$Profile/);
 assert.match(runner, /EnvironmentProvisioningState =/);
 assert.match(runner, /stage=resource-group-deployment/);
+assert.match(runner, /originalExit=\$\(\$result\.ExitCode\).*originalCode=\$\(\$result\.ErrorCode\)/);
+assert.match(runner, /'Cleanup'\s*\{[\s\S]*Get-SpikeDeploymentState[\s\S]*'group', 'delete'/);
+assert.match(runner, /'Succeeded', 'Failed', 'Canceled'/);
+assert.match(runner, /DeploymentAbsentOwnedGroupEmpty/);
+assert.match(lifecycle, /finally[\s\S]*try \{ & \$Diagnose \} catch[\s\S]*try \{ & \$Cleanup \} catch/);
+assert.match(lifecycle, /System\.AggregateException/);
+assert.match(lifecycleCommand, /Assert-ApprovedScope[\s\S]*Assert-ProfileAuthorization[\s\S]*Get-ResourceGroupExists[\s\S]*Invoke-SpikeLifecycle/);
+assert.doesNotMatch(lifecycleCommand, /&\s*az\b/);
 assert.match(runner, /Stage = 'job-provisioning'/);
 assert.match(runner, /'containerapp', 'env', 'show', '--subscription', \$approvedSubscription/);
 assert.match(runner, /'containerapp', 'job', 'show', '--subscription', \$approvedSubscription/);
