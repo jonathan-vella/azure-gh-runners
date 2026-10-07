@@ -3,51 +3,55 @@
 ## Context
 
 Issue [#6](https://github.com/jonathan-vella/azure-gh-runners/issues/6) asks whether a GitHub-hosted runner can queue
-an `az acr build --agent-pool` task against a Premium registry with public network access disabled, and whether a
-Git-context task avoids any local source-context upload limitation. It also requires validating GHCR base-image
-egress and S1/S2 availability and quota before selecting the build path.
+an `az acr build --agent-pool` task against a Premium registry with public network access disabled, whether a
+Git-context task changes the result, whether the agent pool can pull the GHCR base image, and whether S1/S2 are
+available in Sweden Central.
 
-The spike resource group was absent before provisioning. In the approved `shared` subscription and `swedencentral`,
-the isolated spike setup created a Premium ACR with admin access disabled and public network access disabled, an
-approved private endpoint with `privatelink.azurecr.io` DNS records, and a dedicated agent-pool subnet. The subnet
-had no inbound allows; outbound rules allowed the ACR private-endpoint subnet, the Azure services listed in the
-agent-pool documentation, and Internet HTTPS for external image sources, while denying other VNet and Internet
-traffic. Its only public IP was attached to the NAT Gateway for outbound connectivity.
+The first bounded Azure experiment verified that a Premium ACR can be created with public access and admin access
+disabled and accessed from a VNet through an approved private endpoint. An S1 agent pool reached `Succeeded`.
+The S2 pool was still `Creating` when cleanup began; its create command returned a registry-not-found error during
+resource-group deletion. Neither build context nor the GHCR image pull was tested.
 
 Microsoft Learn's [agent-pool documentation](https://learn.microsoft.com/en-us/azure/container-registry/tasks-agent-pools)
-lists Sweden Central as supported, S1 (2 vCPU/3 GB), S2 (4 vCPU/8 GB), and a default standard-pool quota of 16 vCPU
-per registry. It says other public registries such as GHCR require corresponding outbound rules. The same page notes
-that ACR Tasks runs may be paused for Azure free credits.
+lists Sweden Central, S1 (2 vCPU/3 GB), S2 (4 vCPU/8 GB), and a default standard-pool quota of 16 vCPU per registry.
+It requires HTTPS egress to external registries such as GHCR. This documented quota is per registry, not a
+subscription-level quota.
 
 ## Decision
 
-**Blocked; no build-path decision is accepted.** The source-context and pinned Git-context builds were not run from a
-GitHub-hosted runner, and no GHCR pull from an agent pool was observed. Therefore this ADR does not select ACR Tasks,
-claim that Git context solves the private-registry path, or claim that the fallback has been tested.
+**Proposed experiment; build-path decision blocked.** This ADR remains unaccepted because no GitHub-hosted build or
+agent-pool GHCR pull has been observed. The repository now contains a bounded manual workflow to test the local
+source-context and exact checked-out Git commit against a private Premium ACR. A pinned, digest-qualified official
+`actions-runner` base image provides the GHCR pull probe. The experiment scaffold does not claim that either test
+passes.
 
-The temporary test workflow could not be dispatched without first placing its workflow file on the repository's
-default branch. [GitHub's workflow documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
-requires the workflow file to exist on the default branch for `workflow_dispatch`; the workflow was only on the spike
-branch. Creating a pull request before the specified evidence exists would violate the spike's PR gate, so no PR was
-opened and no local-operator build was substituted for a GitHub-hosted test.
-
-The live Azure checks established that the S1 pool reached `Succeeded`. The S2 pool was still `Creating` when cleanup
-began; its create command then returned a registry-not-found error during resource-group deletion. This cleanup
-outcome does not establish S2 availability, and actual quota consumption was not verified. The documented 16-vCPU
-standard quota is not a subscription-level quota and must not be represented as one.
+The workflow must first be merged to the default branch before `workflow_dispatch` can run; the runtime evidence will
+therefore follow review and merge of the scaffold, not precede it. The temporary app uses one federated credential
+with the exact `main` branch subject, no client password/certificate, and no production identity or GitHub App
+secret. Its `Contributor` assignment is limited to the explicitly named, tagged spike resource group; `AcrPush` and
+`Container Registry Tasks Contributor` are limited to that resource group's test registry.
 
 ## Consequences
 
-- Keep issue #6 open and do not treat its acceptance criteria or this ADR as accepted.
-- Do not implement dependent image-build work on the assumption that GitHub-hosted ACR Tasks works with public access
-  disabled.
-- The documented fallback—build on GitHub-hosted runners, push to private GHCR, then import into ACR by digest—remains
-  a candidate, not a validated decision.
-- Resume only when the required GitHub-hosted source-context and pinned-commit Git-context runs can be performed
-  without bypassing branch protection or the PR gate. Record task run IDs, outcomes, and GHCR pull evidence then.
+- Keep issue #6 open until source-context upload, Git-context, GHCR pull, S1/S2, and cleanup results are recorded.
+- Before dispatch, run `tools/spike-acr-agentpool.ps1 -Action Setup` from an already-authenticated Azure CLI session
+  in the approved `shared` subscription. It refuses to reuse an existing group or app and prints the non-secret
+  client ID.
+- After this workflow is merged to `main`, dispatch `.github/workflows/spike-acr-agentpool.yml` on `main` with all
+  three required inputs: `client_id`, `resource_group` (`rg-ghrunners-spike6-swc`), and `registry_name`
+  (`ghrunners6jv20261007`).
+- The workflow asserts subscription, tenant, region, ownership tags, Premium SKU, disabled public access, and
+  disabled admin access before testing. It creates the VNet agent pool and ACR private endpoint, routes allowed
+  outbound traffic through the NAT Gateway, denies inbound access and unrelated lateral/Internet egress, bounds the
+  pool/build/cleanup waits, and deletes/verifies the exact spike resource group in an `always()` cleanup step.
+- The temporary Entra app cannot safely delete itself with these least-privilege role assignments. After the workflow
+  completes (including a failed run), run
+  `tools/spike-acr-agentpool.ps1 -Action Cleanup -ClientId <client-id>` from the operator session. That script
+  verifies the group is gone, removes the temporary service principal and app, and asserts both are absent. If Azure
+  login never succeeds, this explicit cleanup remains available to delete the tagged resource group.
+- Do not choose ACR Tasks or the documented fallback until the GH-hosted run URLs, ACR task run IDs/statuses,
+  public-endpoint probe, pool states, and cleanup assertions have been reviewed and added here.
 
 ## Status
 
-Blocked — investigation is incomplete and this ADR is not accepted. The temporary OIDC app, service principal, and
-registry-scoped role grants were removed. The isolated spike resource group was deleted, and `az group exists` verified
-that it is absent.
+Proposed — experiment scaffold only; results are incomplete and no build-path decision is accepted.
