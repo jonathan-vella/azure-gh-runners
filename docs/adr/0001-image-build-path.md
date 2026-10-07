@@ -68,8 +68,10 @@ secret. Its `Contributor` assignment is limited to the explicitly named, tagged 
   run ID, and fixed diagnostic classification, then deleted. They are not printed or uploaded as artifacts.
 - The current GitHub Actions subject for this repository includes immutable owner and repository IDs. The setup
   helper derives `repo:<owner>@<owner-id>/<repository>@<repository-id>` from GitHub metadata and requires an exact
-  match with the repository's immutable OIDC subject configuration before creating the temporary app. It then
-  appends only the observed `:ref:refs/heads/main` suffix; no environment or event suffix is inferred. See the
+  match with the known owner and repository IDs and the repository's immutable OIDC subject configuration before
+  creating the temporary app. Cleanup validates the same exact subject from its fixed allowlist without requiring
+  GitHub API availability, so a GitHub outage cannot block removal of the temporary Azure identity. Setup appends
+  only the observed `:ref:refs/heads/main` suffix; no environment or event suffix is inferred. See the
   [GitHub OIDC reference](https://docs.github.com/en/actions/reference/security/oidc). The two prior AADSTS700213
   runs do not constitute evidence for any pool or build criterion.
 - Do not choose ACR Tasks or the documented fallback until the GH-hosted run URLs, ACR task run IDs/statuses,

@@ -14,6 +14,8 @@ $registry = 'ghrunners6jv20261007'
 $applicationName = 'sp-ghrunners-spike6-20261007'
 $branch = 'main'
 $repository = 'jonathan-vella/azure-gh-runners'
+$ownerId = '25802147'
+$repositoryId = '1408821667'
 $location = 'swedencentral'
 $tags = @(
     'application=ghrunners',
@@ -45,17 +47,47 @@ function Get-AzJson {
     $output | ConvertFrom-Json
 }
 
+function Get-ExpectedSpikeFederatedSubject {
+    return "repo:jonathan-vella@$ownerId/azure-gh-runners@$repositoryId`:ref:refs/heads/$branch"
+}
+
+function Get-SpikeFederatedSubjectFromMetadata {
+    param(
+        [Parameter(Mandatory = $true)][pscustomobject]$Metadata,
+        [Parameter(Mandatory = $true)][pscustomobject]$Customization
+    )
+
+    if ($Metadata.full_name -cne $repository -or $Metadata.owner_login -cne 'jonathan-vella' -or
+        $Metadata.name -cne 'azure-gh-runners' -or $Metadata.owner_id -cne $ownerId -or
+        $Metadata.repository_id -cne $repositoryId) {
+        throw 'GitHub repository metadata differs from the exact spike repository; refusing the identity operation.'
+    }
+
+    $expectedPrefix = "repo:$($Metadata.owner_login)@$($Metadata.owner_id)/$($Metadata.name)@$($Metadata.repository_id)"
+    if ($customization.use_default -ne $true -or $customization.use_immutable_subject -ne $true -or
+        $customization.sub_claim_prefix -cne $expectedPrefix) {
+        throw 'GitHub immutable OIDC subject configuration differs from the exact expected repository-ID prefix.'
+    }
+
+    $subject = "${expectedPrefix}:ref:refs/heads/${branch}"
+    if ($subject -cne (Get-ExpectedSpikeFederatedSubject)) {
+        throw 'The derived OIDC subject is outside the exact main-branch spike allowlist.'
+    }
+    return $subject
+}
+
 function Get-SpikeFederatedSubject {
+    param([switch]$ForCleanup)
+
+    if ($ForCleanup) {
+        return Get-ExpectedSpikeFederatedSubject
+    }
+
     $metadataJson = & gh api "repos/$repository" --jq '{full_name, name, owner_login:.owner.login, owner_id:(.owner.id|tostring), repository_id:(.id|tostring)}'
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not read the exact public GitHub repository metadata; refusing the spike identity operation.'
     }
     $metadata = $metadataJson | ConvertFrom-Json
-    if ($metadata.full_name -cne $repository -or $metadata.owner_login -cne 'jonathan-vella' -or
-        $metadata.name -cne 'azure-gh-runners' -or $metadata.owner_id -notmatch '^\d+$' -or
-        $metadata.repository_id -notmatch '^\d+$') {
-        throw 'GitHub repository metadata differs from the exact spike repository; refusing the identity operation.'
-    }
 
     $customizationJson = & gh api "repos/$repository/actions/oidc/customization/sub" `
         --jq '{use_default, use_immutable_subject, sub_claim_prefix}'
@@ -63,17 +95,7 @@ function Get-SpikeFederatedSubject {
         throw 'Could not read the repository OIDC subject configuration; refusing the spike identity operation.'
     }
     $customization = $customizationJson | ConvertFrom-Json
-    $expectedPrefix = "repo:$($metadata.owner_login)@$($metadata.owner_id)/$($metadata.name)@$($metadata.repository_id)"
-    if ($customization.use_default -ne $true -or $customization.use_immutable_subject -ne $true -or
-        $customization.sub_claim_prefix -cne $expectedPrefix) {
-        throw 'GitHub immutable OIDC subject configuration differs from the exact expected repository-ID prefix.'
-    }
-
-    $subject = "${expectedPrefix}:ref:refs/heads/${branch}"
-    if ($subject -notmatch '^repo:jonathan-vella@\d+/azure-gh-runners@\d+:ref:refs/heads/main$') {
-        throw 'The derived OIDC subject is outside the exact main-branch spike allowlist.'
-    }
-    return $subject
+    return Get-SpikeFederatedSubjectFromMetadata -Metadata $metadata -Customization $customization
 }
 
 function Assert-Account {
@@ -110,6 +132,58 @@ function Remove-SpikeGroup {
     }
 }
 
+function Invoke-SpikeCleanup {
+    param([Parameter(Mandatory = $true)][string]$ClientId)
+
+    if ($ClientId -notmatch '^[0-9a-fA-F-]{36}$') {
+        throw 'Cleanup requires the exact temporary app client ID printed by Setup.'
+    }
+    Remove-SpikeGroup
+    $federatedSubject = Get-SpikeFederatedSubject -ForCleanup
+    $apps = @(Get-AzJson @('ad', 'app', 'list', '--display-name', $applicationName) |
+        Where-Object { $_.displayName -eq $applicationName -and $_.appId -eq $ClientId })
+    if ($apps.Count -ne 1) { throw 'Expected exactly one matching spike app before cleanup.' }
+    $app = $apps[0]
+    if (@($app.passwordCredentials).Count -ne 0 -or @($app.keyCredentials).Count -ne 0) {
+        throw 'Unexpected reusable credential on the temporary spike app; refusing deletion.'
+    }
+    $federatedCredentials = @(Get-AzJson @('ad', 'app', 'federated-credential', 'list', '--id', $ClientId))
+    if ($federatedCredentials.Count -ne 1 -or
+        $federatedCredentials[0].name -ne 'ghrunners-spike6-main' -or
+        $federatedCredentials[0].subject -ne $federatedSubject -or
+        $federatedCredentials[0].issuer -ne 'https://token.actions.githubusercontent.com' -or
+        @($federatedCredentials[0].audiences).Count -ne 1 -or
+        $federatedCredentials[0].audiences[0] -ne 'api://AzureADTokenExchange') {
+        throw 'Temporary app trust differs from the exact main-branch spike credential; refusing deletion.'
+    }
+    $servicePrincipals = @(Get-AzJson @('ad', 'sp', 'list', '--filter', "appId eq '$ClientId'"))
+    if ($servicePrincipals.Count -ne 1) { throw 'Expected exactly one service principal for the spike app.' }
+    $remainingAssignments = @(Get-AzJson @('role', 'assignment', 'list', '--subscription', $subscription,
+        '--assignee-object-id', $servicePrincipals[0].id, '--all'))
+    if ($remainingAssignments.Count -ne 0) {
+        throw 'Role assignments remain for the temporary app after group deletion; refusing identity deletion.'
+    }
+    Invoke-Az @('ad', 'sp', 'delete', '--id', $servicePrincipals[0].id, '--only-show-errors')
+    Invoke-Az @('ad', 'app', 'delete', '--id', $ClientId, '--only-show-errors')
+
+    $remainingApps = @()
+    $remainingSps = @()
+    for ($attempt = 1; $attempt -le 10; $attempt++) {
+        $remainingApps = @(Get-AzJson @('ad', 'app', 'list', '--display-name', $applicationName) |
+            Where-Object { $_.displayName -eq $applicationName -and $_.appId -eq $ClientId })
+        $remainingSps = @(Get-AzJson @('ad', 'sp', 'list', '--filter', "appId eq '$ClientId'"))
+        if ($remainingApps.Count -eq 0 -and $remainingSps.Count -eq 0) { break }
+        if ($attempt -lt 10) { Start-Sleep -Seconds 6 }
+    }
+    $groupExists = & az group exists --subscription $subscription --name $resourceGroup -o tsv
+    if ($LASTEXITCODE -ne 0 -or $groupExists -ne 'false' -or
+        $remainingApps.Count -ne 0 -or $remainingSps.Count -ne 0) {
+        throw 'Cleanup assertion failed: spike group, app, or service principal remains.'
+    }
+    Write-Output 'Verified the spike resource group, app, and service principal are absent.'
+}
+
+if ($MyInvocation.InvocationName -eq '.') { return }
 Assert-Account
 $group = Get-SpikeGroup
 
@@ -221,50 +295,5 @@ if ($Action -eq 'Setup') {
 }
 
 if ($Action -eq 'Cleanup') {
-    if ([string]::IsNullOrWhiteSpace($ClientId) -or $ClientId -notmatch '^[0-9a-fA-F-]{36}$') {
-        throw 'Cleanup requires the exact temporary app client ID printed by Setup.'
-    }
-    Remove-SpikeGroup
-    $federatedSubject = Get-SpikeFederatedSubject
-    $apps = @(Get-AzJson @('ad', 'app', 'list', '--display-name', $applicationName) |
-        Where-Object { $_.displayName -eq $applicationName -and $_.appId -eq $ClientId })
-    if ($apps.Count -ne 1) { throw 'Expected exactly one matching spike app before cleanup.' }
-    $app = $apps[0]
-    if (@($app.passwordCredentials).Count -ne 0 -or @($app.keyCredentials).Count -ne 0) {
-        throw 'Unexpected reusable credential on the temporary spike app; refusing deletion.'
-    }
-    $federatedCredentials = @(Get-AzJson @('ad', 'app', 'federated-credential', 'list', '--id', $ClientId))
-    if ($federatedCredentials.Count -ne 1 -or
-        $federatedCredentials[0].name -ne 'ghrunners-spike6-main' -or
-        $federatedCredentials[0].subject -ne $federatedSubject -or
-        $federatedCredentials[0].issuer -ne 'https://token.actions.githubusercontent.com' -or
-        @($federatedCredentials[0].audiences).Count -ne 1 -or
-        $federatedCredentials[0].audiences[0] -ne 'api://AzureADTokenExchange') {
-        throw 'Temporary app trust differs from the exact main-branch spike credential; refusing deletion.'
-    }
-    $servicePrincipals = @(Get-AzJson @('ad', 'sp', 'list', '--filter', "appId eq '$ClientId'"))
-    if ($servicePrincipals.Count -ne 1) { throw 'Expected exactly one service principal for the spike app.' }
-    $remainingAssignments = @(Get-AzJson @('role', 'assignment', 'list', '--subscription', $subscription,
-        '--assignee-object-id', $servicePrincipals[0].id, '--all'))
-    if ($remainingAssignments.Count -ne 0) {
-        throw 'Role assignments remain for the temporary app after group deletion; refusing identity deletion.'
-    }
-    Invoke-Az @('ad', 'sp', 'delete', '--id', $servicePrincipals[0].id, '--only-show-errors')
-    Invoke-Az @('ad', 'app', 'delete', '--id', $ClientId, '--only-show-errors')
-
-    $remainingApps = @()
-    $remainingSps = @()
-    for ($attempt = 1; $attempt -le 10; $attempt++) {
-        $remainingApps = @(Get-AzJson @('ad', 'app', 'list', '--display-name', $applicationName) |
-            Where-Object { $_.displayName -eq $applicationName -and $_.appId -eq $ClientId })
-        $remainingSps = @(Get-AzJson @('ad', 'sp', 'list', '--filter', "appId eq '$ClientId'"))
-        if ($remainingApps.Count -eq 0 -and $remainingSps.Count -eq 0) { break }
-        if ($attempt -lt 10) { Start-Sleep -Seconds 6 }
-    }
-    $groupExists = & az group exists --subscription $subscription --name $resourceGroup -o tsv
-    if ($LASTEXITCODE -ne 0 -or $groupExists -ne 'false' -or
-        $remainingApps.Count -ne 0 -or $remainingSps.Count -ne 0) {
-        throw 'Cleanup assertion failed: spike group, app, or service principal remains.'
-    }
-    Write-Output 'Verified the spike resource group, app, and service principal are absent.'
+    Invoke-SpikeCleanup -ClientId $ClientId
 }
