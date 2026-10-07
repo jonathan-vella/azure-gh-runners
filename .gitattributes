@@ -1,0 +1,2 @@
+image/*.sh text eol=lf
+image/Dockerfile text eol=lf

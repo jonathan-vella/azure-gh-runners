@@ -1,0 +1,48 @@
+{
+  "platform": "linux/amd64",
+  "base": {
+    "image": "ghcr.io/actions/actions-runner",
+    "version": "2.338.0",
+    "digest": "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807",
+    "runnerUid": 1001,
+    "runnerGid": 1001
+  },
+  "inherited": {
+    "git": { "version": "2.55.0", "package": "git", "packageVersion": "1:2.55.0-0ppa1~ubuntu24.04.2" },
+    "jq": { "version": "1.7", "package": "jq", "packageVersion": "1.7.1-3ubuntu0.24.04.2" },
+    "curl": { "version": "8.5.0", "package": "curl", "packageVersion": "8.5.0-2ubuntu10.15" },
+    "python": { "version": "3.12.3", "package": "python3.12", "packageVersion": "3.12.3-1ubuntu0.17" }
+  },
+  "downloads": {
+    "azureCli": {
+      "version": "2.91.0",
+      "packageVersion": "2.91.0-1~noble",
+      "url": "https://packages.microsoft.com/repos/azure-cli/pool/main/a/azure-cli/azure-cli_2.91.0-1%7Enoble_amd64.deb",
+      "sha256": "826aa273a138647c1a2274df8dfb0f1e9351c3d25d9d6fec29ae96eb2a9031e8"
+    },
+    "bicep": {
+      "version": "0.48.1",
+      "url": "https://github.com/Azure/bicep/releases/download/v0.48.1/bicep-linux-x64",
+      "sha256": "b09ec25a9d376c1f8e33ede6ed22b587f915ad68488d5db77a6f9541748c7f6e"
+    },
+    "terraform": {
+      "version": "1.16.5",
+      "url": "https://releases.hashicorp.com/terraform/1.16.5/terraform_1.16.5_linux_amd64.zip",
+      "sha256": "2bc2fcfff033265c9e02ca0351f01794eb122f62a9b2a49a3294b9e49eaab5e4"
+    },
+    "node": {
+      "version": "24.21.0",
+      "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz",
+      "sha256": "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff"
+    },
+    "pwsh": {
+      "version": "7.6.6",
+      "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.6/powershell-7.6.6-linux-x64.tar.gz",
+      "sha256": "ddbc4a2d113bbd46d283cfedcbcd117a70caefd7673f41f2b4e0000badf103bc"
+    }
+  },
+  "hadolint": {
+    "version": "2.14.0",
+    "image": "hadolint/hadolint@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e"
+  }
+}
