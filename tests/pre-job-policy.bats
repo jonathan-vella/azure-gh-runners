@@ -112,6 +112,18 @@ mutate_payload() {
   done
 }
 
+@test "policy and payload size limits count UTF-8 bytes rather than characters" {
+  export CONSUMER_POLICY_JSON
+  CONSUMER_POLICY_JSON="$(/usr/bin/python3 -I -c 'import sys; sys.stdout.buffer.write(b"\xc3\xa9" * 32769)')"
+  deny
+  [[ "$output" == *'oversized consumer policy'* ]]
+  setup
+  private_pr
+  /usr/bin/python3 -I -c 'import sys; sys.stdout.buffer.write(b"\xc3\xa9" * 524289)' > "$GITHUB_EVENT_PATH"
+  deny
+  [[ "$output" == *'oversized pull request payload'* ]]
+}
+
 @test "public policy cannot widen event or branch floor" {
   local valid="$CONSUMER_POLICY_JSON"
   for event in pull_request pull_request_target workflow_run issue_comment; do

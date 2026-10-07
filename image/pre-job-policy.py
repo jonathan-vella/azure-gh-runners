@@ -50,7 +50,7 @@ def workflow_parts(value):
 
 def validate():
     raw = os.environ.get("CONSUMER_POLICY_JSON", "")
-    require(0 < len(raw) <= 65536, "missing or oversized consumer policy")
+    require(0 < len(raw.encode("utf-8")) <= 65536, "missing or oversized consumer policy")
     policy = parse_json(raw)
     require(isinstance(policy, dict) and set(policy) == {
         "repository", "visibility", "allowedEvents", "allowedRefs", "allowedWorkflows",
@@ -100,7 +100,7 @@ def validate():
         event_path = os.environ.get("GITHUB_EVENT_PATH", "")
         require(event_path, "missing pull request payload")
         descriptor = os.open(event_path, os.O_RDONLY | os.O_NONBLOCK)
-        with os.fdopen(descriptor, encoding="utf-8") as stream:
+        with os.fdopen(descriptor, "rb") as stream:
             require(stat.S_ISREG(os.fstat(stream.fileno()).st_mode), "invalid pull request payload file")
             payload_text = stream.read(1048577)
         require(len(payload_text) <= 1048576, "oversized pull request payload")
