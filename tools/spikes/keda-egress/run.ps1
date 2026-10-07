@@ -248,6 +248,21 @@ function Get-NsgOutboundRules {
     )
 }
 
+function Set-NsgOutboundRules {
+    param([Parameter(Mandatory)][string[]]$ApiPrefixes)
+
+    foreach ($rule in Get-NsgOutboundRules -ApiPrefixes $ApiPrefixes) {
+        $arguments = @(
+            'network', 'nsg', 'rule', 'create', '--resource-group', $resourceGroup,
+            '--nsg-name', $networkSecurityGroup, '--name', $rule.name,
+            '--priority', [string]$rule.priority, '--direction', 'Outbound', '--access', $rule.access,
+            '--protocol', $rule.protocol, '--source-address-prefixes', $rule.source, '--source-port-ranges', '*',
+            '--destination-address-prefixes'
+        ) + @($rule.destination) + @('--destination-port-ranges') + @($rule.ports)
+        $null = Invoke-Az $arguments
+    }
+}
+
 function Get-GitHubApiDenyRule {
     param([Parameter(Mandatory)][string[]]$ApiPrefixes)
 
@@ -803,27 +818,7 @@ try {
         'network', 'nat', 'gateway', 'create', '--resource-group', $resourceGroup, '--name', $natGateway,
         '--location', $location, '--public-ip-addresses', $publicIp, '--idle-timeout', '10', '--tags'
     ) + $tags)
-    $networkRules = @(
-        @{ name = 'AllowAcaSubnetDependencies'; priority = '100'; protocol = '*'; destination = @('10.252.8.0/27'); ports = @('*'); access = 'Allow' },
-        @{ name = 'AllowPrivateEndpointHttps'; priority = '110'; protocol = 'Tcp'; destination = @('10.252.8.32/27'); ports = @('443'); access = 'Allow' },
-        @{ name = 'AllowAzurePlatformDns'; priority = '120'; protocol = 'Udp'; destination = @('AzurePlatformDNS'); ports = @('53'); access = 'Allow' },
-        @{ name = 'AllowMicrosoftContainerRegistry'; priority = '130'; protocol = 'Tcp'; destination = @('MicrosoftContainerRegistry'); ports = @('443'); access = 'Allow' },
-        @{ name = 'AllowAzureFrontDoorFirstParty'; priority = '140'; protocol = 'Tcp'; destination = @('AzureFrontDoor.FirstParty'); ports = @('443'); access = 'Allow' },
-        @{ name = 'AllowAzureActiveDirectory'; priority = '150'; protocol = 'Tcp'; destination = @('AzureActiveDirectory'); ports = @('443'); access = 'Allow' },
-        @{ name = 'AllowAzureMonitor'; priority = '160'; protocol = 'Tcp'; destination = @('AzureMonitor'); ports = @('443'); access = 'Allow' },
-        @{ name = 'AllowGitHubApiHttps'; priority = '170'; protocol = 'Tcp'; destination = $apiPrefixes; ports = @('443'); access = 'Allow' },
-        @{ name = 'DenyRfc1918'; priority = '4000'; protocol = '*'; destination = @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'); ports = @('*'); access = 'Deny' },
-        @{ name = 'DenyInternetOutbound'; priority = '4090'; protocol = '*'; destination = @('Internet'); ports = @('*'); access = 'Deny' }
-    )
-    foreach ($rule in $networkRules) {
-        $null = Invoke-Az (@(
-            'network', 'nsg', 'rule', 'create', '--resource-group', $resourceGroup,
-            '--nsg-name', $networkSecurityGroup, '--name', $rule.name,
-            '--priority', $rule.priority, '--direction', 'Outbound', '--access', $rule.access,
-            '--protocol', $rule.protocol, '--source-address-prefixes', $rule.source, '--source-port-ranges', '*',
-            '--destination-address-prefixes'
-        ) + $rule.destination + @('--destination-port-ranges') + $rule.ports)
-    }
+    Set-NsgOutboundRules -ApiPrefixes $apiPrefixes
     $null = Invoke-Az @(
         'network', 'vnet', 'subnet', 'update', '--resource-group', $resourceGroup,
         '--vnet-name', $virtualNetwork, '--name', $subnet,

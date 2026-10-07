@@ -42,18 +42,22 @@ npm ci
 npm run validate
 ```
 
-`npm run validate` runs the consumer schema, policy, and generator tests; validates active consumer entries against
-GitHub visibility/default-branch metadata; checks the generated consumer parameters for drift; builds the Bicep
-template and parameter file; runs Bicep lint; and checks Markdown with the repository's Markdown configuration. Use
-`npm run generate:consumers` to update `infra/generated/consumers.json` after changing the registry. An empty registry
-passes without GitHub access; active entries require GitHub CLI access to every registered repository. The command
-does not deploy resources or require an Azure login. Add future validators to the existing `validate` script so it
-remains the single documented local check.
+`npm run validate` runs consumer schema, policy, and generator tests; validates active consumer entries against
+GitHub visibility/default-branch metadata; checks generated consumer parameters for drift; builds the Bicep template,
+parameter file, network and observability modules; runs Bicep lint and diagnostic-category contract tests; and checks
+Markdown with the repository's Markdown configuration. Use `npm run generate:consumers` to update
+`infra/generated/consumers.json` after changing the registry. An empty registry passes without GitHub access; active
+entries require GitHub CLI access to every registered repository. The command does not deploy resources or require an
+Azure login. The live diagnostic-category check is a separate required preflight before setting
+`enableDiagnostics=true`. Add future validators to the existing `validate` script so it remains the single documented
+local check.
 
 ## Non-negotiable security and platform invariants
 
-- **No inbound public endpoints.** PaaS resources must have public network access disabled. The NAT Gateway egress IP
-  is the only public resource; it is outbound-only.
+- **No inbound workload endpoints.** Workload PaaS resources must have public network access disabled. Log Analytics
+  is the documented exception: standard ingestion/query endpoints remain enabled without AMPLS, while local
+  authentication is disabled and Azure RBAC governs access. The NAT Gateway egress IP is the only public IP resource
+  and is outbound-only.
 - **Registry-only onboarding.** Onboard or remove a consumer only through `config/consumers/<name>.json`, validated
   by the registry tooling. Do not add ad hoc jobs or consumer-specific deployment parameters outside that flow.
 - **Never relax the consumer policy floor.** Public consumer repositories may run only `workflow_dispatch`, `schedule`,
@@ -88,6 +92,7 @@ remains the single documented local check.
 - [OIDC identity bootstrap](docs/runbooks/bootstrap-identity.md) — exact existing identity scope, verification, and
   GitHub bindings. Stop on unexpected state; do not recreate or expand permissions.
 - [GitHub App runbook](docs/runbooks/github-app.md) — App permissions, installation scope, key handling, and rotation.
+- [Observability](docs/observability.md) — Log Analytics network exception and diagnostic-settings contract.
 
 Architecture, consumer onboarding, operations, and security guides are tracked as documentation issues in the backlog.
 Add links here when those files exist; do not create speculative or duplicate instructions in this guide.

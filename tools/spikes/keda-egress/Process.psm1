@@ -16,23 +16,41 @@ function Invoke-BoundedProcess {
     }
 
     $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    if (-not $process.Start()) {
-        throw 'Could not start a bounded spike subprocess.'
-    }
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-        $process.Kill($true)
-        $process.WaitForExit()
-        $null = $stdoutTask.GetAwaiter().GetResult()
-        $null = $stderrTask.GetAwaiter().GetResult()
-        throw "Spike subprocess exceeded its $TimeoutSeconds-second limit and was terminated."
-    }
-    return [pscustomobject]@{
-        exitCode = $process.ExitCode
-        stdout = $stdoutTask.GetAwaiter().GetResult()
-        stderr = $stderrTask.GetAwaiter().GetResult()
+    try {
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) {
+            throw 'Could not start a bounded spike subprocess.'
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try {
+                $process.Kill($true)
+            } catch {
+                throw "Spike subprocess exceeded its $TimeoutSeconds-second limit; process-tree termination could not be requested."
+            }
+            if (-not $process.WaitForExit(5000)) {
+                throw 'Spike subprocess exceeded its time limit; process-tree termination was not confirmed within 5 seconds.'
+            }
+            if (-not [System.Threading.Tasks.Task]::WaitAll(
+                    [System.Threading.Tasks.Task[]]@($stdoutTask, $stderrTask), 5000
+                )) {
+                throw 'Spike subprocess was terminated, but its redirected output streams did not close within 5 seconds.'
+            }
+            throw "Spike subprocess exceeded its $TimeoutSeconds-second limit and was terminated."
+        }
+        if (-not [System.Threading.Tasks.Task]::WaitAll(
+                [System.Threading.Tasks.Task[]]@($stdoutTask, $stderrTask), 5000
+            )) {
+            throw 'Spike subprocess exited, but its redirected output streams did not close within 5 seconds.'
+        }
+        return [pscustomobject]@{
+            exitCode = $process.ExitCode
+            stdout = $stdoutTask.GetAwaiter().GetResult()
+            stderr = $stderrTask.GetAwaiter().GetResult()
+        }
+    } finally {
+        $process.Dispose()
     }
 }
 

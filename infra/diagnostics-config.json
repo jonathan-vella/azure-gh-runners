@@ -1,0 +1,48 @@
+{
+  "networkSecurityGroup": {
+    "supportedLogCategories": [
+      "NetworkSecurityGroupEvent",
+      "NetworkSecurityGroupFlowEvent",
+      "NetworkSecurityGroupRuleCounter"
+    ],
+    "supportedMetricCategories": [],
+    "logCategories": [
+      "NetworkSecurityGroupEvent",
+      "NetworkSecurityGroupFlowEvent",
+      "NetworkSecurityGroupRuleCounter"
+    ],
+    "metricCategories": []
+  },
+  "virtualNetwork": {
+    "supportedLogCategories": [
+      "VMProtectionAlerts"
+    ],
+    "supportedMetricCategories": [
+      "AllMetrics"
+    ],
+    "logCategories": [
+      "VMProtectionAlerts"
+    ],
+    "metricCategories": [
+      "AllMetrics"
+    ]
+  },
+  "publicIpAddress": {
+    "supportedLogCategories": [
+      "DDoSMitigationFlowLogs",
+      "DDoSMitigationReports",
+      "DDoSProtectionNotifications"
+    ],
+    "supportedMetricCategories": [
+      "AllMetrics"
+    ],
+    "logCategories": [
+      "DDoSMitigationFlowLogs",
+      "DDoSMitigationReports",
+      "DDoSProtectionNotifications"
+    ],
+    "metricCategories": [
+      "AllMetrics"
+    ]
+  }
+}

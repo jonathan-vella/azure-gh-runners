@@ -96,7 +96,7 @@ function generateConsumers({
       }
       throw error;
     }
-    if (actual !== expected) {
+    if (actual.replace(/\r\n/g, '\n') !== expected) {
       throw new Error(`Generated consumers file is stale: ${path.relative(root, destination)}.`);
     }
     return;

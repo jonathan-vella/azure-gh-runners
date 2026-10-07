@@ -92,8 +92,39 @@ $script:mockLogs = @(
 ) | ConvertTo-Json -Depth 8 -Compress
 function Invoke-Az {
     param([string[]]$Arguments)
+    [void]$script:capturedAzArguments.Add(@($Arguments))
     return $script:mockLogs
 }
+$script:capturedAzArguments = [System.Collections.Generic.List[object]]::new()
+Set-NsgOutboundRules -ApiPrefixes $apiPrefixes
+$emittedRules = @($script:capturedAzArguments | Where-Object {
+    $_[0] -eq 'network' -and $_[1] -eq 'nsg' -and $_[2] -eq 'rule' -and $_[3] -eq 'create'
+})
+Assert-Equal $emittedRules.Count $rules.Count 'Runtime emits every shared NSG rule'
+$emittedPriorities = @()
+foreach ($arguments in $emittedRules) {
+    $sourceIndex = [Array]::IndexOf([string[]]$arguments, '--source-address-prefixes')
+    $priorityIndex = [Array]::IndexOf([string[]]$arguments, '--priority')
+    $destinationIndex = [Array]::IndexOf([string[]]$arguments, '--destination-address-prefixes')
+    Assert-Equal ($sourceIndex -ge 0) $true 'Runtime NSG rule source argument exists'
+    Assert-Equal ($priorityIndex -ge 0) $true 'Runtime NSG rule priority argument exists'
+    Assert-Equal ($destinationIndex -ge 0) $true 'Runtime NSG rule destination argument exists'
+    Assert-Equal $arguments[$sourceIndex + 1] '10.252.8.0/27' 'Runtime NSG rule includes its source subnet'
+    $emittedPriorities += [int]$arguments[$priorityIndex + 1]
+}
+Assert-Equal (@($emittedPriorities | Where-Object { $_ -lt 100 -or $_ -gt 4096 }).Count) 0 'Runtime NSG priorities are Azure-valid'
+$runtimeApiDeny = @($emittedRules | Where-Object {
+    $nameIndex = [Array]::IndexOf([string[]]$_, '--name')
+    $_[$nameIndex + 1] -eq 'DenyGitHubApiForSpike8'
+})
+Assert-Equal $runtimeApiDeny.Count 0 'Separate deny-test rule is not installed in the baseline'
+$runtimeApiAllow = @($emittedRules | Where-Object {
+    $nameIndex = [Array]::IndexOf([string[]]$_, '--name')
+    $_[$nameIndex + 1] -eq 'AllowGitHubApiHttps'
+})
+Assert-Equal $runtimeApiAllow.Count 1 'Runtime emits GitHub API allow rule'
+$runtimeAllowDestinationIndex = [Array]::IndexOf([string[]]$runtimeApiAllow[0], '--destination-address-prefixes')
+Assert-Equal $runtimeApiAllow[0][$runtimeAllowDestinationIndex + 1] $apiPrefixes[0] 'Runtime API allow contains fetched prefixes'
 $start = [DateTime]::Parse('2026-10-07T17:59:00Z')
 $end = [DateTime]::Parse('2026-10-07T18:01:00Z')
 $events = Get-KedaEvents -StartTime $start -EndTime $end
