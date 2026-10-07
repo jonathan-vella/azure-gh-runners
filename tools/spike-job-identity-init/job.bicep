@@ -3,7 +3,9 @@ targetScope = 'resourceGroup'
 @secure()
 param syntheticScaleAuth string
 
+param syntheticScaleAuthSha256 string
 param location string = resourceGroup().location
+param expiry string
 param environmentId string
 param identityId string
 param registryServer string
@@ -13,10 +15,34 @@ param syntheticAppKeySha256 string
 param jitConfigSha256 string
 
 var tags = {
+  application: 'ghrunners'
+  environment: 'spike'
+  workload: 'gh-runners'
+  owner: 'jonathan-vella'
+  costcenter: 'platform-engineering'
+  'tech-contact': 'jonathan-vella'
+  'technical-contact': 'jonathan-vella'
+  sla: 'development'
+  'backup-policy': 'none'
+  'maint-window': 'none'
   project: 'azure-gh-runners'
   issue: '9'
   purpose: 'init-container-secret-isolation-spike'
+  expiresOn: expiry
 }
+
+var initScript = concat(
+  'set -eu; test "$(id -u)" = "0"; test -n "$APP_KEY"; printf "%s" "$APP_KEY" | sha256sum | grep -q "^$CANARY_SHA256 "; ',
+  'umask 077; printf "%s" "synthetic-jit-config" > /jit/config; chown 65532:65532 /jit /jit/config; chmod 700 /jit; chmod 400 /jit/config; ',
+  'test "$(stat -c "%u:%g %a" /jit/config)" = "65532:65532 400"; ',
+  'env | while IFS="=" read -r name value; do actual="$(printf "%s" "$value" | sha256sum | cut -d " " -f 1)"; if [ "$actual" = "',
+  syntheticScaleAuthSha256,
+  '" ]; then exit 1; fi; done; ',
+  'printf "ASSERT_init_secret_ref_read=true\\nASSERT_init_secret_match=true\\nASSERT_scale_secret_value_absent_init=true\\nASSERT_jit_file_mode_owner=true\\n"'
+)
+
+var mainScript = loadTextContent('main_probe.py')
+var mainBootstrap = 'import os,sys; os.setgroups([]); os.setgid(65532); os.setuid(65532); exec(compile(sys.argv[1], "<main-probe>", "exec"))'
 
 resource job 'Microsoft.App/jobs@2026-07-01' = {
   name: 'ghr9-secret-isolation'
@@ -94,7 +120,7 @@ resource job 'Microsoft.App/jobs@2026-07-01' = {
           ]
           args: [
             '-c'
-            'set -eu; test -n "$APP_KEY"; printf "%s" "$APP_KEY" | sha256sum | grep -q "^$CANARY_SHA256 "; umask 077; printf "%s" "synthetic-jit-config" > /jit/config; chmod 400 /jit/config; stat -c "%a" /jit/config | grep -qx 400; if env | grep -q "^SCALE_ONLY_SECRET="; then exit 1; fi; printf "ASSERT_init_secret_ref_read=true\\nASSERT_init_secret_match=true\\nASSERT_scale_secret_absent_init=true\\nASSERT_jit_file_mode_0400=true\\n"'
+            initScript
           ]
           env: [
             {
@@ -123,16 +149,25 @@ resource job 'Microsoft.App/jobs@2026-07-01' = {
           name: 'main'
           image: image
           command: [
-            '/bin/sh'
+            'python3'
           ]
           args: [
             '-c'
-            'set -eu; stat -c "%a" /jit/config | grep -qx 400; sha256sum /jit/config | grep -q "^$EXPECTED_JIT_SHA256 "; if env | grep -q "^IDENTITY_ENDPOINT="; then exit 1; fi; if env | grep -q "^IDENTITY_HEADER="; then exit 1; fi; if env | grep -q "^APP_KEY="; then exit 1; fi; if env | grep -q "^SCALE_ONLY_SECRET="; then exit 1; fi; printf "ASSERT_emptydir_shared=true\\nASSERT_jit_file_mode_0400=true\\nASSERT_identity_endpoint_absent=true\\nASSERT_secret_env_absent_main=true\\nASSERT_scale_secret_absent_main=true\\n"'
+            mainBootstrap
+            mainScript
           ]
           env: [
             {
               name: 'EXPECTED_JIT_SHA256'
               value: jitConfigSha256
+            }
+            {
+              name: 'EXPECTED_APP_KEY_SHA256'
+              value: syntheticAppKeySha256
+            }
+            {
+              name: 'EXPECTED_SCALE_AUTH_SHA256'
+              value: syntheticScaleAuthSha256
             }
           ]
           resources: {

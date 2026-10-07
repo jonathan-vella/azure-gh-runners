@@ -9,10 +9,11 @@ used only by scale-rule authentication must not be exposed to either container.
 
 The spike harness in `tools/spike-job-identity-init/` creates a dedicated, internal-only workload-profiles environment,
 private ACR and Key Vault endpoints, and a user-assigned identity. It uses a randomly generated synthetic canary, never
-the GitHub App key. The probe image is imported into private ACR and pinned by digest. The init container checks the
+the GitHub App key. The probe image must be preloaded into private ACR through the approved #6 transfer path and is
+specified by immutable digest; no public import or trusted-service bypass is used. The init container checks the
 canary against a locally computed hash without printing it, then writes a non-secret placeholder JIT document to an
-`EmptyDir` file with mode `0400`. The main container checks the file and verifies that its identity endpoint and
-secret-related environment variables are absent.
+`EmptyDir` file owned by UID/GID 65532 with mode `0400`. The main process drops to that UID before checking the file,
+identity endpoint, metadata-token denial, scale-only canary absence, and read/delete access.
 
 The harness does not call GitHub or test a real App key or JIT configuration. Those checks require the protected
 `platform-prod` secrets and belong behind the gated deployment path.
@@ -30,19 +31,21 @@ The private ACR and Key Vault are reachable only through private endpoints; publ
 Container Apps environment is internal with public network access disabled. The UAMI has only `AcrPull` on the
 spike ACR and `Key Vault Secrets User` on the spike vault. The harness's bounded cleanup wait timed out, after which
 the exact issue-9 environment and resource group were deleted and both resource groups were verified absent. Key Vault
-purge protection is not bypassed.
+purge protection is not bypassed. All taggable spike resources carry the agreed ownership/governance contract plus
+issue-specific ownership and expiry tags; the diagnostic ACA subnet allows required platform/private-endpoint flows
+before denying RFC1918 lateral traffic.
 
 ## Consequences
 
 - A successful job execution proves that the init secret reference resolved, the private image pull succeeded, and
   the init-to-main `EmptyDir` handoff passed its file-mode and content checks.
-- `identitySettings.lifecycle: None` is accepted for this pattern only if the main container reports that
-  `IDENTITY_ENDPOINT` and `IDENTITY_HEADER` are absent.
+- `identitySettings.lifecycle: None` is accepted for this pattern only if the non-root main process reports that
+  `IDENTITY_ENDPOINT` and `IDENTITY_HEADER` are absent and an IMDS token request fails.
 - The scale-only secret is verified in scale-rule auth and absent from both containers' environment declarations and
   runtime checks. This does not validate scaler polling or GitHub App authentication.
 - The synthetic canary is not evidence that the real GitHub App key works. Production App authentication remains
   unverified until tested through the protected platform path.
-- Deleting the spike resource group does not purge the Key Vault soft-delete tombstone; no vault purge is attempted.
+- Key Vault tombstone status was not independently verified after cleanup; no vault purge is attempted.
 
 ## Status
 

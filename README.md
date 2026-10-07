@@ -24,16 +24,17 @@ Both were written while evaluating `apex-vnext` as the first consumer.
 
 ## Local validation
 
-Install Node.js/npm and the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli). Then run:
+Install Node.js/npm, the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), PowerShell 7, and Python 3.
+Then run:
 
 ```powershell
 npm ci
 npm run validate
 ```
 
-`npm run validate` builds and lints the Bicep scaffold and checks all Markdown with the repository's
-`.markdownlint-cli2.jsonc` configuration. The Bicep entrypoints are intentionally empty until their infrastructure
-issues are implemented.
+`npm run validate` builds and lints the Bicep scaffold, compiles the issue-9 spike templates, runs its offline
+PowerShell/Python unit tests, and checks all Markdown with the repository's `.markdownlint-cli2.jsonc` configuration.
+The production Bicep entrypoints are intentionally empty until their infrastructure issues are implemented.
 
 ## At a glance
 

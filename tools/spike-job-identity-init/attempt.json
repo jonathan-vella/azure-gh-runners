@@ -25,7 +25,8 @@
     "spikeResourceGroupExists": false,
     "acaManagedResourceGroupExists": false,
     "resourcesRemainingAtLastCheck": [],
-    "keyVaultPurgeRequested": false
+    "keyVaultPurgeRequested": false,
+    "keyVaultTombstoneStatus": "not_independently_verified"
   },
   "notes": [
     "No runtime acceptance criterion is claimed as demonstrated.",

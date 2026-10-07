@@ -12,6 +12,16 @@ var vaultName = 'ghr9kv${suffix}'
 var environmentName = 'ghr9-env'
 var identityName = 'ghr9-job-identity'
 var tags = {
+  application: 'ghrunners'
+  environment: 'spike'
+  workload: 'gh-runners'
+  owner: 'jonathan-vella'
+  costcenter: 'platform-engineering'
+  'tech-contact': 'jonathan-vella'
+  'technical-contact': 'jonathan-vella'
+  sla: 'development'
+  'backup-policy': 'none'
+  'maint-window': 'none'
   project: 'azure-gh-runners'
   issue: '9'
   purpose: 'init-container-secret-isolation-spike'
@@ -61,9 +71,110 @@ resource nat 'Microsoft.Network/natGateways@2026-05-01' = {
   }
 }
 
+resource acaNsg 'Microsoft.Network/networkSecurityGroups@2026-05-01' = {
+  name: 'ghr9-aca-nsg'
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'allow-aca-platform-health-probes'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '30000-32767'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          destinationAddressPrefix: '*'
+        }
+      }
+      {
+        name: 'allow-aca-platform-egress'
+        properties: {
+          priority: 100
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRanges: [
+            '80'
+            '443'
+            '445'
+          ]
+          sourceAddressPrefix: '*'
+          destinationAddressPrefix: 'AzureCloud'
+        }
+      }
+      {
+        name: 'allow-private-endpoint-egress'
+        properties: {
+          priority: 110
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '443'
+          sourceAddressPrefix: '10.82.0.0/27'
+          destinationAddressPrefix: '10.82.0.32/27'
+        }
+      }
+      {
+        name: 'allow-azure-dns'
+        properties: {
+          priority: 120
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '53'
+          sourceAddressPrefix: '*'
+          destinationAddressPrefix: '168.63.129.16/32'
+        }
+      }
+      {
+        name: 'deny-rfc1918-lateral-ingress'
+        properties: {
+          priority: 300
+          direction: 'Inbound'
+          access: 'Deny'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefixes: [
+            '10.0.0.0/8'
+            '172.16.0.0/12'
+            '192.168.0.0/16'
+          ]
+          destinationAddressPrefix: '*'
+        }
+      }
+      {
+        name: 'deny-rfc1918-lateral-egress'
+        properties: {
+          priority: 300
+          direction: 'Outbound'
+          access: 'Deny'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: '*'
+          destinationAddressPrefixes: [
+            '10.0.0.0/8'
+            '172.16.0.0/12'
+            '192.168.0.0/16'
+          ]
+        }
+      }
+    ]
+  }
+}
+
 resource acaSubnet 'Microsoft.Network/virtualNetworks/subnets@2026-05-01' = {
   parent: vnet
   name: 'aca'
+  tags: tags
   properties: {
     addressPrefix: '10.82.0.0/27'
     delegations: [
@@ -77,12 +188,16 @@ resource acaSubnet 'Microsoft.Network/virtualNetworks/subnets@2026-05-01' = {
     natGateway: {
       id: nat.id
     }
+    networkSecurityGroup: {
+      id: acaNsg.id
+    }
   }
 }
 
 resource privateEndpointSubnet 'Microsoft.Network/virtualNetworks/subnets@2026-05-01' = {
   parent: vnet
   name: 'private-endpoints'
+  tags: tags
   properties: {
     addressPrefix: '10.82.0.32/27'
     privateEndpointNetworkPolicies: 'Disabled'
@@ -104,7 +219,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2025-11-01' = {
   }
 }
 
-resource vault 'Microsoft.KeyVault/vaults@2025-05-01' = {
+resource vault 'Microsoft.KeyVault/vaults@2026-05-15' = {
   name: vaultName
   location: location
   tags: tags
@@ -125,9 +240,10 @@ resource vault 'Microsoft.KeyVault/vaults@2025-05-01' = {
   }
 }
 
-resource syntheticAppSecret 'Microsoft.KeyVault/vaults/secrets@2025-05-01' = {
+resource syntheticAppSecret 'Microsoft.KeyVault/vaults/secrets@2026-05-15' = {
   parent: vault
   name: 'synthetic-app-key'
+  tags: tags
   properties: {
     value: syntheticAppKey
     attributes: {
@@ -152,6 +268,7 @@ resource acrDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-
   parent: acrPrivateDns
   name: 'ghr9-vnet-link'
   location: 'global'
+  tags: tags
   properties: {
     registrationEnabled: false
     virtualNetwork: {
@@ -164,6 +281,7 @@ resource vaultDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@202
   parent: vaultPrivateDns
   name: 'ghr9-vnet-link'
   location: 'global'
+  tags: tags
   properties: {
     registrationEnabled: false
     virtualNetwork: {
