@@ -23,7 +23,7 @@ $appDisplayName = "sp-ghrunners-spike10-$RunSuffix"
 $ficName = 'spike10-platform-prod'
 $ficIssuer = 'https://token.actions.githubusercontent.com'
 $ficSubjectPrefix = 'repo:jonathan-vella@25802147/azure-gh-runners@1408821667'
-$ficSubject = "$ficSubjectPrefix:environment:platform-prod"
+$ficSubject = 'repo:jonathan-vella@25802147/azure-gh-runners@1408821667:environment:platform-prod'
 $ficAudience = 'api://AzureADTokenExchange'
 $expectedResourceGroup = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup"
 
@@ -96,10 +96,22 @@ if ($Action -eq 'Prepare') {
             description = "Issue 10 temporary deployment identity for $RunSuffix"
             audiences = @($ficAudience)
         } | ConvertTo-Json -Compress
-        Invoke-AzJson -Arguments @(
-            'ad', 'app', 'federated-credential', 'create',
-            '--id', $app.appId, '--parameters', $federatedCredential, '--output', 'json'
-        ) | Out-Null
+        $federatedCredentialPath = [System.IO.Path]::GetTempFileName()
+        try {
+            [System.IO.File]::WriteAllText(
+                $federatedCredentialPath,
+                $federatedCredential,
+                [System.Text.UTF8Encoding]::new($false)
+            )
+            Invoke-AzJson -Arguments @(
+                'ad', 'app', 'federated-credential', 'create',
+                '--id', $app.appId, '--parameters', "@$federatedCredentialPath", '--output', 'json'
+            ) | Out-Null
+        } finally {
+            if (Test-Path -LiteralPath $federatedCredentialPath) {
+                Remove-Item -LiteralPath $federatedCredentialPath -Force
+            }
+        }
         $createdCredential = Invoke-AzJson -Arguments @(
             'ad', 'app', 'federated-credential', 'list', '--id', $app.appId, '--output', 'json'
         )

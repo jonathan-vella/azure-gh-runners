@@ -15,15 +15,11 @@ the `shared` subscription, `swedencentral`, exact spike-10 resource group, and p
 Do not use a name-only subject or the subject from a different workflow. The verified repository customization is
 `use_default: true`, `use_immutable_subject: true`, with prefix
 `repo:jonathan-vella@25802147/azure-gh-runners@1408821667`; the GitHub environment suffix remains the standard
-`:environment:platform-prod`. After the reviewed scaffold is on `main`, manually dispatch
-**Spike 10 - inspect OIDC subject claims**. Its protected
-`platform-prod` environment requires the authorized human reviewer; it requests an OIDC token only for audience
-`api://AzureADTokenExchange`, prints only allowlisted claims, and never prints or exchanges the JWT. Copy the exact
-`sub` claim from that run. The diagnostic asserts the repository and numeric owner/repository IDs match this project
-and that the run is on `main`, and checks the exact immutable subject; inspect the other reported
-environment/ref/workflow claims before proceeding. The preparation script reads the live GitHub OIDC customization metadata with `gh` and
-stops if the template differs from the verified values. It also reads the created FIC back from Entra and checks the
-exact subject/audience before assigning any role.
+`:environment:platform-prod`. This verified immutable-ID subject is sufficient for the temporary FIC; a separate
+claims-diagnostic workflow is not a prerequisite. The preparation script reads the live GitHub OIDC customization
+metadata with `gh` and stops if the template differs from the verified values. It also reads the created FIC back
+from Entra and checks the exact subject/audience before assigning any role. The optional gated diagnostic can
+corroborate runtime claims without printing the JWT, but must not be used to infer a different subject.
 
 Choose a unique lowercase alphanumeric suffix, 4–16 characters. This creates a credential-free workload identity,
 with one FIC using the exact immutable-ID subject and exactly two RBAC assignments: Contributor on
@@ -66,9 +62,8 @@ GH App secrets are still read only after the protected environment's authorized 
    dedicated NAT Gateway, have an NSG with no Internet/wildcard inbound allow, and have only the expected NAT public
    IP. ACR and Key Vault must be in the spike-10 resource group with public access disabled. All images must use
    immutable digests.
-2. Land the reviewed scaffold on `main` without closing #10. Run the protected OIDC-claims diagnostic and prepare
-   the temporary deployment identity using the verified immutable-ID subject (the diagnostic corroborates its
-   platform-prod context). Add the two trusted files under
+2. Land the reviewed scaffold on `main` without closing #10. Prepare the temporary deployment identity using the
+   verified immutable-ID subject after the script validates the live repository template. Add the two trusted files under
    `spikes/jit-labels/ghr-smoke/.github/workflows/` to `ghr-smoke` through its separate reviewed change. The files are
    dispatch-only and the runner image's job-start hook additionally permits only those two workflows, the exact
    `ghr-smoke` repository, `workflow_dispatch`, and `refs/heads/main`.

@@ -117,6 +117,51 @@ test("deletes the exact runner registration and removes partial handoff when lab
   }
 });
 
+test("attempts runner deregistration even when local handoff cleanup fails", async () => {
+  const directory = await tempDirectory();
+  const { fetchImpl, requests } = successfulApi();
+  const removedPaths = [];
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    let chownCalls = 0;
+    await assert.rejects(
+      initializeJitRunner({
+        env,
+        fetchImpl,
+        sharedDirectory: directory,
+        isRoot: () => true,
+        fileOps: {
+          chmod: async (filePath, mode) => (await import("node:fs/promises")).chmod(filePath, mode),
+          chown: async () => {
+            chownCalls += 1;
+            if (chownCalls === 2) throw new Error("mock ownership failure");
+          },
+          mkdir: async (...args) => (await import("node:fs/promises")).mkdir(...args),
+          rm: async (filePath, options) => {
+            removedPaths.push(path.basename(filePath));
+            if (path.basename(filePath) === "encoded-jit-config") {
+              throw new Error("must not expose private runner configuration");
+            }
+            return (await import("node:fs/promises")).rm(filePath, options);
+          },
+          writeFile: async (...args) => (await import("node:fs/promises")).writeFile(...args),
+        },
+      }),
+      (error) => {
+        assert.match(error.message, /cleanup also failed for: JIT config file/);
+        assert.ok(!error.message.includes("private runner configuration"));
+        return true;
+      },
+    );
+    assert.deepEqual(removedPaths.sort(), ["encoded-jit-config", "runner-metadata.json"]);
+    assert.ok(requests.some(({ options, url }) => options.method === "DELETE" && url.endsWith("/777")));
+  } finally {
+    console.log = originalLog;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("retries bounded runner lookup on a transient server failure before cleaning registration", async () => {
   const directory = await tempDirectory();
   let lookupCount = 0;

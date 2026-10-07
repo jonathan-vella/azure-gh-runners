@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { readAllowlistedClaims } from "../oidc-claims.mjs";
+
+const spikeIdentityScriptUrl = new URL("../Prepare-Cleanup-SpikeIdentity.ps1", import.meta.url);
+const expectedFederatedSubject =
+  "repo:jonathan-vella@25802147/azure-gh-runners@1408821667:environment:platform-prod";
 
 const expectedClaims = {
   iss: "https://token.actions.githubusercontent.com",
@@ -24,6 +29,11 @@ function tokenFor(claims) {
 
 test("accepts the exact immutable repository and environment subject", () => {
   assert.deepEqual(readAllowlistedClaims(tokenFor(expectedClaims)), expectedClaims);
+});
+
+test("temporary Entra identity uses the exact immutable platform-prod subject", async () => {
+  const script = await readFile(spikeIdentityScriptUrl, "utf8");
+  assert.ok(script.includes(`$ficSubject = '${expectedFederatedSubject}'`));
 });
 
 test("rejects a name-only or otherwise unexpected subject", () => {

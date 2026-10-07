@@ -31,9 +31,8 @@ and exact cleanup procedure.
    the same spike resource group. Keep all PaaS public access disabled. Do not reuse another spike's resources.
 3. Add the two workflow files under `spikes/jit-labels/ghr-smoke/.github/workflows/` to `ghr-smoke` through its
    separate reviewed change. They are dispatch-only, nonce-correlated, and contain no secrets or third-party actions.
-4. Have a maintainer review and land the scaffolding on `main`. Dispatch the gated OIDC-claims diagnostic and prepare
-   a temporary deployment identity using the verified immutable-ID `platform-prod` subject (the diagnostic
-   corroborates its context), with the scoped role grants in
+4. Have a maintainer review and land the scaffolding on `main`. Prepare a temporary deployment identity using the
+   verified immutable-ID `platform-prod` subject, with the scoped role grants in
    [OPERATIONS.md](OPERATIONS.md). Then manually dispatch
    **Spike 10 - Deploy isolated JIT label job** from `main`, provide its client ID, resource IDs, versionless secret
    URL and image digests, set capacity confirmation only after verifying `swedencentral` capacity, and obtain the

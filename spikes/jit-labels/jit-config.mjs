@@ -209,16 +209,23 @@ export async function initializeJitRunner({
 
     console.log(JSON.stringify({ event: "jit-runner-created", name: runnerName, labels }));
   } catch (error) {
-    await Promise.all([
-      fileOps.rm(configPath, { force: true }),
-      fileOps.rm(metadataPath, { force: true }),
-    ]);
+    const cleanupFailures = [];
+    for (const filePath of [configPath, metadataPath]) {
+      try {
+        await fileOps.rm(filePath, { force: true });
+      } catch {
+        cleanupFailures.push(filePath === configPath ? "JIT config file" : "runner metadata file");
+      }
+    }
     if (installationToken) {
       try {
         await removeRunner({ runnerId, runnerName, runnerPath, token: installationToken, fetchImpl });
       } catch {
-        throw new Error("JIT initialization failed and runner-registration cleanup also failed.");
+        cleanupFailures.push("GitHub runner registration");
       }
+    }
+    if (cleanupFailures.length > 0) {
+      throw new Error(`JIT initialization failed; cleanup also failed for: ${cleanupFailures.join(", ")}.`);
     }
     throw error;
   }
