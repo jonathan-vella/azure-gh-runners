@@ -1,0 +1,24 @@
+{
+  "name": "example",
+  "repo": "jonathan-vella/example",
+  "visibility": "public",
+  "labels": [
+    "ghr-example"
+  ],
+  "cpu": 0.5,
+  "memory": "1Gi",
+  "maxExecutions": 1,
+  "replicaTimeoutSeconds": 3600,
+  "allowedEvents": [
+    "workflow_dispatch",
+    "schedule",
+    "push"
+  ],
+  "allowedRefs": [
+    "refs/heads/main"
+  ],
+  "allowedWorkflows": [
+    "jonathan-vella/example/.github/workflows/private-ci.yml@refs/heads/main"
+  ],
+  "notes": "Example only; rename and verify the repository default branch before onboarding."
+}
