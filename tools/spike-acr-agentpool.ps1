@@ -141,7 +141,7 @@ if ($Action -eq 'Setup') {
         }
 
         $assignments = @(Get-AzJson @('role', 'assignment', 'list', '--subscription', $subscription,
-            '--scope', $groupScope, '--all'))
+            '--assignee-object-id', $sp.id, '--all'))
         $appAssignments = @($assignments | Where-Object principalId -eq $sp.id)
         $validAssignments = @(
             @{ role = 'Contributor'; scope = $groupScope },
@@ -183,7 +183,8 @@ if ($Action -eq 'Setup') {
     Write-Output "Client ID (workflow_dispatch input): $($app.appId)"
     Write-Output "FIC subject: repo:${repository}:ref:refs/heads/${branch}"
     Write-Output 'The temporary app has no password or certificate credential.'
-    Write-Output 'After the workflow finishes, run this script with -Action Cleanup -ClientId <client-id>.'
+    Write-Output "If the workflow fails or times out, run: .\tools\spike-acr-agentpool.ps1 -Action Cleanup -ClientId $($app.appId)"
+    Write-Output 'The same cleanup command is required after every workflow outcome.'
     return
 }
 

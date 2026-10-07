@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: spike6-rg-ghrunners-spike6-swc
+  cancel-in-progress: false
+
 jobs:
   private-agent-pool-build:
     runs-on: ubuntu-24.04
@@ -63,8 +67,19 @@ jobs:
           jq -e --arg sub "$AZURE_SUBSCRIPTION_ID" --arg tenant "$AZURE_TENANT_ID" \
             '.id == $sub and .tenantId == $tenant and .name == "shared"' \
             <<<"$account" >/dev/null
+          group_exists=$(az group exists --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --name "$RESOURCE_GROUP" --output tsv)
+          if [[ "$group_exists" != true ]]; then
+            echo "Refusing duplicate or stale dispatch: the pre-created spike resource group is absent."
+            exit 1
+          fi
           group=$(az group show --subscription "$AZURE_SUBSCRIPTION_ID" \
             --name "$RESOURCE_GROUP" --query '{location:location,tags:tags}' --output json)
+          prior_run=$(jq -r '.tags.spike6RunId // empty' <<<"$group")
+          if [[ -n "$prior_run" ]]; then
+            echo "Refusing duplicate spike run: resource group is marked by workflow run ${prior_run}."
+            exit 1
+          fi
           jq -e --arg location "$AZURE_LOCATION" \
             '.location == $location and .tags.environment == "spike" and .tags.application == "ghrunners"' \
             <<<"$group" >/dev/null
@@ -75,6 +90,21 @@ jobs:
           jq -e --arg location "$AZURE_LOCATION" \
             '.location == $location and .sku == "Premium" and .publicNetworkAccess == "Disabled" and .adminUserEnabled == false' \
             <<<"$registry" >/dev/null
+          echo "The exact spike scope is valid and has no prior workflow-run marker."
+
+      - name: Claim the spike resource group for this run
+        shell: bash
+        run: |
+          set -euo pipefail
+          az group update --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --name "$RESOURCE_GROUP" --set "tags.spike6RunId=$GITHUB_RUN_ID" \
+            --only-show-errors --output none
+          run_id=$(az group show --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --name "$RESOURCE_GROUP" --query tags.spike6RunId --output tsv)
+          [[ "$run_id" == "$GITHUB_RUN_ID" ]] || {
+            echo "Could not claim the spike resource group for this workflow run."
+            exit 1
+          }
 
       - name: Create isolated pool network, NAT, private endpoint, and DNS
         shell: bash
@@ -138,6 +168,21 @@ jobs:
             --priority 170 --direction Outbound --access Allow --protocol Tcp \
             --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
             --destination-address-prefixes Internet --destination-port-ranges 443 --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name DenyRfc1918_10 \
+            --priority 180 --direction Outbound --access Deny --protocol '*' \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes 10.0.0.0/8 --destination-port-ranges '*' --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name DenyRfc1918_172 \
+            --priority 181 --direction Outbound --access Deny --protocol '*' \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes 172.16.0.0/12 --destination-port-ranges '*' --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name DenyRfc1918_192 \
+            --priority 182 --direction Outbound --access Deny --protocol '*' \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes 192.168.0.0/16 --destination-port-ranges '*' --output none
           az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
             --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name DenyOtherVnet \
             --priority 2000 --direction Outbound --access Deny --protocol '*' \
@@ -282,17 +327,38 @@ jobs:
         shell: bash
         run: |
           set +e
+          log_file="$RUNNER_TEMP/source-context.log"
+          umask 077
+          trap 'rm -f -- "$log_file"' EXIT
           timeout 480s az acr build --subscription "$AZURE_SUBSCRIPTION_ID" \
             --registry "$REGISTRY_NAME" --agent-pool pools1spike6 \
             --file Dockerfile --image "spike/source-${GITHUB_SHA}" --timeout 360 \
-            image/spike >"$RUNNER_TEMP/source-context.log" 2>&1
+            image/spike >"$log_file" 2>&1
           result=$?
-          run_id=$(grep -Eo 'Run ID: [A-Za-z0-9]+' "$RUNNER_TEMP/source-context.log" | tail -n 1 | awk '{print $3}')
-          echo "Source-context exit code: ${result}; run ID: ${run_id:-not-returned}"
-          grep -Ei 'failed|succeeded|error|ghcr\.io|run id' "$RUNNER_TEMP/source-context.log" \
-            | tail -n 20 | sed -E 's/((token|password|sig|signature)=)[^&[:space:]]+/\1[REDACTED]/Ig' || true
+          run_id=$(sed -nE 's/.*Run ID: ([A-Za-z0-9-]+).*/\1/p' "$log_file" | tail -n 1)
+          if [[ "$result" == 0 ]]; then
+            diagnostic=success
+          elif [[ "$result" == 124 || "$result" == 137 ]]; then
+            diagnostic=timeout
+          elif grep -Eiq 'quota|capacity|too many requests' "$log_file"; then
+            diagnostic=quota_or_capacity
+          elif grep -Eiq 'unauthorized|forbidden|authentication|authorization|permission denied' "$log_file"; then
+            diagnostic=authorization
+          elif grep -Eiq 'upload.*(fail|error)|source context.*(fail|error)' "$log_file"; then
+            diagnostic=source_context_upload
+          elif grep -Eiq 'network|connection|resolve|ghcr\.io|registry.*(fail|error)' "$log_file"; then
+            diagnostic=network_or_registry
+          elif grep -Eiq 'failed|error' "$log_file"; then
+            diagnostic=task_or_cli_failure
+          else
+            diagnostic=unclassified_failure
+          fi
+          rm -f -- "$log_file"
+          trap - EXIT
+          echo "Source-context exit code: ${result}; run ID: ${run_id:-not-returned}; diagnostic: ${diagnostic}"
           echo "exit_code=${result}" >> "$GITHUB_OUTPUT"
           echo "run_id=${run_id:-not-returned}" >> "$GITHUB_OUTPUT"
+          echo "diagnostic=${diagnostic}" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Build from the pinned public Git commit
@@ -300,19 +366,40 @@ jobs:
         shell: bash
         run: |
           set +e
+          log_file="$RUNNER_TEMP/git-context.log"
+          umask 077
+          trap 'rm -f -- "$log_file"' EXIT
           timeout 480s az acr build --subscription "$AZURE_SUBSCRIPTION_ID" \
             --registry "$REGISTRY_NAME" --agent-pool pools1spike6 \
             --file image/spike/Dockerfile --image "spike/git-${GITHUB_SHA}" \
             --timeout 360 \
             "https://github.com/${GITHUB_REPOSITORY}.git#${GITHUB_SHA}" \
-            >"$RUNNER_TEMP/git-context.log" 2>&1
+            >"$log_file" 2>&1
           result=$?
-          run_id=$(grep -Eo 'Run ID: [A-Za-z0-9]+' "$RUNNER_TEMP/git-context.log" | tail -n 1 | awk '{print $3}')
-          echo "Pinned Git-context exit code: ${result}; run ID: ${run_id:-not-returned}"
-          grep -Ei 'failed|succeeded|error|ghcr\.io|run id' "$RUNNER_TEMP/git-context.log" \
-            | tail -n 20 | sed -E 's/((token|password|sig|signature)=)[^&[:space:]]+/\1[REDACTED]/Ig' || true
+          run_id=$(sed -nE 's/.*Run ID: ([A-Za-z0-9-]+).*/\1/p' "$log_file" | tail -n 1)
+          if [[ "$result" == 0 ]]; then
+            diagnostic=success
+          elif [[ "$result" == 124 || "$result" == 137 ]]; then
+            diagnostic=timeout
+          elif grep -Eiq 'quota|capacity|too many requests' "$log_file"; then
+            diagnostic=quota_or_capacity
+          elif grep -Eiq 'unauthorized|forbidden|authentication|authorization|permission denied' "$log_file"; then
+            diagnostic=authorization
+          elif grep -Eiq 'git context|git fetch|clone.*(fail|error)' "$log_file"; then
+            diagnostic=git_context_fetch
+          elif grep -Eiq 'network|connection|resolve|ghcr\.io|registry.*(fail|error)' "$log_file"; then
+            diagnostic=network_or_registry
+          elif grep -Eiq 'failed|error' "$log_file"; then
+            diagnostic=task_or_cli_failure
+          else
+            diagnostic=unclassified_failure
+          fi
+          rm -f -- "$log_file"
+          trap - EXIT
+          echo "Pinned Git-context exit code: ${result}; run ID: ${run_id:-not-returned}; diagnostic: ${diagnostic}"
           echo "exit_code=${result}" >> "$GITHUB_OUTPUT"
           echo "run_id=${run_id:-not-returned}" >> "$GITHUB_OUTPUT"
+          echo "diagnostic=${diagnostic}" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Record evidence and require both build outcomes
@@ -324,8 +411,10 @@ jobs:
           PUBLIC_STATUS: ${{ steps.public-probe.outputs.status }}
           SOURCE_EXIT: ${{ steps.source-context.outputs.exit_code }}
           SOURCE_RUN: ${{ steps.source-context.outputs.run_id }}
+          SOURCE_DIAGNOSTIC: ${{ steps.source-context.outputs.diagnostic }}
           GIT_EXIT: ${{ steps.git-context.outputs.exit_code }}
           GIT_RUN: ${{ steps.git-context.outputs.run_id }}
+          GIT_DIAGNOSTIC: ${{ steps.git-context.outputs.diagnostic }}
         run: |
           {
             echo "## Private ACR agent-pool spike"
@@ -337,11 +426,12 @@ jobs:
             echo "| S1 pool | \`${S1_STATE:-not-attempted}\` |"
             echo "| S2 pool | \`${S2_STATE:-not-attempted}\` |"
             echo "| Public ACR endpoint | \`${PUBLIC_STATUS:-not-attempted}\` |"
-            echo "| GitHub-hosted source-context build | exit \`${SOURCE_EXIT:-not-attempted}\`, run \`${SOURCE_RUN:-none}\` |"
-            echo "| Pinned Git-context build | exit \`${GIT_EXIT:-not-attempted}\`, run \`${GIT_RUN:-none}\` |"
+            echo "| GitHub-hosted source-context build | exit \`${SOURCE_EXIT:-not-attempted}\`, run \`${SOURCE_RUN:-none}\`, diagnostic \`${SOURCE_DIAGNOSTIC:-not-attempted}\` |"
+            echo "| Pinned Git-context build | exit \`${GIT_EXIT:-not-attempted}\`, run \`${GIT_RUN:-none}\`, diagnostic \`${GIT_DIAGNOSTIC:-not-attempted}\` |"
             echo
             echo "The Dockerfile pins the official actions-runner base image by digest; a successful task therefore demonstrates its GHCR pull."
-            echo "A failed or unattempted check is not evidence of success. Inspect the sanitized task output above."
+            echo "Raw task logs are not emitted or uploaded and are removed from the ephemeral runner after classification."
+            echo "A failed or unattempted check is not evidence of success."
           } >> "$GITHUB_STEP_SUMMARY"
           [[ "${S1_STATE:-}" == Succeeded ]] || exit 1
           [[ "${S2_STATE:-}" == Succeeded ]] || exit 1

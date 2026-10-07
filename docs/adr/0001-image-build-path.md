@@ -40,15 +40,21 @@ secret. Its `Contributor` assignment is limited to the explicitly named, tagged 
 - After this workflow is merged to `main`, dispatch `.github/workflows/spike-acr-agentpool.yml` on `main` with all
   three required inputs: `client_id`, `resource_group` (`rg-ghrunners-spike6-swc`), and `registry_name`
   (`ghrunners6jv20261007`).
-- The workflow asserts subscription, tenant, region, ownership tags, Premium SKU, disabled public access, and
-  disabled admin access before testing. It creates the VNet agent pool and ACR private endpoint, routes allowed
-  outbound traffic through the NAT Gateway, denies inbound access and unrelated lateral/Internet egress, bounds the
-  pool/build/cleanup waits, and deletes/verifies the exact spike resource group in an `always()` cleanup step.
-- The temporary Entra app cannot safely delete itself with these least-privilege role assignments. After the workflow
-  completes (including a failed run), run
-  `tools/spike-acr-agentpool.ps1 -Action Cleanup -ClientId <client-id>` from the operator session. That script
-  verifies the group is gone, removes the temporary service principal and app, and asserts both are absent. If Azure
-  login never succeeds, this explicit cleanup remains available to delete the tagged resource group.
+- The workflow serializes runs against the fixed spike resource group without canceling a resource-owning run. It
+  claims the group with its workflow run ID and refuses a group carrying a prior run marker. It asserts subscription,
+  tenant, region, ownership tags, Premium SKU, disabled public access, and disabled admin access before testing.
+  It creates the VNet agent pool and ACR private endpoint, routes allowed outbound traffic through the NAT Gateway,
+  denies inbound access and RFC1918 lateral/Internet egress except for explicitly allowed platform dependencies,
+  bounds the pool/build/cleanup waits, and deletes/verifies the exact spike resource group in an `always()` cleanup
+  step.
+- The temporary Entra app cannot safely delete itself with these least-privilege role assignments. After every
+  workflow outcome, including timeout or failure, run this exact external cleanup command from the operator session:
+  `tools/spike-acr-agentpool.ps1 -Action Cleanup -ClientId <client-id>`. This command deletes and verifies the exact
+  tagged resource group if it remains, removes the temporary service principal and app, and asserts all are absent.
+  If Azure login never succeeds, the same cleanup command remains available. Setup prints the command with the
+  actual client ID.
+- Task logs are captured only in the ephemeral GitHub-hosted runner's temporary directory, reduced to the exit code,
+  run ID, and fixed diagnostic classification, then deleted. They are not printed or uploaded as artifacts.
 - Do not choose ACR Tasks or the documented fallback until the GH-hosted run URLs, ACR task run IDs/statuses,
   public-endpoint probe, pool states, and cleanup assertions have been reviewed and added here.
 
