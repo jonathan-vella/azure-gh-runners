@@ -23,7 +23,7 @@ type workerPolicy struct {
 // The returned bytes belong only in the ARM extension's protectedSettings.
 // Never serialize them into a manifest, trace, public settings or CLI arguments.
 func workerProtectedSettings(ctx context.Context, api scaleSetAPI, scaleSetID int, vmName string, policy workerPolicy) ([]byte, int, error) {
-	if scaleSetID <= 0 || !regexp.MustCompile(`^vm-ghr-spike60-[a-f0-9]{32}-[12]$`).MatchString(vmName) ||
+	if scaleSetID <= 0 || !regexp.MustCompile(`^vm-ghr-spike60-[a-f0-9]{25}-1$`).MatchString(vmName) ||
 		policy.Repository != "jonathan-vella/ghr-smoke" || policy.Visibility != "public" ||
 		len(policy.AllowedRefs) != 1 || policy.AllowedRefs[0] != "refs/heads/main" ||
 		len(policy.AllowedEvents) != 1 || policy.AllowedEvents[0] != "workflow_dispatch" ||
@@ -62,6 +62,16 @@ case "$0" in
   /var/lib/waagent/custom-script/download/*/script.sh) rm -f -- "$0" ;;
   *) echo 'unexpected_cse_script_path' >&2; exit 1 ;;
 esac
+ready=false
+for ((attempt=0; attempt<180; attempt++)); do
+  if [[ -f /run/ghr-vmss/worker-ready && $(stat -c '%%u:%%a' /run/ghr-vmss/worker-ready) == 0:444 ]]; then
+    ready=true
+    break
+  fi
+  sleep 5
+done
+[[ $ready == true ]]
+chmod -R go-rwx /var/lib/waagent
 for file in /opt/ghr-vmss/run-one-job.sh /opt/runner-image/pre-job-policy.sh /opt/runner-image/pre-job-policy.py; do
   [[ $(stat -c '%%u:%%a' "$file") == 0:555 ]]
 done
@@ -70,7 +80,7 @@ printf '%%s\n' %s | /usr/sbin/runuser --user runner -- /usr/bin/env -i \
   CONSUMER_POLICY_JSON=%s ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/runner-image/pre-job-policy.sh \
   AZURE_CORE_COLLECT_TELEMETRY=false AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no \
   AZURE_BICEP_USE_BINARY_FROM_PATH=true POWERSHELL_TELEMETRY_OPTOUT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 \
-  /usr/bin/timeout --signal=TERM --kill-after=10s 900s /bin/bash /opt/ghr-vmss/run-one-job.sh
+  /usr/bin/timeout --signal=TERM --kill-after=10s 900s /bin/bash /opt/ghr-vmss/run-one-job.sh >/dev/null 2>&1
 `, shellQuote(jit.EncodedJITConfig), shellQuote(string(policyJSON)))
 	encodedScript := base64.StdEncoding.EncodeToString([]byte(script))
 	if len(encodedScript) > 262144 {

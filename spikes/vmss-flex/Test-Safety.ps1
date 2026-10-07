@@ -14,6 +14,10 @@ $path = Join-Path $directory 'manifest.json'
 try {
     $manifest = New-SpikeManifest -Head ('a' * 40)
     Assert-SpikeManifest $manifest
+    $id = $manifest.runId
+    $manifest.runId = 'invalid'
+    Reject { Assert-SpikeManifest $manifest } 'Invalid run nonce accepted with an integer attempt counter.'
+    $manifest.runId = $id
     Assert ($manifest.envelopeUsd -eq ($manifest.hourlyCeilingUsd * 4 + $manifest.fixedReserveUsd)) 'Budget envelope math failed.'
     $manifest.extraSecret = 'not-a-real-secret'
     Reject { Assert-SpikeManifest $manifest } 'Unexpected fields accepted.'
@@ -27,7 +31,8 @@ try {
     Reject { Start-SpikeClock -Manifest $manifest -Path $path -Now $start } 'Run clock reset accepted.'
     Write-SpikeManifest -Manifest $manifest -Path $path
     Reserve-SpikeAttempt -Manifest $manifest -Path $path -Seconds 60 -Workers 2 -Now $start
-    $loaded = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
+    $loaded = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable -DateKind String
+    Assert-SpikeManifest $loaded
     Assert ($loaded.attempts -eq 1) 'Attempt not durably reserved.'
     Reserve-SpikeAttempt -Manifest $manifest -Path $path -Seconds 60 -Workers 1 -Now $start
     Reject { Reserve-SpikeAttempt -Manifest $manifest -Path $path -Seconds 60 -Workers 1 -Now $start } 'Third attempt accepted.'

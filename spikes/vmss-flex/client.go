@@ -32,7 +32,7 @@ func newClient(installationID int64, privateKey string) (*scaleset.Client, error
 		GitHubAppAuth: scaleset.GitHubAppAuth{
 			ClientID: appClientID, InstallationID: installationID, PrivateKey: privateKey,
 		},
-		SystemInfo: scaleset.SystemInfo{System: "azure-gh-runners-spike60", Subsystem: "compatibility-probe"},
+		SystemInfo: scaleset.SystemInfo{System: "azure-gh-runners-spike60", Subsystem: "bounded-vmss-spike"},
 	}, scaleset.WithLogger(slog.New(slog.DiscardHandler)),
 		scaleset.WithTimeout(20*time.Second), scaleset.WithRetryMax(-1))
 	if err != nil {

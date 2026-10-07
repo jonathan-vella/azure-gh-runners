@@ -37,8 +37,8 @@ groupadd --gid "$gid" runner
 useradd --uid "$uid" --gid "$gid" --groups users --create-home --shell /bin/bash runner
 passwd --lock runner >/dev/null
 
-# Git is the only manifest package differing from the selected Azure VHD manifest.
-# The PPA key is authenticated by its full fingerprint, never TOFU.
+# Authenticate the PPA by full fingerprint; Marketplace guests may need the
+# other inherited packages brought to the exact shared manifest versions too.
 fingerprint=$(jq -r '.gitPpaFingerprint' "$native")
 curl --fail --silent --show-error --proto '=https' --connect-timeout 20 --max-time 60 \
   "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x$fingerprint" --output "$work/git.asc"
@@ -54,9 +54,13 @@ sed -i 's|http://archive.ubuntu.com/|https://archive.ubuntu.com/|g; s|http://sec
 timeout --signal=TERM --kill-after=10s 180s apt-get -o APT::Update::Error-Mode=any \
   -o Acquire::Retries=0 -o Acquire::https::Timeout=20 update
 git_version=$(jq -r '.inherited.git.packageVersion' "$manifest")
+packages=("git-man=$git_version")
+while IFS=$'\t' read -r package version; do
+  packages+=("$package=$version")
+done < <(jq -r '.inherited[] | [.package, .packageVersion] | @tsv' "$manifest")
 DEBIAN_FRONTEND=noninteractive timeout --signal=TERM --kill-after=10s 180s \
   apt-get -o Acquire::Retries=0 -o Acquire::https::Timeout=20 --yes --no-install-recommends \
-  install "git=$git_version" "git-man=$git_version"
+  install "${packages[@]}"
 while IFS=$'\t' read -r package version; do
   [[ $(dpkg-query -W -f='${Version}' "$package") == "$version" ]]
 done < <(jq -r '.inherited[] | [.package, .packageVersion] | @tsv' "$manifest")
@@ -82,4 +86,7 @@ runuser --user runner -- env -i HOME=/home/runner \
   AZURE_CORE_COLLECT_TELEMETRY=false AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no \
   AZURE_BICEP_USE_BINARY_FROM_PATH=true POWERSHELL_TELEMETRY_OPTOUT=1 \
   DOTNET_CLI_TELEMETRY_OPTOUT=1 /bin/bash /opt/runner-image/verify-tools.sh
+install -d -o root -g root -m 0755 /run/ghr-vmss
+printf '%s\n' 'verified' > /run/ghr-vmss/worker-ready
+chmod 0444 /run/ghr-vmss/worker-ready
 printf '%s\n' 'Native toolset and root-owned policy hook verified; no JIT or job started.'

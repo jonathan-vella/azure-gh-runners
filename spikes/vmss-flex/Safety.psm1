@@ -34,7 +34,7 @@ function Assert-SpikeManifest {
             $Manifest[$key] -cne $expected[$key]) { throw 'Manifest scope or hard-limit drift.' }
     }
     if ($Manifest.runId -cnotmatch '^[a-f0-9]{32}$' -or
-        $Manifest.attempts -isnot [long] -and $Manifest.attempts -isnot [int] -or
+        ($Manifest.attempts -isnot [long] -and $Manifest.attempts -isnot [int]) -or
         $Manifest.attempts -lt 0 -or $Manifest.attempts -gt 2 -or
         $Manifest.phase -notin @('prepared', 'active', 'cleanup', 'closed') -or
         $Manifest.cleanup -notin @('not-started', 'pending', 'failed', 'absent-verified')) {
@@ -51,7 +51,7 @@ function Assert-SpikeManifest {
         if ($start.Offset -ne [timespan]::Zero -or $work -ne $start.AddHours(3) -or
             $hard -ne $start.AddHours(4)) { throw 'Manifest lifetime or cleanup reserve drift.' }
         if (($Manifest.phase -eq 'closed') -ne ($Manifest.cleanup -eq 'absent-verified') -or
-            $Manifest.phase -eq 'active' -and $Manifest.cleanup -ne 'not-started') {
+            ($Manifest.phase -eq 'active' -and $Manifest.cleanup -ne 'not-started')) {
             throw 'Manifest cleanup transition is invalid.'
         }
     }

@@ -23,9 +23,25 @@ test('native bootstrap stays bounded, reuses full verifier and never starts jobs
   assert.ok(!script.includes('\r'));
   assert.match(script, /--kill-after=10s 900s/);
   assert.match(script, /APT::Update::Error-Mode=any/);
-  assert.match(script, /install "git=\$git_version" "git-man=\$git_version"/);
+  assert.match(script, /install "\$\{packages\[@\]\}"/);
   assert.match(script, /inherited\[\]/);
   assert.match(script, /runuser --user runner -- env -i/);
   assert.match(script, /\/opt\/runner-image\/verify-tools.sh/);
   assert.doesNotMatch(script, /--jitconfig|encodedJITConfig|identity\/oauth2|role assignment/);
+  assert.match(script, /worker-ready/);
+});
+
+test('guest bootstrap bounds traffic, DNS, compiler and service without starting it', () => {
+  const script = read('guest-bootstrap.sh');
+  assert.ok(!script.includes('\r'));
+  assert.match(script, /--kill-after=10s 1200s/);
+  assert.equal((script.match(/--quota 2147483648/g) ?? []).length, 2);
+  assert.match(script, /--limit 2\/second --limit-burst 20/);
+  assert.match(script, /ip6tables -w 5 -P OUTPUT DROP/);
+  assert.match(script, /go1\.25\.3\.linux-amd64\.tar\.gz/);
+  assert.match(script, /0335f314b6e7bfe08c3d0cfaa7c19db961b7b99fb20be62b0a826c992ad14e0f/);
+  assert.match(script, /CGO_ENABLED=0/);
+  assert.match(script, /Restart=no/);
+  assert.match(script, /TimeoutStopSec=180/);
+  assert.doesNotMatch(script, /systemctl (start|enable)|GH_APP_PRIVATE_KEY|latest|generate-ssh-keys/);
 });

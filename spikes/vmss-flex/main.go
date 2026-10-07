@@ -21,15 +21,83 @@ type probeEvidence struct {
 	Result     string `json:"result"`
 }
 
-func run() probeEvidence {
+func run() (result probeEvidence) {
 	flags := flag.NewFlagSet("vmss-spike-probe", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	execute := flags.Bool("execute-on-private-controller", false, "requires separate coordinator execution direction")
 	runID := flags.String("run-id", "", "32 lowercase hexadecimal characters from the durable run manifest")
 	installationID := flags.Int64("installation-id", 0, "existing selected-repository installation ID")
 	deadline := flags.String("work-deadline", "", "UTC work deadline from the durable run manifest")
+	controllerConfigPath := flags.String("controller-config", "", "fixed private-controller configuration path")
+	cleanupOnly := flags.Bool("cleanup-on-private-controller", false, "recover only the captured owned resources")
 	if flags.Parse(os.Args[1:]) != nil || flags.NArg() != 0 {
 		return probeEvidence{Result: "invalid_flags"}
+	}
+	if *controllerConfigPath != "" {
+		if (!*execute && !*cleanupOnly) || *execute && *cleanupOnly ||
+			*controllerConfigPath != "/opt/ghr-vmss/controller.json" ||
+			runtime.GOOS != "linux" || os.Geteuid() != 1002 || !onAuthorizedController() {
+			return probeEvidence{Result: "controller_execution_gate_failed"}
+		}
+		var config controllerConfig
+		if readStrictJSON(*controllerConfigPath, &config) != nil {
+			return probeEvidence{Result: "controller_configuration_invalid"}
+		}
+		checkTime := time.Now()
+		if *cleanupOnly {
+			checkTime = config.StartedUTC
+		}
+		if config.validate(checkTime) != nil {
+			return probeEvidence{Result: "controller_configuration_invalid"}
+		}
+		lock, err := os.OpenFile("/var/lib/ghr-vmss/journal.lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
+		if err != nil {
+			return probeEvidence{Result: "controller_lock_failed"}
+		}
+		defer lock.Close()
+		if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+			return probeEvidence{Result: "controller_already_running"}
+		}
+		if !*cleanupOnly {
+			result = probeEvidence{Result: "controller_panicked"}
+			defer func() {
+				if writeJSONFile("/var/lib/ghr-vmss/outcome.json", result) != nil {
+					result = probeEvidence{Result: "controller_outcome_write_failed"}
+				}
+			}()
+		}
+		signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stopSignals()
+		stop := config.WorkDeadlineUTC
+		if *cleanupOnly {
+			stop = time.Now().Add(5 * time.Minute)
+		}
+		if config.HardDeadlineUTC.Before(stop) {
+			stop = config.HardDeadlineUTC
+		}
+		ctx, cancel := context.WithDeadline(signalCtx, stop)
+		defer cancel()
+		azure := azureHTTPClient()
+		key, err := privateAppKey(ctx, managedIdentityToken, azure, config.SecretVersion)
+		if err != nil {
+			return probeEvidence{Result: err.Error()}
+		}
+		client, err := newClient(config.InstallationID, key)
+		if err != nil {
+			return probeEvidence{Result: "client_configuration_failed"}
+		}
+		arm := &armClient{http: azure, token: managedIdentityToken}
+		if *cleanupOnly {
+			if err := controllerCleanup(ctx, config, client, arm); err != nil {
+				return probeEvidence{Result: err.Error()}
+			}
+			return probeEvidence{Result: "controller_cleanup_absence_verified"}
+		}
+		err = runController(ctx, config, client, arm)
+		if err != nil {
+			return probeEvidence{Result: err.Error()}
+		}
+		return probeEvidence{Result: "one_job_lifecycle_completed_acceptance_unverified"}
 	}
 	if !*execute || runtime.GOOS != "linux" || os.Geteuid() == 0 ||
 		!regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(*runID) || *installationID <= 0 {
@@ -131,7 +199,9 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println(string(encoded))
-	if result.Result != "repository_scale_set_probe_passed" {
+	if result.Result != "repository_scale_set_probe_passed" &&
+		result.Result != "controller_cleanup_absence_verified" &&
+		result.Result != "one_job_lifecycle_completed_acceptance_unverified" {
 		os.Exit(1)
 	}
 }

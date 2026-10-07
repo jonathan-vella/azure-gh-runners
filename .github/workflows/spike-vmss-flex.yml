@@ -1,0 +1,181 @@
+name: Spike 60 - VMSS Flex (disabled pending exact authorization)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type run-spike60-reviewed only after coordinator execution direction
+        required: true
+        type: string
+      approval_json:
+        description: Nonsecret reviewed approval/pricing/image/tool inputs from the spike runbook
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: spike60-vmss-flex
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.run_attempt == 1 &&
+      github.actor == 'jonathan-vella' &&
+      vars.GHR_SPIKE60_EXECUTION_ENABLED == 'true' &&
+      inputs.confirmation == 'run-spike60-reviewed'
+    environment: platform-prod
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      manifest: ${{ steps.envelope.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - name: Preserve the complete offline validation chain
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency restore failed.' }
+          az bicep install --version v0.48.1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned compiler unavailable.' }
+          npm run validate
+          if ($LASTEXITCODE -ne 0) { throw 'Validation failed; no clock or resources started.' }
+      - name: Start the immutable original envelope before any create
+        id: envelope
+        shell: pwsh
+        env:
+          APPROVAL_JSON: ${{ inputs.approval_json }}
+        run: |
+          Import-Module ./spikes/vmss-flex/Safety.psm1
+          Import-Module ./spikes/vmss-flex/Execution.psm1
+          $manifest = New-SpikeManifest -Head $env:GITHUB_SHA
+          $approval = $env:APPROVAL_JSON | ConvertFrom-Json -AsHashtable -DateKind String
+          Assert-SpikeExecutionApproval $approval $manifest
+          $path = Join-Path $env:RUNNER_TEMP 'vmss60-manifest.json'
+          Start-SpikeClock $manifest $path
+          $json = $manifest | ConvertTo-Json -Compress
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+          "manifest=$encoded" >> $env:GITHUB_OUTPUT
+          Write-Output $json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: spike60-original-envelope
+          path: ${{ runner.temp }}/vmss60-manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
+  executor:
+    needs: prepare
+    environment: platform-prod
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GHR_SPIKE_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Require the independently authorized supervisor to be running
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Import-Module ./tools/spikes/keda-egress/Process.psm1
+          $stop = [DateTimeOffset]::UtcNow.AddMinutes(5)
+          $gh = (Get-Command gh -CommandType Application).Source
+          do {
+            $response = Invoke-BoundedProcess -FileName $gh -Arguments @('api', "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/jobs?filter=latest") -TimeoutSeconds 20
+            if ($response.exitCode -ne 0) { throw 'Supervisor readiness read failed; no provisioning.' }
+            try { $jobs = ($response.stdout | ConvertFrom-Json).jobs } catch { throw 'Supervisor readiness metadata invalid.' }
+            $job = @($jobs | Where-Object name -CEQ 'deadline-cleanup')
+            if ($job.Count -eq 1) {
+              $verified = @($job[0].steps | Where-Object { $_.name -ceq 'Verify exact cleanup authorization' -and $_.conclusion -ceq 'success' })
+              $waiting = @($job[0].steps | Where-Object { $_.name -ceq 'Independent original-deadline cleanup on a separate hosted runner' -and $_.status -ceq 'in_progress' })
+              if ($verified.Count -eq 1 -and $waiting.Count -eq 1) { break }
+              if ($job[0].status -ceq 'completed') { throw 'Supervisor stopped; no provisioning.' }
+            }
+            if ([DateTimeOffset]::UtcNow.AddSeconds(30) -ge $stop) { throw 'Supervisor readiness timed out; no provisioning.' }
+            Start-Sleep -Seconds 10
+          } while ($true)
+      - name: Run the bounded foundation and one-worker protocol
+        shell: pwsh
+        env:
+          ENVELOPE: ${{ needs.prepare.outputs.manifest }}
+          APPROVAL_JSON: ${{ inputs.approval_json }}
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          GHR_SPIKE60_EXECUTION_ENABLED: ${{ vars.GHR_SPIKE60_EXECUTION_ENABLED }}
+          GHR_SPIKE_ENVIRONMENT: platform-prod
+        run: |
+          $directory = Join-Path $env:RUNNER_TEMP 'vmss60'
+          New-Item -ItemType Directory -Path $directory | Out-Null
+          $manifestPath = Join-Path $directory 'manifest.json'
+          $approvalPath = Join-Path $directory 'approval.json'
+          [IO.File]::WriteAllText($manifestPath, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ENVELOPE)))
+          [IO.File]::WriteAllText($approvalPath, $env:APPROVAL_JSON)
+          ./spikes/vmss-flex/Run.ps1 -Action Execute -ManifestPath $manifestPath -ApprovalPath $approvalPath -ConfirmCoordinatorExecutionDirection
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: spike60-executor-envelope
+          path: |
+            ${{ runner.temp }}/vmss60/manifest.json
+            ${{ runner.temp }}/vmss60/manifest.json.controller.json
+            ${{ runner.temp }}/vmss60/manifest.json.controller-final.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  deadline-cleanup:
+    needs: prepare
+    environment: platform-prod
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GHR_SPIKE_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Verify exact cleanup authorization
+        shell: pwsh
+        env:
+          ENVELOPE: ${{ needs.prepare.outputs.manifest }}
+        run: |
+          Import-Module ./spikes/vmss-flex/Execution.psm1
+          $manifest = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ENVELOPE)) | ConvertFrom-Json -AsHashtable -DateKind String
+          Assert-SpikeCleanupPermission $manifest
+      - name: Independent original-deadline cleanup on a separate hosted runner
+        shell: pwsh
+        env:
+          ENVELOPE: ${{ needs.prepare.outputs.manifest }}
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP 'vmss60-supervisor.json'
+          [IO.File]::WriteAllText($path, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ENVELOPE)))
+          ./spikes/vmss-flex/Supervisor.ps1 -ManifestPath $path -ConfirmCoordinatorCleanupDirection
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: spike60-supervisor-envelope
+          path: |
+            ${{ runner.temp }}/vmss60-supervisor.json
+            ${{ runner.temp }}/vmss60-supervisor.json.controller.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -28,7 +28,7 @@ Both were written while evaluating `apex-vnext` as the first consumer.
 
 ## Local validation
 
-Install Node.js/npm, the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), PowerShell 7, and Python 3.
+Install Node.js/npm, the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), PowerShell 7.5+, and Python 3.
 Hook tests additionally require Bash, git, jq, and curl on Linux, or Linux Docker on Windows.
 The [VMSS spike preparation](spikes/vmss-flex/README.md) client checks require Linux Docker on every host;
 they compile the pinned Go integration inside a digest-pinned builder without installing Go locally.

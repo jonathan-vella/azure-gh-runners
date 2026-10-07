@@ -34,7 +34,7 @@ func TestWorkerProtectedHandoff(t *testing.T) {
 		AllowedWorkflows: []string{"jonathan-vella/ghr-smoke/.github/workflows/smoke.yml@refs/heads/main"},
 	}
 	api := &workerFake{jit: "ZmFrZS1qaXQ="}
-	name := "vm-ghr-spike60-" + strings.Repeat("a", 32) + "-1"
+	name := "vm-ghr-spike60-" + strings.Repeat("a", 25) + "-1"
 	body, id, err := workerProtectedSettings(context.Background(), api, 42, name, policy)
 	if err != nil || id != 91 {
 		t.Fatal("valid handoff failed")
