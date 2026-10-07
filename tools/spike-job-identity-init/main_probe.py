@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import stat
 import urllib.error
@@ -40,22 +41,46 @@ def assert_environment_isolated(environment):
     )
 
 
-def assert_metadata_token_denied(open_url=urllib.request.urlopen):
+def build_metadata_opener():
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def assert_metadata_token_denied(open_url=None):
+    request = urllib.request.Request(TOKEN_URL, headers={"Metadata": "true"})
+    open_url = build_metadata_opener().open if open_url is None else open_url
     try:
-        response = open_url(TOKEN_URL, timeout=2)
+        response = open_url(request, timeout=2)
         response.close()
     except urllib.error.HTTPError as error:
+        if error.code != 400:
+            raise RuntimeError(
+                "managed identity token request returned an unclassified HTTP denial"
+            ) from None
+        try:
+            payload = json.loads(error.read().decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise RuntimeError(
+                "managed identity token request returned an unclassified HTTP denial"
+            ) from None
+        if not isinstance(payload, dict) or payload.get("error") != "invalid_request":
+            raise RuntimeError(
+                "managed identity token request returned an unclassified HTTP denial"
+            ) from None
+        description = str(payload.get("error_description", "")).lower()
         require(
-            not 200 <= error.code < 300,
-            "managed identity token request unexpectedly succeeded",
+            "identity not found" in description
+            or "no identity available" in description,
+            "managed identity token request failed for a reason other than missing identity",
         )
     except (urllib.error.URLError, TimeoutError):
-        return
+        raise RuntimeError(
+            "managed identity token endpoint could not be verified"
+        ) from None
     else:
         raise RuntimeError("managed identity token request unexpectedly succeeded")
 
 
-def run(handoff_path="/jit/config", environment=None, open_url=urllib.request.urlopen):
+def run(handoff_path="/jit/config", environment=None, open_url=None):
     environment = os.environ if environment is None else environment
     require(os.getuid() == 65532, "main UID check failed")
 

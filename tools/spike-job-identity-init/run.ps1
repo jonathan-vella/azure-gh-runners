@@ -73,9 +73,13 @@ function Invoke-AzText {
 }
 
 function Invoke-AzJson {
-    param([string[]]$Arguments)
+    param(
+        [string[]]$Arguments,
+        [ValidateRange(1, 3600)]
+        [int]$TimeoutSeconds = 120
+    )
 
-    $result = Invoke-AzText -Arguments $Arguments
+    $result = Invoke-AzText -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
     if ([string]::IsNullOrWhiteSpace($result)) {
         return $null
     }
@@ -131,13 +135,17 @@ function Invoke-BoundedDeployment {
         [int]$TimeoutMinutes = 12
     )
 
+    $deadline = [DateTime]::UtcNow.AddMinutes($TimeoutMinutes)
+    $remaining = Get-RemainingTimeoutSeconds -Deadline $deadline
+    if ($remaining -lt 1) {
+        throw "Deployment '$Name' exceeded its $TimeoutMinutes minute time limit before it started."
+    }
     Invoke-AzText @(
         'deployment', 'group', 'create', '--name', $Name, '--resource-group', $resourceGroup, '--subscription', $subscription,
         '--template-file', $TemplatePath, '--parameters', "@$ParametersFile",
         '--no-wait', '--only-show-errors', '--output', 'none'
-    ) | Out-Null
+    ) -TimeoutSeconds $remaining | Out-Null
 
-    $deadline = [DateTime]::UtcNow.AddMinutes($TimeoutMinutes)
     while ([DateTime]::UtcNow -lt $deadline) {
         $state = Invoke-AzText @(
             'deployment', 'group', 'show', '--name', $Name, '--resource-group', $resourceGroup, '--subscription', $subscription,
@@ -145,10 +153,14 @@ function Invoke-BoundedDeployment {
         ) -TimeoutSeconds ([Math]::Min(120, [Math]::Max(1, [int]($deadline - [DateTime]::UtcNow).TotalSeconds)))
         if ($state.Trim() -in @('Succeeded', 'Failed', 'Canceled')) {
             Assert-DeploymentSucceeded -State $state.Trim()
+            $remaining = Get-RemainingTimeoutSeconds -Deadline $deadline
+            if ($remaining -lt 1) {
+                throw "Deployment '$Name' exceeded its $TimeoutMinutes minute time limit before output verification."
+            }
             return Invoke-AzJson @(
                 'deployment', 'group', 'show', '--name', $Name, '--resource-group', $resourceGroup, '--subscription', $subscription,
                 '--query', 'properties.outputs', '--output', 'json'
-            )
+            ) -TimeoutSeconds $remaining
         }
         Start-Sleep -Seconds 15
     }
@@ -203,31 +215,32 @@ function Remove-SpikeResourceGroup {
             throw 'Refusing cleanup because the resource group contains an unrecognized resource.'
         }
         Invoke-AzText @('group', 'delete', '--name', $resourceGroup, '--subscription', $subscription, '--yes', '--no-wait', '--output', 'none') | Out-Null
-        for ($attempt = 0; $attempt -lt 60; $attempt++) {
-            Start-Sleep -Seconds 10
-            $exists = Invoke-AzText @('group', 'exists', '--name', $resourceGroup, '--subscription', $subscription, '--output', 'tsv')
-            if ($exists.Trim() -eq 'false') {
-                break
-            }
+        $deleteDeadline = [DateTime]::UtcNow.AddMinutes(10)
+        $exists = Invoke-DeadlinePoll -Deadline $deleteDeadline -TimeoutMessage 'Spike resource group deletion did not complete within ten minutes.' -PollIntervalSeconds 10 -Action {
+            param($remaining)
+            Invoke-AzText @('group', 'exists', '--name', $resourceGroup, '--subscription', $subscription, '--output', 'tsv') -TimeoutSeconds $remaining
+        } -IsComplete {
+            param($result)
+            $result.Trim() -eq 'false'
         }
     }
     $exists = Invoke-AzText @('group', 'exists', '--name', $resourceGroup, '--subscription', $subscription, '--output', 'tsv')
     if ($exists.Trim() -eq 'true') {
         throw 'Spike resource group deletion did not complete within ten minutes.'
     }
-    for ($attempt = 0; $attempt -lt 60; $attempt++) {
-        $managedExists = Invoke-AzText @('group', 'exists', '--name', $managedResourceGroup, '--subscription', $subscription, '--output', 'tsv')
-        if ($managedExists.Trim() -eq 'false') {
-            if (Test-Path -LiteralPath $preparedManifest) {
-                Remove-Item -LiteralPath $preparedManifest -Force
-            }
-            Write-Output 'ASSERT_cleanup_resource_group_absent=true'
-            Write-Output 'ASSERT_aca_managed_resource_group_absent=true'
-            return
-        }
-        Start-Sleep -Seconds 10
+    $managedDeadline = [DateTime]::UtcNow.AddMinutes(10)
+    $null = Invoke-DeadlinePoll -Deadline $managedDeadline -TimeoutMessage "ACA-managed resource group '$managedResourceGroup' remains after deleting the spike environment." -PollIntervalSeconds 10 -Action {
+        param($remaining)
+        Invoke-AzText @('group', 'exists', '--name', $managedResourceGroup, '--subscription', $subscription, '--output', 'tsv') -TimeoutSeconds $remaining
+    } -IsComplete {
+        param($result)
+        $result.Trim() -eq 'false'
     }
-    throw "ACA-managed resource group '$managedResourceGroup' remains after deleting the spike environment."
+    if (Test-Path -LiteralPath $preparedManifest) {
+        Remove-Item -LiteralPath $preparedManifest -Force
+    }
+    Write-Output 'ASSERT_cleanup_resource_group_absent=true'
+    Write-Output 'ASSERT_aca_managed_resource_group_absent=true'
 }
 
 function New-SpikeResourceGroup {
@@ -260,6 +273,7 @@ function Assert-PreparedResources {
         $Manifest.region -cne $location) {
         throw 'Prepared manifest does not match the live issue-9 resource group.'
     }
+    Assert-Sha256Hex -Value $Manifest.syntheticAppKeySha256
     $resources = Invoke-AzJson @('resource', 'list', '--resource-group', $resourceGroup, '--subscription', $subscription, '--query', '[].{id:id,name:name,type:type}', '--output', 'json')
     if (-not (Test-SpikeResourceInventory -Resources $resources)) {
         throw 'Prepared resource group contains an unrecognized resource.'
@@ -313,6 +327,7 @@ function Assert-PreparedResources {
 function Invoke-Prepare {
     $expiry = New-SpikeResourceGroup
     $canary = New-SyntheticValue
+    $canaryHash = Get-Sha256Hex -Value $canary
     $parametersFile = New-RestrictedParametersFile @{
         syntheticAppKey = $canary
         expiry = $expiry
@@ -339,6 +354,7 @@ function Invoke-Prepare {
         acaSubnetId = $outputs.acaSubnetId.value
         privateEndpointSubnetId = $outputs.privateEndpointSubnetId.value
         syntheticSecretUri = $outputs.syntheticSecretUri.value
+        syntheticAppKeySha256 = $canaryHash
         preparedAtUtc = [DateTime]::UtcNow.ToString('o')
     }
     if ([string]::IsNullOrWhiteSpace($manifest.registryId) -or
@@ -346,6 +362,7 @@ function Invoke-Prepare {
         [string]::IsNullOrWhiteSpace($manifest.syntheticSecretUri)) {
         throw 'Infrastructure deployment omitted a required non-secret output.'
     }
+    Assert-Sha256Hex -Value $manifest.syntheticAppKeySha256
     $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $preparedManifest -Encoding utf8
     $script:preservePreparedGroup = $true
     Write-Output "Prepared issue-9 resources in $resourceGroup."
@@ -384,15 +401,14 @@ function Invoke-Test {
         }
     }
 
-    $canary = New-SyntheticValue
-    $canaryHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($canary))).ToLowerInvariant()
+    $canaryHash = [string]$manifest.syntheticAppKeySha256
+    Assert-Sha256Hex -Value $canaryHash
     $scaleCanary = New-SyntheticValue
-    $scaleCanaryHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($scaleCanary))).ToLowerInvariant()
+    $scaleCanaryHash = Get-Sha256Hex -Value $scaleCanary
     $jitConfig = 'synthetic-jit-config'
-    $jitHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($jitConfig))).ToLowerInvariant()
+    $jitHash = Get-Sha256Hex -Value $jitConfig
     $image = "$($manifest.registryLoginServer)/probe@$ProbeImageDigest"
     $jobParametersFile = New-RestrictedParametersFile @{
-        syntheticAppKey = $canary
         syntheticScaleAuth = $scaleCanary
         syntheticScaleAuthSha256 = $scaleCanaryHash
         environmentId = $environmentOutputs.environmentId.value
@@ -404,6 +420,8 @@ function Invoke-Test {
         jitConfigSha256 = $jitHash
         expiry = $expiry
     }
+    $jobParameterNames = @((Get-Content -LiteralPath $jobParametersFile -Raw | ConvertFrom-Json).parameters.PSObject.Properties.Name)
+    Assert-DeclaredBicepParameters -TemplateContent (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'job.bicep') -Raw) -ParameterNames $jobParameterNames
     try {
         $null = Invoke-BoundedDeployment -Name 'spike9-job' -TemplatePath (Join-Path $PSScriptRoot 'job.bicep') -ParametersFile $jobParametersFile -TimeoutMinutes 5
     } finally {
@@ -444,19 +462,23 @@ function Invoke-Test {
         throw 'Job start did not return an execution name.'
     }
     $executionUri = "$jobUri/executions/$executionName`?api-version=2026-07-01"
-    $status = ''
-    for ($attempt = 0; $attempt -lt 40; $attempt++) {
-        Start-Sleep -Seconds 15
-        $execution = Invoke-AzJson @('rest', '--method', 'get', '--url', $executionUri, '--subscription', $subscription, '--output', 'json')
-        $status = $execution.properties.status
-        if ($status -in @('Succeeded', 'Failed', 'Stopped', 'Degraded')) {
-            break
+    $executionDeadline = [DateTime]::UtcNow.AddMinutes(10)
+    try {
+        $status = Invoke-DeadlinePoll -Deadline $executionDeadline -TimeoutMessage 'Probe execution exceeded its ten-minute wait.' -PollIntervalSeconds 15 -Action {
+            param($remaining)
+            $execution = Invoke-AzJson @('rest', '--method', 'get', '--url', $executionUri, '--subscription', $subscription, '--output', 'json') -TimeoutSeconds $remaining
+            $execution.properties.status
+        } -IsComplete {
+            param($result)
+            $result -in @('Succeeded', 'Failed', 'Stopped', 'Degraded')
         }
-    }
-    if ($status -notin @('Succeeded', 'Failed', 'Stopped', 'Degraded')) {
+    } catch {
         $stopUri = "$jobUri/executions/$executionName/stop?api-version=2026-07-01"
         Invoke-AzText @('rest', '--method', 'post', '--url', $stopUri, '--subscription', $subscription, '--output', 'none') | Out-Null
-        throw 'Probe execution exceeded its ten-minute wait and a stop was requested.'
+        throw
+    }
+    if ($status -notin @('Succeeded', 'Failed', 'Stopped', 'Degraded')) {
+        throw "Probe execution returned unexpected status '$status'."
     }
     if ($status -ne 'Succeeded') {
         throw "Probe execution ended with status '$status'."

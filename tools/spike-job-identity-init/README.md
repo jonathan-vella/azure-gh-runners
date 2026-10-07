@@ -16,7 +16,9 @@ Python 3, and permission to create resources and scoped role assignments in the 
 `Prepare` requires the issue-9 resource group to be absent, creates only the tagged private network, ACR, Key Vault,
 private endpoints, and scoped identity, then writes a non-secret `prepared.json` manifest. It intentionally does not
 create an ACA environment. The manifest gives the exact issue-9 ACR destination for the approved private image
-transfer. Do not access or modify issue-6 resources; coordinate approval for use of its private transfer path.
+transfer and stores only the locally computed SHA-256 of the synthetic Key Vault canary; the raw canary is never
+persisted in the manifest. Do not access or modify issue-6 resources; coordinate approval for use of its private
+transfer path.
 
 After that path transfers the image to the exact registry and privately reads back the destination digest, save a
 receipt in this shape:
@@ -79,7 +81,10 @@ additional, not replacements.
   expectation, and writes only a fixed non-secret placeholder to a shared `EmptyDir`, owned by UID/GID 65532 and
   mode `0400`.
 - The main process drops to UID/GID 65532 before inspection, verifies file ownership/mode, reads and deletes the
-  handoff file, checks identity endpoint variables are absent, and verifies that an IMDS token request fails.
+  handoff file, checks identity endpoint variables are absent, and sends a valid IMDS token request with
+  `Metadata: true` directly, bypassing environment proxies. Only an explicit `invalid_request` response identifying
+  a missing identity counts as isolation evidence; a successful response, malformed-request error, or connectivity
+  failure fails the probe.
 - Both containers hash environment values and fail if any equals the scale-only synthetic canary. The main process
   also checks for the init app-key canary by hash. The raw canaries and their values are not logged; the main process
   has no secret references or secret environment variables.
@@ -93,10 +98,12 @@ additional, not replacements.
   digest and destination readback receipt before creating an ACA environment or job.
 
 Run the no-cloud unit tests with `npm run validate:spike`; they exercise digest and receipt rejection, capacity
-confirmation, canary-hash leak detection, deployment failure assertions, governance-tag checks, and cleanup
-inventory ownership. On POSIX systems, the main probe tests also create a handoff file owned by UID/GID 65532 and
-run the reader as that non-root identity, verifying the actual read and delete permissions. This integration test is
-skipped on Windows, where POSIX UID/GID switching is unavailable.
+confirmation, canary-hash leak detection, deployment failure assertions, governance-tag and compiled NSG rule
+checks, and cleanup inventory ownership. IMDS tests verify the request URL/header and proxy bypass, accept only the
+explicit missing-identity response, and reject successful, malformed-request, and connectivity-failure outcomes.
+On POSIX systems, the main probe tests also create a handoff file owned by UID/GID 65532 and run the reader as that
+non-root identity, verifying the actual read and delete permissions. This integration test is skipped on Windows,
+where POSIX UID/GID switching is unavailable.
 
 The infrastructure and job use the latest stable resource API versions reported for `swedencentral` by the approved
 subscription's providers when authored: Container Apps `2026-07-01`, network `2026-05-01`, ACR `2025-11-01`, Key Vault

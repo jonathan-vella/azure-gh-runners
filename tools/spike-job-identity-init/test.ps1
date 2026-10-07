@@ -35,7 +35,26 @@ if (-not (Test-SpikeExpiryTag -Value '2026-10-07T16:48:22Z') -or (Test-SpikeExpi
 
 $knownResources = @(
     [pscustomobject]@{ name = 'ghr9-vnet'; type = 'Microsoft.Network/virtualNetworks'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/ghr9-vnet' },
+    [pscustomobject]@{ name = 'ghr9-env'; type = 'Microsoft.App/managedEnvironments'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/ghr9-env' },
+    [pscustomobject]@{ name = 'ghr9-secret-isolation'; type = 'Microsoft.App/jobs'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.App/jobs/ghr9-secret-isolation' },
+    [pscustomobject]@{ name = 'ghr9-secret-isolation/execution-123'; type = 'Microsoft.App/jobs/executions'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.App/jobs/ghr9-secret-isolation/executions/execution-123' },
+    [pscustomobject]@{ name = 'ghr9abc123'; type = 'Microsoft.ContainerRegistry/registries'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.ContainerRegistry/registries/ghr9abc123' },
+    [pscustomobject]@{ name = 'ghr9kvabc123'; type = 'Microsoft.KeyVault/vaults'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/ghr9kvabc123' },
+    [pscustomobject]@{ name = 'ghr9kvabc123/synthetic-app-key'; type = 'Microsoft.KeyVault/vaults/secrets'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/ghr9kvabc123/secrets/synthetic-app-key' },
+    [pscustomobject]@{ name = 'ghr9-job-identity'; type = 'Microsoft.ManagedIdentity/userAssignedIdentities'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/ghr9-job-identity' },
+    [pscustomobject]@{ name = 'ghr9-aca-nsg'; type = 'Microsoft.Network/networkSecurityGroups'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/ghr9-aca-nsg' },
+    [pscustomobject]@{ name = 'ghr9-nat'; type = 'Microsoft.Network/natGateways'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/natGateways/ghr9-nat' },
+    [pscustomobject]@{ name = 'ghr9-acr-pe'; type = 'Microsoft.Network/privateEndpoints'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/privateEndpoints/ghr9-acr-pe' },
+    [pscustomobject]@{ name = 'ghr9-acr-pe/default'; type = 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/privateEndpoints/ghr9-acr-pe/privateDnsZoneGroups/default' },
+    [pscustomobject]@{ name = 'ghr9-vault-pe'; type = 'Microsoft.Network/privateEndpoints'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/privateEndpoints/ghr9-vault-pe' },
+    [pscustomobject]@{ name = 'ghr9-vault-pe/default'; type = 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/privateEndpoints/ghr9-vault-pe/privateDnsZoneGroups/default' },
+    [pscustomobject]@{ name = 'ghr9-nat-pip'; type = 'Microsoft.Network/publicIPAddresses'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/ghr9-nat-pip' },
+    [pscustomobject]@{ name = 'ghr9-vnet/aca'; type = 'Microsoft.Network/virtualNetworks/subnets'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/ghr9-vnet/subnets/aca' },
+    [pscustomobject]@{ name = 'ghr9-vnet/private-endpoints'; type = 'Microsoft.Network/virtualNetworks/subnets'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/ghr9-vnet/subnets/private-endpoints' },
     [pscustomobject]@{ name = 'privatelink.azurecr.io'; type = 'Microsoft.Network/privateDnsZones'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io' },
+    [pscustomobject]@{ name = 'privatelink.vaultcore.azure.net'; type = 'Microsoft.Network/privateDnsZones'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net' },
+    [pscustomobject]@{ name = 'privatelink.azurecr.io/ghr9-vnet-link'; type = 'Microsoft.Network/privateDnsZones/virtualNetworkLinks'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io/virtualNetworkLinks/ghr9-vnet-link' },
+    [pscustomobject]@{ name = 'privatelink.vaultcore.azure.net/ghr9-vnet-link'; type = 'Microsoft.Network/privateDnsZones/virtualNetworkLinks'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net/virtualNetworkLinks/ghr9-vnet-link' },
     [pscustomobject]@{ name = 'role-id'; type = 'Microsoft.Authorization/roleAssignments'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.ContainerRegistry/registries/ghr9abc/providers/Microsoft.Authorization/roleAssignments/role-id' }
 )
 if (-not (Test-SpikeResourceInventory -Resources $knownResources)) {
@@ -50,6 +69,95 @@ if (Test-SpikeResourceInventory -Resources $unknownResources) {
 $unexpectedGhr9Resource = @([pscustomobject]@{ name = 'ghr9-unexpected'; type = 'Microsoft.Storage/storageAccounts'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/ghr9-unexpected' })
 if (Test-SpikeResourceInventory -Resources $unexpectedGhr9Resource) {
     throw 'Unit test failed: unrecognized ghr9-prefixed resource was accepted.'
+}
+$unrelatedJob = @([pscustomobject]@{ name = 'ghr9-unrelated-job'; type = 'Microsoft.App/jobs'; id = '/subscriptions/test/resourceGroups/rg/providers/Microsoft.App/jobs/ghr9-unrelated-job' })
+if (Test-SpikeResourceInventory -Resources $unrelatedJob) {
+    throw 'Unit test failed: an unrelated Container Apps job was accepted for cleanup.'
+}
+
+$sampleCanary = 'synthetic-app-key'
+$sampleCanaryHash = Get-Sha256Hex -Value $sampleCanary
+Assert-Sha256Hex -Value $sampleCanaryHash
+$badCanaryHashRejected = $false
+try {
+    Assert-Sha256Hex -Value 'not-a-hash'
+} catch {
+    $badCanaryHashRejected = $true
+}
+if (-not $badCanaryHashRejected) {
+    throw 'Unit test failed: malformed canary hash was accepted.'
+}
+
+$jobParameterNames = @(
+    'syntheticScaleAuth',
+    'syntheticScaleAuthSha256',
+    'environmentId',
+    'identityId',
+    'registryServer',
+    'image',
+    'syntheticSecretUri',
+    'syntheticAppKeySha256',
+    'jitConfigSha256',
+    'expiry'
+)
+$jobTemplate = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'job.bicep') -Raw
+Assert-DeclaredBicepParameters -TemplateContent $jobTemplate -ParameterNames $jobParameterNames
+$undeclaredJobParameterRejected = $false
+try {
+    Assert-DeclaredBicepParameters -TemplateContent $jobTemplate -ParameterNames ($jobParameterNames + 'syntheticAppKey')
+} catch {
+    $undeclaredJobParameterRejected = $true
+}
+if (-not $undeclaredJobParameterRejected) {
+    throw 'Unit test failed: an undeclared job deployment parameter was accepted.'
+}
+
+$mainTemplateJson = az bicep build --file (Join-Path $PSScriptRoot 'main.bicep') --stdout | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unit test failed: main spike Bicep template could not be compiled for NSG assertions.'
+}
+$nsgResource = @($mainTemplateJson.resources | Where-Object { $_.type -eq 'Microsoft.Network/networkSecurityGroups' -and $_.name -eq 'ghr9-aca-nsg' })
+if ($nsgResource.Count -ne 1) {
+    throw 'Unit test failed: expected exactly one diagnostic ACA NSG in the compiled template.'
+}
+Assert-AcaPeerRules -Rules $nsgResource[0].properties.securityRules
+$unsafePeerRules = @($nsgResource[0].properties.securityRules | ConvertTo-Json -Depth 8 | ConvertFrom-Json)
+$unsafePeerRules | Where-Object { $_.name -eq 'allow-aca-subnet-peer-ingress' } | ForEach-Object { $_.properties.sourceAddressPrefix = '10.0.0.0/8' }
+$unsafePeerRuleRejected = $false
+try {
+    Assert-AcaPeerRules -Rules $unsafePeerRules
+} catch {
+    $unsafePeerRuleRejected = $true
+}
+if (-not $unsafePeerRuleRejected) {
+    throw 'Unit test failed: broad RFC1918 ACA peer allowance was accepted.'
+}
+
+$fakeClock = [pscustomobject]@{ now = [DateTime]::UtcNow }
+$fakeStart = $fakeClock.now
+$observedTimeouts = [System.Collections.Generic.List[int]]::new()
+$deadlineRejected = $false
+try {
+    Invoke-DeadlinePoll -Deadline $fakeClock.now.AddSeconds(10) -TimeoutMessage 'test deadline' -PollIntervalSeconds 1 -Clock {
+        $fakeClock.now
+    } -Sleeper {
+        param($seconds)
+        $fakeClock.now = $fakeClock.now.AddSeconds($seconds)
+    } -Action {
+        param($remaining)
+        $observedTimeouts.Add($remaining)
+        $fakeClock.now = $fakeClock.now.AddSeconds([Math]::Min(3, $remaining))
+        'StillRunning'
+    } -IsComplete {
+        param($result)
+        $result -eq 'Succeeded'
+    }
+} catch {
+    $deadlineRejected = $_.Exception.Message -eq 'test deadline'
+}
+if (-not $deadlineRejected -or $fakeClock.now -ne $fakeStart.AddSeconds(10) -or
+    $observedTimeouts.Count -ne 3 -or $observedTimeouts[2] -ne 2) {
+    throw 'Unit test failed: polling did not enforce remaining wall-clock budget across slow calls.'
 }
 
 $canaryValue = 'synthetic-scale-canary'

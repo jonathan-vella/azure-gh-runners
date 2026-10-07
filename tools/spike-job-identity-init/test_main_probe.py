@@ -1,12 +1,21 @@
 import hashlib
+import io
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 import urllib.error
+import urllib.request
+from unittest.mock import patch
 
-from main_probe import assert_canaries_absent, assert_environment_isolated, assert_metadata_token_denied, run
+from main_probe import (
+    assert_canaries_absent,
+    assert_environment_isolated,
+    assert_metadata_token_denied,
+    build_metadata_opener,
+    run,
+)
 
 
 class MainProbeTests(unittest.TestCase):
@@ -46,19 +55,63 @@ class MainProbeTests(unittest.TestCase):
             )
 
     def test_successful_token_response_is_rejected(self):
-        def successful_response(_url, timeout):
+        def successful_response(request, timeout):
             self.assertEqual(timeout, 2)
+            self.assertEqual(request.full_url, "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fmanagement.azure.com%2F")
+            self.assertEqual(request.get_header("Metadata"), "true")
             return type("Response", (), {"close": lambda _self: None})()
 
         with self.assertRaisesRegex(RuntimeError, "token request unexpectedly succeeded"):
             assert_metadata_token_denied(successful_response)
 
     def test_http_error_is_a_denied_token_request(self):
-        def denied_response(_url, timeout):
+        def denied_response(request, timeout):
             self.assertEqual(timeout, 2)
-            raise urllib.error.HTTPError(_url, 403, "denied", {}, None)
+            self.assertEqual(request.get_header("Metadata"), "true")
+            raise urllib.error.HTTPError(
+                request.full_url,
+                400,
+                "identity unavailable",
+                {},
+                io.BytesIO(b'{"error":"invalid_request","error_description":"Identity not found"}'),
+            )
 
         assert_metadata_token_denied(denied_response)
+
+    def test_malformed_metadata_request_is_not_isolation_evidence(self):
+        def malformed_response(request, timeout):
+            self.assertEqual(request.get_header("Metadata"), "true")
+            raise urllib.error.HTTPError(
+                request.full_url,
+                400,
+                "bad request",
+                {},
+                io.BytesIO(b'{"error":"invalid_request","error_description":"Required metadata header not specified"}'),
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "other than missing identity"):
+            assert_metadata_token_denied(malformed_response)
+
+    def test_token_endpoint_connectivity_failure_is_not_isolation_evidence(self):
+        def unavailable(_request, timeout):
+            self.assertEqual(timeout, 2)
+            raise urllib.error.URLError("unreachable")
+
+        with self.assertRaisesRegex(RuntimeError, "could not be verified"):
+            assert_metadata_token_denied(unavailable)
+
+    def test_metadata_opener_ignores_configured_proxies(self):
+        with patch.dict(
+            os.environ,
+            {"http_proxy": "http://proxy.invalid:8080", "https_proxy": "http://proxy.invalid:8080"},
+        ):
+            opener = build_metadata_opener()
+        self.assertFalse(
+            any(
+                isinstance(handler, urllib.request.ProxyHandler)
+                for handler in opener.handlers
+            )
+        )
 
     @unittest.skipUnless(os.name == "posix", "real UID/GID handoff requires POSIX")
     def test_non_root_process_reads_and_deletes_owned_handoff(self):
@@ -82,7 +135,8 @@ class MainProbeTests(unittest.TestCase):
             }
             probe = (
                 "import urllib.error; from main_probe import run; "
-                "deny=lambda *a,**k: (_ for _ in ()).throw(urllib.error.HTTPError('url', 403, 'denied', {}, None)); "
+                "import io; "
+                "deny=lambda *a,**k: (_ for _ in ()).throw(urllib.error.HTTPError('url', 400, 'identity unavailable', {}, io.BytesIO(b'{\"error\":\"invalid_request\",\"error_description\":\"Identity not found\"}'))); "
                 f"run({path!r}, {environment!r}, deny)"
             )
 

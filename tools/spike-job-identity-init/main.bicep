@@ -133,6 +133,32 @@ resource acaNsg 'Microsoft.Network/networkSecurityGroups@2026-05-01' = {
         }
       }
       {
+        name: 'allow-aca-subnet-peer-ingress'
+        properties: {
+          priority: 200
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: '10.82.0.0/27'
+          destinationAddressPrefix: '10.82.0.0/27'
+        }
+      }
+      {
+        name: 'allow-aca-subnet-peer-egress'
+        properties: {
+          priority: 200
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: '10.82.0.0/27'
+          destinationAddressPrefix: '10.82.0.0/27'
+        }
+      }
+      {
         name: 'deny-rfc1918-lateral-ingress'
         properties: {
           priority: 300
