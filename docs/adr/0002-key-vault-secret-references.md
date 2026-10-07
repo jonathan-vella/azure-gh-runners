@@ -51,6 +51,26 @@ The secure parameter file `%TEMP%\\issue7-kvref-696be5.parameters.json` was also
 experiment is now in `infra/spike7/main.bicep` with the bounded local runner in `infra/spike7/Invoke-Spike.ps1`.
 `tools/validate-spike7.mjs` checks local artifact invariants without Azure access.
 
+### Authorized D4 invocation: validation accepted, no deployment write
+
+The single authorized D4 Deploy was invoked at `2026-10-07T19:52:11.8518132Z` from merged source
+`e90e2ad18dd45a2032e1f5fd8e3bf32cd14fc564`, requesting `minimumCount=0`, `maximumCount=3`,
+`zoneRedundant=false`, and no zone pinning. It created the exact tagged `rg-ghrunners-spike7-swc`, then the bounded
+deployment CLI returned an unclassified failure. Its original stderr was discarded; the specific local cause remains
+unknown. A local bounded Bicep build subsequently exited 0, which does not diagnose that CLI failure.
+
+Supplied Azure activity evidence shows deployment **validate** Started at `2026-10-07T19:52:36.502117Z` and
+Accepted at `2026-10-07T19:52:40.9865282Z`, correlation `e966fd8b-8aa2-489a-9e1a-fd8b8b0e1ce5`, plus a policy
+append for the planned NAT IP. Deployment and resource counts were both zero: no deployment write or ACA
+environment write was observed. Environment creation was therefore not observed as requested; validation of a planned
+environment is not a create request. **This invocation is not an ACA capacity failure.** No Test ran, no new vault
+was created, and no private-endpoint resolution or D4 node allocation was tested.
+
+The original outer command attempted to list operations for the nonexistent deployment inside `finally`; that
+diagnostic threw before Cleanup could run. The operator immediately positively verified the exact tagged empty group
+and ran the reviewed Cleanup successfully: deletion was accepted at `2026-10-07T19:53:50.7002181Z`, then the group
+was verified absent. No second Deploy is authorized by this correction.
+
 ## Consequences
 
 - Keep this behavior as a blocker for dependent platform decisions. Do not claim the `keyVaultUrl` private-endpoint
@@ -59,7 +79,8 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
 - The read-only regional profile listing included Dedicated `D4` and `E4` profiles in `swedencentral`. The operator
   has authorized one isolated alternative-profile attempt with `D4`, `minimumCount=0`, `maximumCount=3`, and
   `zoneRedundant=false`, with no zone pinning. This authorization is not confirmation that regional capacity recovered
-  and is not evidence of capacity recovery. No D4 deployment or job execution has yet been attempted. Because
+  and is not evidence of capacity recovery. The D4 CLI invocation above did not produce a deployment record or job
+  execution. Because
   `minimumCount=0` can provision the managed environment without allocating any D4 node, environment provisioning
   must be recorded separately from successful D4 job placement and execution; only execution evidence can show that a
   D4 node was actually allocated. The job's `workloadProfileName` and the environment's profile/count/zone readback
@@ -105,10 +126,7 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
   failures are recorded too; raw provider
   messages, secrets, and container logs are never persisted. Local mocks exercise the actual profile readback guard,
   structured network denial versus unrelated deployment failures, and terminal-status cases.
-- After this follow-up is reviewed and merged and the coordinator directs the attempt, the operator-authorized D4
-  sequence is:
-  `.\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -Profile D4 -ConfirmD4ProfileAttempt`,
-  followed by the same command with `-Action Test -Profile D4 -ConfirmD4ProfileAttempt -EvidencePath .\issue7-d4-comparison.json`.
+- Only after separate coordinator direction for a new attempt, use the D4 lifecycle command shown below.
   This explicit D4 confirmation does not mean capacity recovered. For a later Consumption retry, continue to require
   the coordinator's separate capacity-recovery confirmation and `-ConfirmCapacityRecovered`. Use `-Action Cleanup`
   only for the exact tagged issue-7 resource group after the attempt; each ARM command supplies the approved
@@ -124,19 +142,25 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
   resource-group absence as idempotent success, while a failed/ambiguous existence read or ownership mismatch stops
   without deletion. Local tests exercise a real synthetic hanging subprocess and assert runtime call paths cannot
   bypass the wrapper.
-- Use an outer `try/finally` so the owned spike group is cleaned up after a test failure. If the deployment client
-  times out, it is killed at the configured bound, but the ARM deployment may still be active: first inspect that
-  deployment's terminal state with the explicit approved subscription, then run cleanup; do not blindly retry or
-  delete an active deployment.
+- `Invoke-Lifecycle.ps1` requires the approved scope, profile authorization, and positively absent group before
+  entering the lifecycle. Deploy/Test, diagnostics, and Cleanup are independent: diagnostic failure cannot skip
+  Cleanup, and an aggregate error retains original, diagnostic, and cleanup errors in order. The deployment wrapper
+  retains the original CLI exit, fixed safe category, allowlisted error code and structured correlation ID when
+  available; absent/failed readback is supplemental, never a replacement. No raw arguments or provider messages are
+  printed or stored. Categories distinguish Bicep, local file, CLI arguments, authentication, validation, ARM, and
+  unclassified failures; they do not invent a cause for the invocation above.
+- Cleanup independently checks exact ownership and deployment inventory. Positive group absence is idempotent success;
+  positive deployment absence requires an explicitly empty owned group. Failed/invalid inventory is not absence.
+  Existing deployments must be `Succeeded`, `Failed`, or `Canceled` before deletion; active/unknown states are polled
+  within the cleanup deadline, then fail closed. A timed-out client does not establish ARM completion. There is no
+  automatic retry or cancellation, and cleanup failure remains visible even when diagnostics or Deploy failed.
 
   ```powershell
-  try {
-      .\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -Profile D4 -ConfirmD4ProfileAttempt
-      .\infra\spike7\Invoke-Spike.ps1 -Action Test -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -Profile D4 -ConfirmD4ProfileAttempt -EvidencePath .\issue7-d4-comparison.json
-  } finally {
-      # On a deployment timeout, verify the ARM deployment is terminal before cleanup.
-      .\infra\spike7\Invoke-Spike.ps1 -Action Cleanup -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc
-  }
+  .\infra\spike7\Invoke-Lifecycle.ps1 `
+      -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e `
+      -ResourceGroupName rg-ghrunners-spike7-swc `
+      -Profile D4 -ConfirmD4ProfileAttempt `
+      -EvidencePath .\issue7-d4-comparison.json
   ```
 
 - Leave issue #7 open until all acceptance criteria are supported by job-execution evidence and the isolated spike
@@ -144,7 +168,8 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
 
 ## Status
 
-**Blocked — unverified.** ARM what-if validation succeeded, but the ACA capacity failure prevented the experiment.
+**Blocked — unverified.** The earlier Consumption attempt failed on ACA capacity. The later authorized D4 invocation
+reached accepted ARM validation but no deployment/environment write; its original CLI cause is unknown, not capacity.
 The dedicated issue-7 resource group was deleted and verified absent. The test Key Vault `kvghr7696be5` remains as a
 soft-deleted tombstone with purge protection enabled; it was not purged. No resources in production or issue #6's spike
 resource group were accessed or changed.
