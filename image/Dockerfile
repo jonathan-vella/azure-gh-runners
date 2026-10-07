@@ -1,0 +1,18 @@
+FROM ghcr.io/actions/actions-runner@sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807
+
+USER root
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+COPY image/versions.json image/install-tools.sh /opt/runner-image/
+RUN bash /opt/runner-image/install-tools.sh \
+    && rm /opt/runner-image/install-tools.sh
+COPY image/verify-tools.sh /opt/runner-image/
+
+ENV AZURE_CORE_COLLECT_TELEMETRY=false \
+    AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no \
+    AZURE_BICEP_USE_BINARY_FROM_PATH=true \
+    POWERSHELL_TELEMETRY_OPTOUT=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1
+
+USER runner
+RUN --network=none bash /opt/runner-image/verify-tools.sh

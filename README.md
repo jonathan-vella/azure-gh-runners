@@ -16,6 +16,7 @@ Container Apps jobs for any onboarded repository.
 | [Plan](docs/plan.md) | Approved implementation plan and target architecture |
 | [Consumer registry](docs/consumer-registry.md) | Consumer JSON contract, resource limits, and validation boundary |
 | [Observability](docs/observability.md) | Log Analytics network exception and diagnostic-settings contract |
+| [Runner image](image/README.md) | Pinned generic toolset, local image checks, and remaining runtime contracts |
 | [Identity bootstrap](docs/runbooks/bootstrap-identity.md) | Approved Azure identities, constrained RBAC, and GitHub OIDC configuration |
 | [ADRs](docs/adr/README.md) | Decisions, including spike outcomes |
 | [AGENTS.md](AGENTS.md) | Rules for AI agents working in this repo |
@@ -37,7 +38,8 @@ npm run validate
 `npm run validate` runs consumer schema, policy, and generator tests; validates active `config/consumers/*.json`
 entries against GitHub repository visibility and default-branch metadata; checks generated consumer parameters for
 drift; builds and lints the Bicep deployment and modules; validates diagnostic categories against the configuration
-consumed by the deployment; and checks all Markdown with the repository's `.markdownlint-cli2.jsonc` configuration.
+consumed by the deployment; checks the offline image contract; and checks all Markdown with the repository's
+`.markdownlint-cli2.jsonc` configuration.
 Run `npm run generate:consumers` after editing the registry to update `infra/generated/consumers.json`. The generated
 ARM parameters document contains typed consumer deployment fields and a serialized `policyJson`; `main.bicep` does
 not consume it until consumer-job infrastructure is implemented. The registry currently has no active consumers, so
