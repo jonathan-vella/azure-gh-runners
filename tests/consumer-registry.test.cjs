@@ -164,6 +164,8 @@ test('rejects malformed Git branch refs and workflow paths', () => {
       allowedRefs: ['refs/heads/bad..branch'],
       allowedWorkflows: [
         'jonathan-vella/example/.github/workflows/../ci.yml@refs/heads/bad..branch',
+        'jonathan-vella/example/.github/workflows/nested/ci.yml@refs/heads/main',
+        'jonathan-vella/example/.github/workflows/ci file.yml@refs/heads/main',
       ],
     })
   ]);

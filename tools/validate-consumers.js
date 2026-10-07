@@ -96,7 +96,7 @@ function isValidBranchRef(ref) {
     return false;
   }
   try {
-    execFileSync('git', ['check-ref-format', ref], { stdio: 'ignore' });
+    execFileSync('git', ['check-ref-format', ref], { stdio: 'ignore', timeout: 5_000 });
     return true;
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -125,8 +125,9 @@ function workflowParts(workflow) {
   const pathParts = workflowPath.split('/');
   if (
     !/\.(?:yml|yaml)$/i.test(workflowPath)
+    || workflowPath.includes('/')
     || pathParts.some((part) => !part || part === '.' || part === '..')
-    || workflowPath.includes('\\')
+    || /[@\x00-\x20\x7f\\]/.test(workflowPath)
   ) {
     return null;
   }
