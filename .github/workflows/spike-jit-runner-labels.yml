@@ -1,0 +1,173 @@
+name: Spike - JIT runner labels
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: spike-jit-runner-labels
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: platform-prod
+    steps:
+      - name: Generate and inspect a disposable JIT runner
+        env:
+          GH_APP_ID: ${{ secrets.GH_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createSign } from "node:crypto";
+
+          const owner = "jonathan-vella";
+          const repo = "ghr-smoke";
+          const apiVersion = "2026-03-10";
+          const runnerName =
+            `ghr-smoke-jit-label-spike-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
+          const customLabel = "ghr-smoke-jit-label-spike";
+
+          function base64url(value) {
+            return Buffer.from(value).toString("base64url");
+          }
+
+          async function request(path, method, token, body) {
+            const response = await fetch(`https://api.github.com${path}`, {
+              method,
+              headers: {
+                Accept: "application/vnd.github+json",
+                Authorization: `Bearer ${token}`,
+                "X-GitHub-Api-Version": apiVersion,
+                ...(body ? { "Content-Type": "application/json" } : {}),
+              },
+              ...(body ? { body: JSON.stringify(body) } : {}),
+            });
+
+            if (!response.ok) {
+              throw new Error(`${method} ${path} returned HTTP ${response.status}`);
+            }
+
+            return response.status === 204 ? null : response.json();
+          }
+
+          function createAppJwt() {
+            const now = Math.floor(Date.now() / 1000);
+            const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+            const claims = base64url(
+              JSON.stringify({
+                iat: now - 60,
+                exp: now + 540,
+                iss: process.env.GH_APP_ID,
+              }),
+            );
+            const unsignedToken = `${header}.${claims}`;
+            const signer = createSign("RSA-SHA256");
+            signer.update(unsignedToken);
+            signer.end();
+            return `${unsignedToken}.${signer.sign(process.env.GH_APP_PRIVATE_KEY, "base64url")}`;
+          }
+
+          const runnerPath = `/repos/${owner}/${repo}/actions/runners`;
+          let installationToken;
+          let probeError;
+
+          try {
+            if (
+              process.env.GITHUB_REPOSITORY !== "jonathan-vella/azure-gh-runners" ||
+              process.env.GITHUB_REF !== "refs/heads/main"
+            ) {
+              throw new Error("This probe may run only from the platform repository's main branch.");
+            }
+
+            const appJwt = createAppJwt();
+            const tokenResponse = await request(
+              `/app/installations/${process.env.GH_APP_INSTALLATION_ID}/access_tokens`,
+              "POST",
+              appJwt,
+              {
+                repositories: [repo],
+                permissions: { administration: "write" },
+              },
+            );
+            installationToken = tokenResponse.token;
+
+            const existingRunners = await request(
+              `${runnerPath}?name=${encodeURIComponent(runnerName)}&per_page=100`,
+              "GET",
+              installationToken,
+            );
+            if (existingRunners.runners.some((runner) => runner.name === runnerName)) {
+              throw new Error("A runner with this unique probe name already exists; refusing to reuse it.");
+            }
+
+            const jitResponse = await request(
+              `${runnerPath}/generate-jitconfig`,
+              "POST",
+              installationToken,
+              {
+                name: runnerName,
+                labels: [customLabel],
+                work_folder: "_work",
+              },
+            );
+            const runner = jitResponse.runner;
+            if (!Number.isInteger(runner?.id) || !Array.isArray(runner.labels)) {
+              throw new Error("The JIT response did not contain runner metadata needed for inspection.");
+            }
+
+            const labels = runner.labels.map(({ name, type }) => ({ name, type }));
+            console.log(
+              JSON.stringify({
+                name: runner.name,
+                os: runner.os,
+                ephemeral: runner.ephemeral,
+                labels,
+              }),
+            );
+            if (!labels.some(({ name }) => name === customLabel)) {
+              throw new Error("GitHub did not return the requested custom label on the JIT runner.");
+            }
+          } catch (error) {
+            probeError = error;
+          }
+
+          let cleanupError;
+          if (installationToken) {
+            try {
+              const registeredRunners = await request(
+                `${runnerPath}?name=${encodeURIComponent(runnerName)}&per_page=100`,
+                "GET",
+                installationToken,
+              );
+              for (const runner of registeredRunners.runners) {
+                if (runner.name === runnerName) {
+                  await request(`${runnerPath}/${runner.id}`, "DELETE", installationToken);
+                }
+              }
+
+              const remainingRunners = await request(
+                `${runnerPath}?name=${encodeURIComponent(runnerName)}&per_page=100`,
+                "GET",
+                installationToken,
+              );
+              if (remainingRunners.runners.some((runner) => runner.name === runnerName)) {
+                throw new Error("The probe runner is still registered after cleanup.");
+              }
+              console.log("JIT probe runner cleanup verified; no matching registration remains.");
+            } catch (error) {
+              cleanupError = error;
+            }
+          }
+
+          if (cleanupError) {
+            throw new Error(`Runner cleanup failed: ${cleanupError.message}`);
+          }
+          if (probeError) {
+            throw probeError;
+          }
+          NODE
