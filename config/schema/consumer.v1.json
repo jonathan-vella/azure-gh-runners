@@ -37,6 +37,33 @@
         "private"
       ]
     },
+    "backend": {
+      "type": "string",
+      "enum": [
+        "aca",
+        "vmss"
+      ],
+      "description": "Optional explicit runner backend. Omission remains a legacy declaration and does not select a runtime backend."
+    },
+    "vmSku": {
+      "type": "string",
+      "enum": [
+        "Standard_D2ls_v5"
+      ],
+      "description": "Allowlisted Linux VM size for the VMSS backend."
+    },
+    "maxRunners": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2,
+      "description": "Maximum concurrent VMSS worker runners per consumer."
+    },
+    "jobTimeoutMinutes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 360,
+      "description": "VMSS job timeout in minutes, bounded to at most six hours."
+    },
     "labels": {
       "type": "array",
       "minItems": 1,
@@ -381,6 +408,46 @@
             "type": "array",
             "maxItems": 1
           }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "backend": {
+            "const": "vmss"
+          }
+        },
+        "required": [
+          "backend"
+        ]
+      },
+      "then": {
+        "required": [
+          "vmSku",
+          "maxRunners",
+          "jobTimeoutMinutes"
+        ]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "vmSku"
+              ]
+            },
+            {
+              "required": [
+                "maxRunners"
+              ]
+            },
+            {
+              "required": [
+                "jobTimeoutMinutes"
+              ]
+            }
+          ]
         }
       }
     }

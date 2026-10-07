@@ -12,6 +12,10 @@ Each onboarded repository has one JSON declaration in `config/consumers/<name>.j
 | `name` | Required lowercase kebab-case identifier. |
 | `repo` | Required GitHub `owner/name`. |
 | `visibility` | Required `public` or `private`. |
+| `backend` | Optional explicit `aca` or `vmss`. Omission preserves legacy declarations and has no schema default. |
+| `vmSku` | Required only for `backend: "vmss"`; initially allowlisted to `Standard_D2ls_v5`. |
+| `maxRunners` | Required only for `backend: "vmss"`; integer from 1 through the platform cap of 2. |
+| `jobTimeoutMinutes` | Required only for `backend: "vmss"`; integer from 1 through 360 minutes. |
 | `labels` | Required, non-empty, unique custom runner labels. The registry validator requires `ghr-<name>`. |
 | `cpu`, `memory` | Required total ACA replica resources across all job containers, using one of the supported pairs below. |
 | `maxExecutions` | Required positive integer for maximum concurrent executions. Effective scale is subject to Azure quotas; the schema does not invent a concurrency cap. |
@@ -26,6 +30,17 @@ also checks cross-file uniqueness, the `ghr-<name>` label, and the remote defaul
 The schema cannot know a repository's current default branch by itself. Public consumers must be limited to
 `workflow_dispatch`, `schedule`, and default-branch `push`; private consumers may opt into `pull_request` where policy
 allows it. The runner pre-job hook remains responsible for enforcing the policy at runtime.
+
+## Runner backend contract
+
+The legacy [`example.json.sample`](../config/consumers/example.json.sample) remains valid without a `backend`.
+[`example-aca.json.sample`](../config/consumers/example-aca.json.sample) and
+[`example-vmss.json.sample`](../config/consumers/example-vmss.json.sample) show the explicit variants. VMSS-only
+fields are rejected when `backend` is absent or set to `aca`; all three sizing fields are required for `vmss`.
+The schema intentionally has no default for `backend`: the primary backend is unresolved pending the accepted
+backend ADR. Omitted-backend runtime and generator behavior remain gated on that decision. This schema-only change
+does not alter active consumer declarations, generated parameters, or runtime behavior. The current common schema
+still requires `cpu` and `memory`; their VMSS meaning and runtime mapping remain unresolved and are not changed here.
 
 ## Generated deployment parameters
 
