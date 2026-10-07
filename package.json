@@ -2,9 +2,10 @@
   "name": "azure-gh-runners",
   "private": true,
   "scripts": {
-    "validate": "npm run validate:bicep && npm run validate:markdown",
+    "validate": "npm run validate:bicep && npm run validate:markdown && npm run validate:spike",
     "validate:bicep": "az bicep build --file infra/main.bicep --stdout && az bicep build-params --file infra/main.bicepparam --stdout && az bicep lint --file infra/main.bicep",
-    "validate:markdown": "markdownlint-cli2 \"**/*.md\""
+    "validate:markdown": "markdownlint-cli2 \"**/*.md\"",
+    "validate:spike": "node tools/spikes/keda-egress/validate-contract.mjs && az bicep build --file tools/spikes/keda-egress/secret.bicep --stdout"
   },
   "devDependencies": {
     "markdownlint-cli2": "0.18.1"

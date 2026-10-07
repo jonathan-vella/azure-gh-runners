@@ -1,0 +1,15 @@
+name: Spike 8 queued-run probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  queued-probe:
+    runs-on: ghr-spike8-probe
+    timeout-minutes: 30
+    steps:
+      - name: Confirm queued probe execution
+        run: echo "Issue 8 synthetic queued-run probe."
