@@ -35,5 +35,5 @@ module logAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0
 @description('The Log Analytics workspace resource ID, for use as a diagnostic-settings destination.')
 output workspaceResourceId string = logAnalyticsWorkspace.outputs.resourceId
 
-@description('The Log Analytics workspace customer ID required by the Container Apps environment.')
+@description('The non-secret Log Analytics workspace customer ID.')
 output workspaceCustomerId string = logAnalyticsWorkspace.outputs.logAnalyticsWorkspaceId

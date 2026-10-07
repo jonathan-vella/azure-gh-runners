@@ -1,5 +1,8 @@
 targetScope = 'resourceGroup'
 
+@description('Enable diagnostic settings only after live categories have been checked for the deployed network resource IDs.')
+param enableDiagnostics bool = false
+
 var networkConfig = loadJsonContent('./network-config.json')
 var diagnosticsConfig = loadJsonContent('./diagnostics-config.json')
 
@@ -18,7 +21,7 @@ module observability './modules/observability.bicep' = {
   }
 }
 
-module acaNsgDiagnostics './modules/diagnostic-settings.bicep' = {
+module acaNsgDiagnostics './modules/diagnostic-settings.bicep' = if (enableDiagnostics) {
   name: 'aca-nsg-diagnostics'
   params: {
     targetResourceId: network.outputs.acaNetworkSecurityGroupResourceId
@@ -29,7 +32,7 @@ module acaNsgDiagnostics './modules/diagnostic-settings.bicep' = {
   }
 }
 
-module acrAgentsNsgDiagnostics './modules/diagnostic-settings.bicep' = {
+module acrAgentsNsgDiagnostics './modules/diagnostic-settings.bicep' = if (enableDiagnostics) {
   name: 'acr-agents-nsg-diagnostics'
   params: {
     targetResourceId: network.outputs.acrAgentsNetworkSecurityGroupResourceId
@@ -40,7 +43,7 @@ module acrAgentsNsgDiagnostics './modules/diagnostic-settings.bicep' = {
   }
 }
 
-module virtualNetworkDiagnostics './modules/diagnostic-settings.bicep' = {
+module virtualNetworkDiagnostics './modules/diagnostic-settings.bicep' = if (enableDiagnostics) {
   name: 'virtual-network-diagnostics'
   params: {
     targetResourceId: network.outputs.virtualNetworkResourceId
@@ -51,7 +54,7 @@ module virtualNetworkDiagnostics './modules/diagnostic-settings.bicep' = {
   }
 }
 
-module natGatewayPublicIpDiagnostics './modules/diagnostic-settings.bicep' = {
+module natGatewayPublicIpDiagnostics './modules/diagnostic-settings.bicep' = if (enableDiagnostics) {
   name: 'nat-public-ip-diagnostics'
   params: {
     targetResourceId: network.outputs.natGatewayPublicIpResourceId
@@ -75,3 +78,4 @@ output natGatewayPublicIpAddress string = network.outputs.natGatewayPublicIpAddr
 output privateDnsZoneResourceIds array = network.outputs.privateDnsZoneResourceIds
 output workspaceResourceId string = observability.outputs.workspaceResourceId
 output workspaceCustomerId string = observability.outputs.workspaceCustomerId
+output diagnosticsEnabled bool = enableDiagnostics

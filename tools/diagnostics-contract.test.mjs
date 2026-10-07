@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createDiagnosticSettings } from './diagnostics-contract.mjs';
+import { parseAvailableCategories, validateLiveDiagnosticCategories } from './validate-diagnostics.mjs';
 
 const diagnosticsConfig = JSON.parse(
   readFileSync(fileURLToPath(new URL('../infra/diagnostics-config.json', import.meta.url)), 'utf8'),
@@ -107,5 +108,53 @@ test('omits AllMetrics when metrics are not requested', () => {
       logCategories: ['AuditEvent'],
       enableAllMetrics: false,
     },
+  );
+});
+
+test('checks requested categories against live Azure category results', () => {
+  assert.deepEqual(
+    parseAvailableCategories([
+      { name: 'AuditEvent', properties: { categoryType: 'Logs' } },
+      { category: 'AllMetrics', categoryType: 'Metrics' },
+    ]),
+    {
+      logs: ['AuditEvent'],
+      metrics: ['AllMetrics'],
+    },
+  );
+
+  assert.deepEqual(
+    validateLiveDiagnosticCategories(
+      {
+        supportedLogCategories: ['AuditEvent'],
+        supportedMetricCategories: ['AllMetrics'],
+        logCategories: ['AuditEvent'],
+        metricCategories: ['AllMetrics'],
+      },
+      [
+        { name: 'AuditEvent', properties: { categoryType: 'Logs' } },
+        { category: 'AllMetrics', categoryType: 'Metrics' },
+      ],
+    ),
+    {
+      logCategories: ['AuditEvent'],
+      enableAllMetrics: true,
+    },
+  );
+});
+
+test('rejects a requested category missing from the live resource', () => {
+  assert.throws(
+    () =>
+      validateLiveDiagnosticCategories(
+        {
+          supportedLogCategories: ['AuditEvent'],
+          supportedMetricCategories: ['AllMetrics'],
+          logCategories: ['AuditEvent'],
+          metricCategories: ['AllMetrics'],
+        },
+        [{ name: 'AuditEvent', properties: { categoryType: 'Logs' } }],
+      ),
+    /Unsupported metric categories: AllMetrics/,
   );
 });

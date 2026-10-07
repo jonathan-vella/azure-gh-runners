@@ -4,9 +4,14 @@
 
 `infra/modules/observability.bicep` deploys `law-ghrunners-prod-swc` through the Azure Verified Module
 `br/public:avm/res/operational-insights/workspace:0.16.1`. The wrapper explicitly disables workspace shared-key
-authentication and outputs both the workspace resource ID (for diagnostic settings) and customer ID (for the
-Container Apps environment). It does not output either workspace shared key; the ACA environment work item must
-retrieve the key through a secure deployment path.
+authentication and outputs the workspace resource ID (for diagnostic settings) and non-secret customer ID. It does
+not output either workspace shared key.
+
+The future Container Apps environment work item (#15) should use the documented Azure Monitor logs destination and
+diagnostic settings routed to this workspace. This path uses the workspace resource ID and does not require retrieving
+or exporting a workspace shared key. The older direct Log Analytics environment destination is not assumed compatible
+with disabled local authentication; any requirement for that path needs an explicit design decision. This issue does
+not implement the Container Apps environment.
 
 The workspace uses standard Azure Monitor endpoints without an Azure Monitor Private Link Scope (AMPLS):
 
@@ -26,6 +31,7 @@ Microsoft references:
 - [Log Analytics workspace resource properties](https://learn.microsoft.com/azure/templates/microsoft.operationalinsights/workspaces)
 - [Azure Monitor Private Link and AMPLS](https://learn.microsoft.com/azure/azure-monitor/fundamentals/private-link-security)
 - [Manage access to Log Analytics workspaces](https://learn.microsoft.com/azure/azure-monitor/logs/manage-access)
+- [Container Apps log destinations and Azure Monitor diagnostic settings](https://learn.microsoft.com/azure/container-apps/log-options)
 - [Published AVM workspace versions](https://mcr.microsoft.com/v2/bicep/avm/res/operational-insights/workspace/tags/list) (latest stable verified: `0.16.1`)
 
 ## Diagnostic settings pattern
@@ -44,11 +50,10 @@ arbitrary resource ID as an extension-resource scope.
 | `logCategories` | Explicit category names verified for this target resource |
 | `enableAllMetrics` | `true` only when the target supports `AllMetrics`; defaults to `false` |
 
-`infra/diagnostics-config.json` is the category contract loaded by `infra/main.bicep`; the observability validation
-tests this exact file before deployment. The contract rejects unsupported, duplicate, empty, and malformed category
-requests. Enable `AllMetrics` only when the resource supports metric export through diagnostic settings; platform
-metrics existing in Azure Monitor does not by itself mean they can be exported. Do not copy categories from another
-service.
+`infra/diagnostics-config.json` is the category contract loaded by `infra/main.bicep`; `npm run validate` checks this
+exact file before deployment. The contract rejects unsupported, duplicate, empty, and malformed category requests.
+Enable `AllMetrics` only when the resource supports metric export through diagnostic settings; platform metrics
+existing in Azure Monitor does not by itself mean they can be exported. Do not copy categories from another service.
 
 | Resource | Diagnostic categories configured | Decision |
 | --- | --- | --- |
@@ -62,6 +67,30 @@ The issue #13–15 resources (Key Vault, ACR, and Container Apps environment) ar
 infrastructure changes must add entries to the shared category contract and wire this module only after verifying
 the resource type's supported categories from Microsoft documentation or the live category list
 (`az monitor diagnostic-settings categories list --resource <resource-id>`).
+
+For #15 specifically, Microsoft documents the Container Apps `azure-monitor` destination with `ContainerAppConsoleLogs`,
+`ContainerAppSystemLogs`, and `AllMetrics`, routed through diagnostic settings to the workspace resource ID. This is
+the intended no-shared-key path; #15 must still verify the live categories for its actual environment before enabling
+the settings.
+
+## Live category gate
+
+The network resources do not exist until the infrastructure is deployed, so the live Azure category check cannot run
+before the foundation deployment. `infra/main.bicep` therefore defaults `enableDiagnostics` to `false`; its first
+deployment creates the workspace and network and publishes the four resource IDs. Before enabling diagnostics in a
+subsequent deployment:
+
+1. Export the deployment outputs to a local JSON file (for example, `az deployment group show --resource-group
+   rg-ghrunners-prod-swc --name <deployment-name> --query properties.outputs --output json > deployment-outputs.json`).
+2. Run `node tools/validate-diagnostics.mjs --live deployment-outputs.json`. The command queries Azure's live
+   diagnostic categories for both NSGs, the VNet, and the NAT public IP, then rejects any configured log/metric
+   category absent from the corresponding resource.
+3. Only after the check succeeds, run the protected deployment with `enableDiagnostics=true`.
+
+The outputs contain non-secret resource IDs. Do not commit the local outputs file. The live command requires an
+authenticated Azure CLI context and must be run against the approved shared subscription and resource group. This
+issue does not perform either deployment or add a production deployment workflow; the `enableDiagnostics` parameter
+is the explicit handoff between foundation creation and live-validated diagnostics.
 
 References:
 

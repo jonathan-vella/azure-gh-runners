@@ -10,7 +10,7 @@
     "validate:spike7": "node tools/validate-spike7.mjs && pwsh -NoProfile -File tools/test-spike7.ps1",
     "validate:spike6": "pwsh -NoProfile -File tools/test-spike-acr-agentpool.ps1",
     "validate:network": "node --test tools/network.test.js && node tools/validate-network.js",
-    "validate:observability": "az bicep build --file infra/modules/observability.bicep --stdout && az bicep lint --file infra/modules/observability.bicep && az bicep build --file infra/tests/observability.bicep --stdout && az bicep lint --file infra/modules/diagnostic-settings.bicep && node --test tools/diagnostics-contract.test.mjs",
+    "validate:observability": "node tools/validate-diagnostics.mjs && az bicep build --file infra/modules/observability.bicep --stdout && az bicep lint --file infra/modules/observability.bicep && az bicep build --file infra/tests/observability.bicep --stdout && az bicep lint --file infra/modules/diagnostic-settings.bicep && node --test tools/diagnostics-contract.test.mjs",
     "validate:markdown": "markdownlint-cli2 \"**/*.md\""
   },
   "devDependencies": {
