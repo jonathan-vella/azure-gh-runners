@@ -7,11 +7,10 @@
 authentication and outputs the workspace resource ID (for diagnostic settings) and non-secret customer ID. It does
 not output either workspace shared key.
 
-The future Container Apps environment work item (#15) should use the documented Azure Monitor logs destination and
-diagnostic settings routed to this workspace. This path uses the workspace resource ID and does not require retrieving
-or exporting a workspace shared key. The older direct Log Analytics environment destination is not assumed compatible
-with disabled local authentication; any requirement for that path needs an explicit design decision. This issue does
-not implement the Container Apps environment.
+The Container Apps environment uses the documented Azure Monitor logs destination and diagnostic settings routed to
+this workspace. This path uses the workspace resource ID and does not require retrieving or exporting a workspace
+shared key. The AVM `log-analytics` destination resolves the workspace shared key and is not used because local
+authentication is disabled.
 
 The workspace uses standard Azure Monitor endpoints without an Azure Monitor Private Link Scope (AMPLS):
 
@@ -60,33 +59,33 @@ existing in Azure Monitor does not by itself mean they can be exported. Do not c
 | ACA and ACR-agent NSGs | `NetworkSecurityGroupEvent`, `NetworkSecurityGroupFlowEvent`, `NetworkSecurityGroupRuleCounter` | All three published log categories; no `AllMetrics` category is listed for NSGs. |
 | VNet | `VMProtectionAlerts`, `AllMetrics` | Published VNet logs and metrics include these diagnostic categories; the metrics reference marks supported metrics as exportable. |
 | NAT public IP | `DDoSMitigationFlowLogs`, `DDoSMitigationReports`, `DDoSProtectionNotifications`, `AllMetrics` | All published public-IP logs and exportable metrics. DDoS logs contain data only when the relevant protection telemetry is generated. |
+| Container Apps environment | `ContainerAppConsoleLogs`, `ContainerAppSystemLogs`, `AllMetrics` | Documented for the Azure Monitor destination. The environment's live categories must still pass the preflight before settings are enabled. |
 | Standard NAT Gateway | None | `NatGatewayFlowlogsV1` is for StandardV2 NAT Gateways; NAT platform metrics are not exportable through diagnostic settings. Empty settings are not deployed. |
 | Private DNS zones | None | Published zone metrics are not exportable through diagnostic settings. No published resource-log category reference was available to verify an exportable category, so no setting is deployed without one. |
 
-The issue #13–15 resources (Key Vault, ACR, and Container Apps environment) are not yet declared. Their owning
-infrastructure changes must add entries to the shared category contract and wire this module only after verifying
-the resource type's supported categories from Microsoft documentation or the live category list
-(`az monitor diagnostic-settings categories list --resource <resource-id>`).
+The Container Apps environment adds its categories to the shared contract and wires this module behind the same live
+category gate as the network resources. The categories documented for its Azure Monitor destination are
+`ContainerAppConsoleLogs`, `ContainerAppSystemLogs`, and `AllMetrics`; the static contract is not evidence that the
+deployed environment supports them. Issues #13 and #14 must add their own categories only after verifying the actual
+resource types.
 
-For #15 specifically, Microsoft documents the Container Apps `azure-monitor` destination with `ContainerAppConsoleLogs`,
-`ContainerAppSystemLogs`, and `AllMetrics`, routed through diagnostic settings to the workspace resource ID. This is
-the intended no-shared-key path; #15 must still verify the live categories for its actual environment before enabling
-the settings.
+This is the intended no-shared-key path. The live preflight checks the categories against the actual environment
+resource before enabling the settings; it does not prove capacity or successful environment provisioning.
 
 ## Live category gate
 
-The network resources do not exist until the infrastructure is deployed, so the live Azure category check cannot run
-before the foundation deployment. `infra/main.bicep` therefore defaults `enableDiagnostics` to `false`; its first
-deployment creates the workspace and network and publishes the four resource IDs. Before enabling diagnostics in a
-subsequent deployment:
+The resources do not exist until the infrastructure is deployed, so the live Azure category check cannot run before
+the foundation deployment. `infra/main.bicep` therefore defaults `enableDiagnostics` to `false`; its first deployment
+creates the workspace, network, and ACA environment and publishes their resource IDs. Before enabling diagnostics in
+a subsequent deployment:
 
 1. Export the deployment outputs to a local JSON file (for example, `az deployment group show --resource-group
    rg-ghrunners-prod-swc --name <deployment-name> --query properties.outputs --output json > deployment-outputs.json`).
 2. Run `node tools/validate-diagnostics.mjs --live deployment-outputs.json`. The command queries Azure's live
-   diagnostic categories for both NSGs, the VNet, and the NAT public IP using the explicitly configured `shared`
-   subscription ID. It accepts only the exact expected resource types, names, subscription, and resource group, and
-   rejects duplicate IDs or any configured log/metric category absent from the corresponding resource. Azure CLI
-   execution has a 30-second timeout, a 1 MiB output bound, and sanitized errors.
+   diagnostic categories for both NSGs, the VNet, the NAT public IP, and the ACA environment using the explicitly
+   configured `shared` subscription ID. It accepts only the exact expected resource types, names, subscription, and
+   resource group, and rejects duplicate IDs or any configured log/metric category absent from the corresponding
+   resource. Azure CLI execution has a 30-second timeout, a 1 MiB output bound, and sanitized errors.
 3. Only after the check succeeds, run the protected deployment with `enableDiagnostics=true`.
 
 The outputs contain non-secret resource IDs. Do not commit the local outputs file. The live command requires an

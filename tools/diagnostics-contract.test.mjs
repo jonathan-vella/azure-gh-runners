@@ -13,6 +13,7 @@ import {
 const diagnosticsConfig = JSON.parse(
   readFileSync(fileURLToPath(new URL('../infra/diagnostics-config.json', import.meta.url)), 'utf8'),
 );
+const mainBicep = readFileSync(fileURLToPath(new URL('../infra/main.bicep', import.meta.url)), 'utf8');
 const subscriptionId = 'b47d2942-f5ad-4d3c-b28e-c23e4f83d97e';
 const resourceGroup = 'rg-ghrunners-prod-swc';
 
@@ -30,11 +31,22 @@ function makeOutputs(overrides = {}) {
     natGatewayPublicIpResourceId: {
       value: `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/publicIPAddresses/pip-ghrunners-prod-swc-jkl78`,
     },
+    containerAppsEnvironmentResourceId: {
+      value: `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/managedEnvironments/cae-ghrunners-prod-swc-mno12`,
+    },
     ...overrides,
   };
 }
 
 function liveCategoriesForResource(resourceId) {
+  if (resourceId.includes('/managedEnvironments/')) {
+    return [
+      { name: 'ContainerAppConsoleLogs', properties: { categoryType: 'Logs' } },
+      { name: 'ContainerAppSystemLogs', properties: { categoryType: 'Logs' } },
+      { name: 'AllMetrics', properties: { categoryType: 'Metrics' } },
+    ];
+  }
+
   if (resourceId.includes('/networkSecurityGroups/')) {
     return [
       { name: 'NetworkSecurityGroupEvent', properties: { categoryType: 'Logs' } },
@@ -62,6 +74,7 @@ function liveCategoriesForResource(resourceId) {
 
 test('accepts only the diagnostic categories wired into the deployment configuration', () => {
   assert.deepEqual(Object.keys(diagnosticsConfig).sort(), [
+    'containerAppsEnvironment',
     'networkSecurityGroup',
     'publicIpAddress',
     'virtualNetwork',
@@ -76,6 +89,30 @@ test('accepts only the diagnostic categories wired into the deployment configura
       },
     );
   }
+
+  assert.deepEqual(diagnosticsConfig.containerAppsEnvironment.logCategories, [
+    'ContainerAppConsoleLogs',
+    'ContainerAppSystemLogs',
+  ]);
+  assert.deepEqual(diagnosticsConfig.containerAppsEnvironment.metricCategories, ['AllMetrics']);
+});
+
+test('ACA environment uses an internal workload-profiles subnet and Azure Monitor logging', () => {
+  assert.match(mainBicep, /param enableDiagnostics bool = false/);
+  assert.match(mainBicep, /'br\/public:avm\/res\/app\/managed-environment:0\.16\.0'/);
+  assert.match(mainBicep, /name: 'cae-ghrunners-prod-swc-\$\{uniqueSuffix\}'/);
+  assert.match(mainBicep, /internal: true/);
+  assert.match(mainBicep, /publicNetworkAccess: 'Disabled'/);
+  assert.match(mainBicep, /infrastructureSubnetResourceId: network\.outputs\.acaSubnetResourceId/);
+  assert.match(mainBicep, /workloadProfileType: 'Consumption'/);
+  assert.match(mainBicep, /destination: 'azure-monitor'/);
+  assert.match(
+    mainBicep,
+    /output containerAppsEnvironmentResourceId string = containerAppsEnvironment\.outputs\.resourceId/,
+  );
+  assert.match(mainBicep, /module containerAppsEnvironmentDiagnostics[^]*?if \(enableDiagnostics\)/);
+  assert.match(mainBicep, /targetResourceId: containerAppsEnvironment\.outputs\.resourceId/);
+  assert.match(mainBicep, /workspaceResourceId: observability\.outputs\.workspaceResourceId/);
 });
 
 test('rejects the Standard NAT Gateway flow-log category and non-exportable metrics', () => {
@@ -194,6 +231,33 @@ test('checks requested categories against live Azure category results', () => {
   );
 });
 
+test('live preflight rejects an unavailable ACA environment category', () => {
+  const queriedResourceIds = [];
+
+  assert.throws(
+    () =>
+      validateLiveConfiguration(makeOutputs(), {
+        executor: (_file, args) => {
+          const resourceId = args[args.indexOf('--resource') + 1];
+          queriedResourceIds.push(resourceId);
+          const categories = liveCategoriesForResource(resourceId);
+          if (resourceId.includes('/managedEnvironments/')) {
+            return JSON.stringify(
+              categories.filter(({ name }) => name !== 'ContainerAppSystemLogs'),
+            );
+          }
+          return JSON.stringify(categories);
+        },
+        platform: 'linux',
+        subscriptionId,
+        resourceGroup,
+      }),
+    /Unsupported log categories: ContainerAppSystemLogs/,
+  );
+
+  assert.ok(queriedResourceIds.some((resourceId) => resourceId.includes('/managedEnvironments/')));
+});
+
 test('live preflight queries every exact resource ID with explicit subscription and bounded execution', () => {
   const calls = [];
   validateLiveConfiguration(makeOutputs(), {
@@ -207,7 +271,7 @@ test('live preflight queries every exact resource ID with explicit subscription 
     resourceGroup,
   });
 
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 5);
   for (const { file, args, options } of calls) {
     assert.equal(file, 'az');
     assert.deepEqual(args.slice(0, 5), [
