@@ -65,11 +65,16 @@ consumer registry in this repo; nothing is project-specific.
 | FR-9 | Weekly image rebuild and scheduled GitHub App key rotation reminders. |
 | FR-10 | Platform outputs (subnet IDs, DNS zone IDs, labels) published for consumers. |
 
+**Observability network exception:** The Log Analytics workspace uses standard Azure Monitor endpoints with
+`publicNetworkAccessForIngestion` and `publicNetworkAccessForQuery` enabled; no AMPLS is deployed. Workspace local
+authentication is disabled and Azure RBAC controls data access. These managed service endpoints are not inbound
+runner/workload endpoints; this explicit exception is part of the architecture.
+
 ## 7. Security requirements
 
 | ID | Requirement |
 | --- | --- |
-| SR-1 | No inbound public endpoints. ACA environment internal with public network access disabled; ACR, Key Vault private-endpoint-only. |
+| SR-1 | No inbound workload endpoints. ACA environment internal with public network access disabled; ACR and Key Vault private-endpoint-only. Log Analytics is the documented exception: standard ingestion and query use enabled Azure Monitor service endpoints without AMPLS, with local authentication disabled and Azure RBAC controlling access. |
 | SR-2 | Policy floor — public consumer repos: only `workflow_dispatch`, `schedule`, `push`, on the default branch. `pull_request`, `pull_request_target`, `workflow_run` always rejected. Private repos may opt into `pull_request`, never `pull_request_target`. Entries may only narrow the floor. |
 | SR-3 | Floor enforced twice: by the registry validator in CI and by the runner pre-job hook at runtime (fail closed). |
 | SR-4 | GitHub App private key lives only in Key Vault and the init container; the main runner container has no secret environment variables and no managed identity. |

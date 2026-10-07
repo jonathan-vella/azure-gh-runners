@@ -14,7 +14,7 @@ The GitHub repos are public, are owned by a personal account, and need jobs that
 - **Auth to GitHub**: one GitHub App owned by the personal account and installed on selected repos. Its key is deployed to Key Vault through ARM (a Bicep secure param).
 - **Platform CI**: GitHub-hosted runners with OIDC. What-if runs on PR; deploy runs on `workflow_dispatch` into a protected environment. This is all ARM, so no VNet is needed.
 - **Consumer network path**: a shared `snet-consumer-pe` subnet plus platform-owned privatelink DNS zones. Consumers create their own private endpoints in that subnet. This is documented precisely enough for an agent to execute.
-- **Public exposure**: no inbound. The only public component is the NAT Gateway egress IP. Log Analytics uses normal ingestion, with no AMPLS.
+- **Public exposure**: no inbound workload endpoints. The NAT Gateway egress IP is the only public IP resource. Log Analytics is a documented exception: standard Azure Monitor ingestion and query endpoints stay enabled without AMPLS, while workspace local authentication is disabled and Azure RBAC governs data access.
 - **Scope**: the platform, a generic onboarding contract, docs, and a throwaway smoke-test consumer repo. **vnext onboarding is a separate follow-up.**
 
 ## Target architecture
@@ -69,7 +69,7 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 ### 3. Platform IaC (Bicep/AVM)
 
 - **iac-network**: VNet, the 4 subnets, NSGs (lateral-deny rules), NAT Gateway + PIP, private DNS zones + VNet links (zone list from config).
-- **iac-observability**: Log Analytics workspace, plus diagnostic settings on every resource (ACR, KV, ACA env, NAT, NSG flow logs if desired).
+- **iac-observability**: Log Analytics workspace and diagnostic settings for supported categories on existing network resources; later resource issues wire their own supported categories. Standard NAT flow logs require StandardV2, and NAT platform metrics are not exportable through diagnostic settings.
 - **iac-identity-kv**: user-assigned MI(s). Key Vault (RBAC, public disabled, purge protection, PE). GitHub App key secret through ARM (`Microsoft.KeyVault/vaults/secrets`).
 - **iac-acr**: ACR Premium (public disabled, admin off, ARM-audience tokens on, trusted services on, PE for registry + data endpoint), agent pool in `snet-acr-agents`, AcrPull for the job MI.
 - **iac-aca-env**: workload-profiles environment, internal, `publicNetworkAccess: Disabled`, VNet-integrated, logs to LAW.

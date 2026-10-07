@@ -492,6 +492,8 @@ module privateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.1' = [
 ]
 
 output virtualNetworkResourceId string = virtualNetwork.outputs.resourceId
+output acaNetworkSecurityGroupResourceId string = acaNsg.outputs.resourceId
+output acrAgentsNetworkSecurityGroupResourceId string = acrAgentsNsg.outputs.resourceId
 output acaSubnetResourceId string = virtualNetwork.outputs.subnetResourceIds[0]
 output acrAgentsSubnetResourceId string = virtualNetwork.outputs.subnetResourceIds[1]
 output platformPrivateEndpointSubnetResourceId string = virtualNetwork.outputs.subnetResourceIds[2]
