@@ -6,10 +6,17 @@ See [Roadmap](roadmap.md) for milestone exit criteria and [PRD](prd.md) for requ
 ## Dual-backend planning
 
 The planning tracker is [#59](https://github.com/jonathan-vella/azure-gh-runners/issues/59). The primary backend is
-unresolved: the completed D4 trial reached ARM validation only; no ACA environment or job create was observed, and
-the temporary resource group was deleted. This is not a capacity verdict. Apply the conditional rule in the roadmap;
-do not set backend defaults, change the active consumer contract, or reprioritize/relabel ACA work until evidence
-selects a primary.
+unresolved. The owner-authorized additional non-zonal D4 attempt used reviewed source
+`e934066c3c1cb43fa33cf7ee835389f03de48389`. ARM validation was asynchronously accepted, but the installed CLI's
+validation wait raised before `begin_create_or_update`; a local mock confirmed one validation call and zero create
+calls on that error path. The original exit was 1 (`Unclassified`), readback was `DeploymentNotFound`, and independent
+diagnosis was `DeploymentAbsentOwnedGroupEmpty`. The underlying cause cannot be established from the safely reduced
+error. Cleanup succeeded and the exact `rg-ghrunners-spike7-swc` resource group was verified absent. No ACA
+environment create or job run occurred; this is not evidence of ACA capacity failure. See
+[the recorded D4 outcome](https://github.com/jonathan-vella/azure-gh-runners/issues/7#issuecomment-6045915111).
+The authorization is exhausted: no retry or additional deployment is authorized. Apply the conditional rule in the
+roadmap; do not set backend defaults, change the active consumer contract, or reprioritize/relabel ACA work until
+evidence selects a primary.
 
 The additive schema issue #63 may proceed independently of the D4 outcome and VMSS spike. It must not set a default or
 alter existing ACA entries. All runtime/tooling changes and persistent VMSS implementation remain gated by the accepted
@@ -489,15 +496,18 @@ Acceptance criteria:
 The new issue bodies are the detailed acceptance source; this section keeps sequencing and cross-issue invariants
 visible alongside the existing work items.
 
-- **Spike #60:** exact authorized scope is `rg-ghrunners-spike-vmss` in `shared` / `swedencentral`, one `Standard_B2s`
+- **Spike #60:** exact authorized scope is `rg-ghrunners-spike-vmss-swc` in `shared` / `swedencentral`, one `Standard_B2s`
   controller, at most two `Standard_D2ls_v5` workers, four hours, $10, and two deployment attempts. Stop before any
   limit is exceeded. Verify private networking/NAT, hook rejection, no worker identity, one-job deletion, instance
   protection, and termination notifications. On every outcome delete and verify the entire spike RG; never widen
   permissions if the deployment identity is insufficient.
 - **ADR #61 and shared docs #62:** record the reviewed spike outcome and exact D4 evidence rule. Only an actual
   environment and job success selects ACA primary; repeated actual capacity failure selects VMSS primary; any other
-  evidence leaves primary/defaults unresolved. The trial's ARM validation without an ACA create is not a capacity
-  verdict.
+  evidence leaves primary/defaults unresolved. The additional authorized attempt's ARM validation was asynchronously
+  accepted, but its wait failed before any deployment create call; a local mock confirmed zero create calls on this
+  error path. The original exit was 1 and the safely reduced cause remains unclassified. Independent cleanup
+  succeeded and the exact `rg-ghrunners-spike7-swc` group was verified absent. No ACA environment/job was created,
+  so this is not a capacity verdict; the D4 retry authorization is exhausted.
 - **Schema #63:** may proceed before the D4 decision and VMSS spike, but stays additive, has no default, and preserves
   current ACA entries. Tooling #64 and backend flags #65 depend on the accepted ADR; flags additionally require a
   conclusive primary decision before choosing defaults. An explicitly assigned consumer on a disabled backend must
@@ -506,12 +516,14 @@ visible alongside the existing work items.
   Docker daemon, or default outbound access; use the private worker subnet, NAT egress, non-root execution, exact
   existing tool manifest/hook, immutable gallery image, and zero-idle per-consumer VMSS Flex. Do not deploy outside
   the protected main-only `platform-prod` path.
-- **Controller RBAC #69:** Bicep may assign only Virtual Machine Contributor and Network Contributor to the controller
-  identity at `rg-ghrunners-prod-swc`. The existing platform deployment identity's constrained condition currently
-  permits only AcrPull, AcrPush, and Key Vault Secrets User. After the RBAC runbook PR merges, the one-time update may
-  add only those two exact controller role IDs; verify and record the exact before/after state and stop on mismatch.
-  Preserve all scope/action constraints. Persistent role assignments deploy only through `platform-prod`; no
-  subscription-wide grant, worker identity, or extra role is allowed.
+- **Controller RBAC #69:** Bicep may assign only Virtual Machine Contributor (`9980e02c-c2be-4d73-94e8-173b1dc7cf3c`)
+  and Network Contributor (`4d97b98b-1d4f-4787-a291-c67834d212e7`) to the controller identity at
+  `rg-ghrunners-prod-swc`. Do not grant the broader Contributor role. The existing platform deployment identity's constrained condition currently
+  permits only AcrPull, AcrPush, and Key Vault Secrets User. After the controller-RBAC runbook PR merges, an agent may
+  perform the one-time update to add only those two exact controller role IDs; verify and record the exact
+  before/after state and stop on mismatch. Preserve all scope/action constraints. Persistent role assignments deploy
+  only through the main-only `platform-prod` workflow; no subscription-wide grant, worker identity, or extra role is
+  allowed.
 - **Controller/runtime #71–#72:** pin `actions/scaleset` v0.4.0 behind an interface. Keep JIT data only in protected
   Custom Script Extension settings, never logs/arguments/source. Reconcile worker, NIC, disk, and extension cleanup
   after success, error, timeout, cancellation, and restart; surface cleanup failures as pending rather than success.

@@ -14,7 +14,7 @@ graph LR
   S60[VMSS lifecycle spike #60] --> A61[Accepted dual-backend ADR #61]
   A61 --> M3
   A61 --> M2
-  M2 --> N63[Additive backend schema #63]
+  S16[Existing registry schema #16] --> N63[Additive backend schema #63]
   N63 --> T64[Backend tooling #64]
   D4[D4 primary decision] --> F65[Backend flags and defaults #65]
   A61 --> F65
@@ -46,9 +46,16 @@ graph LR
 
 ## Backend decision and gates
 
-The primary backend and active defaults are **unresolved**. The completed, single non-zonal ACA D4 trial reached ARM
-validation only: no ACA environment or job create was observed, and its temporary resource group was deleted. This is
-not evidence of ACA capacity failure and does not select VMSS as primary.
+The primary backend and active defaults are **unresolved**. The owner-authorized additional non-zonal ACA D4 attempt
+used reviewed source `e934066c3c1cb43fa33cf7ee835389f03de48389`. ARM validation was asynchronously accepted, but the
+installed CLI's validation wait raised before `begin_create_or_update`; a local mock confirmed one validation call and
+zero create calls on that error path. The original exit was 1 (`Unclassified`), readback was
+`DeploymentNotFound`, and independent diagnosis was `DeploymentAbsentOwnedGroupEmpty`. The underlying cause cannot be
+established from the safely reduced error. Independent cleanup succeeded and the exact `rg-ghrunners-spike7-swc`
+resource group was verified absent. No ACA environment create or job run was observed. This is not evidence of ACA
+capacity failure and does not select VMSS as primary. See
+[the recorded D4 outcome](https://github.com/jonathan-vella/azure-gh-runners/issues/7#issuecomment-6045915111).
+The D4 authorization is exhausted; no retry or additional deployment is authorized.
 
 Apply the approved conditional rule:
 
