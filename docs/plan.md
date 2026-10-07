@@ -14,7 +14,7 @@ The GitHub repos are public, are owned by a personal account, and need jobs that
 - **Auth to GitHub**: one GitHub App owned by the personal account and installed on selected repos. Its key is deployed to Key Vault through ARM (a Bicep secure param).
 - **Platform CI**: GitHub-hosted runners with OIDC. What-if runs on PR; deploy runs on `workflow_dispatch` into a protected environment. This is all ARM, so no VNet is needed.
 - **Consumer network path**: a shared `snet-consumer-pe` subnet plus platform-owned privatelink DNS zones. Consumers create their own private endpoints in that subnet. This is documented precisely enough for an agent to execute.
-- **Public exposure**: no inbound. The only public component is the NAT Gateway egress IP. Log Analytics uses normal ingestion, with no AMPLS.
+- **Public exposure**: no inbound workload endpoints. The NAT Gateway egress IP is the only public IP resource. Log Analytics is a documented exception: standard Azure Monitor ingestion and query endpoints stay enabled without AMPLS, while workspace local authentication is disabled and Azure RBAC governs data access.
 - **Scope**: the platform, a generic onboarding contract, docs, and a throwaway smoke-test consumer repo. **vnext onboarding is a separate follow-up.**
 
 ## Target architecture
