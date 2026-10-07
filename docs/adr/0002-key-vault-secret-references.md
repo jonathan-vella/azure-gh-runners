@@ -116,6 +116,14 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
   resource group, creates a random synthetic value into an ACL-restricted temporary secure parameter file, and removes
   that file in a `finally` block. The test action is bounded, emits only sanitized statuses, stages, codes, and profile
   readback metadata, and restores bypass to `None` without ever enabling public access.
+- Every Azure CLI subprocess in the spike runner, including account/scope checks, deployment diagnostics, environment
+  and job readbacks, Key Vault updates, resource-group existence/deletion, and cleanup polling, goes through one
+  wrapper using the shared KEDA bounded-process helper. Each subprocess is limited by the remaining action deadline;
+  redirected output is drained, timed-out process trees are killed and termination confirmed, streams/process handles
+  are disposed, and CLI diagnostics are reduced to an allowlisted error code or suppressed. Cleanup treats an exact
+  resource-group absence as idempotent success, while a failed/ambiguous existence read or ownership mismatch stops
+  without deletion. Local tests exercise a real synthetic hanging subprocess and assert runtime call paths cannot
+  bypass the wrapper.
 - Use an outer `try/finally` so the owned spike group is cleaned up after a test failure. If the deployment client
   times out, it is killed at the configured bound, but the ARM deployment may still be active: first inspect that
   deployment's terminal state with the explicit approved subscription, then run cleanup; do not blindly retry or

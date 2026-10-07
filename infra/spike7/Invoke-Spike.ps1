@@ -43,63 +43,113 @@ $templatePath = Join-Path $PSScriptRoot 'main.bicep'
 $jobTemplatePath = Join-Path $PSScriptRoot 'job.bicep'
 $maxExecutionWait = [TimeSpan]::FromMinutes([Math]::Min($TimeoutMinutes, 10))
 $pollSeconds = 15
+$processModule = Import-Module (Join-Path $PSScriptRoot '..\..\tools\spikes\keda-egress\Process.psm1') -Force -PassThru
+if (-not $processModule) {
+    throw 'Could not load the shared bounded-process helper.'
+}
 Import-Module (Join-Path $PSScriptRoot 'Comparison.psm1') -Force
+
+function Get-RemainingActionSeconds {
+    $remaining = [int][Math]::Floor(($script:actionDeadline - [DateTimeOffset]::UtcNow).TotalSeconds)
+    if ($remaining -lt 1) {
+        throw 'The bounded Azure action time budget expired.'
+    }
+    return [Math]::Min($remaining, 2700)
+}
+
+function Get-SanitizedAzureCliCode {
+    param(
+        [AllowEmptyString()][string] $Diagnostics
+    )
+
+    $knownCodes = @(
+        'AKSCapacityHeavyUsage',
+        'ManagedEnvironmentCapacityHeavyUsageError',
+        'ManagedEnvironmentNotReadyForAppCreation',
+        'AuthorizationFailed',
+        'ResourceNotFound',
+        'DeploymentFailed',
+        'InvalidTemplate',
+        'InvalidTemplateDeployment',
+        'Conflict',
+        'TooManyRequests',
+        'OperationNotAllowed',
+        'ForbiddenByFirewall',
+        'ForbiddenByRbac',
+        'KeyVaultSecretRefIdentityError'
+    )
+    foreach ($code in $knownCodes) {
+        if ($Diagnostics -match "(?<![A-Za-z])$([regex]::Escape($code))(?![A-Za-z])") {
+            return $code
+        }
+    }
+    return 'unclassified'
+}
+
+function Invoke-AzProcess {
+    param(
+        [Parameter(Mandatory)][string[]] $Arguments
+    )
+
+    try {
+        $cli = Get-BoundedAzureCli
+        $result = Invoke-BoundedProcess -FileName $cli.fileName `
+            -Arguments (@($cli.prefix) + $Arguments + @('--only-show-errors')) `
+            -TimeoutSeconds (Get-RemainingActionSeconds)
+    } catch {
+        if ($_.Exception.Message -match 'exceeded its \d+-second limit') {
+            throw 'Bounded Azure CLI operation timed out and was terminated; ARM may still be active, so inspect its state before retrying.'
+        }
+        throw 'Bounded Azure CLI operation failed; process diagnostics were suppressed.'
+    }
+
+    return [pscustomobject]@{
+        ExitCode = [int]$result.exitCode
+        StdOut = [string]$result.stdout
+        ErrorCode = if ($result.exitCode -ne 0) {
+            Get-SanitizedAzureCliCode -Diagnostics ([string]$result.stderr + "`n" + [string]$result.stdout)
+        } else { $null }
+    }
+}
 
 function Invoke-AzJson {
     param([Parameter(Mandatory)][string[]] $Arguments)
 
-    $result = & az @Arguments --only-show-errors --output json 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Azure CLI command failed; no command output was emitted.'
+    $result = Invoke-AzProcess -Arguments (@($Arguments) + @('--output', 'json'))
+    if ($result.ExitCode -ne 0) {
+        throw "Azure CLI command failed (code=$($result.ErrorCode)); output was suppressed."
     }
-    if (-not $result) {
+    if ([string]::IsNullOrWhiteSpace($result.StdOut)) {
         return $null
     }
-    return ($result -join "`n" | ConvertFrom-Json)
+    try {
+        return ($result.StdOut | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        throw 'Azure CLI returned invalid JSON; output was suppressed.'
+    }
 }
 
 function Invoke-AzBounded {
     param(
-        [Parameter(Mandatory)][string[]] $Arguments,
-        [ValidateRange(1, 2700)][int] $TimeoutSeconds = ($TimeoutMinutes * 60)
+        [Parameter(Mandatory)][string[]] $Arguments
     )
 
-    $azCommand = Get-Command az -CommandType Application -ErrorAction Stop
-    $pythonPath = (Resolve-Path (Join-Path (Split-Path $azCommand.Source) '..\python.exe')).Path
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $pythonPath
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    foreach ($argument in @('-IBm', 'azure.cli') + $Arguments) {
-        [void]$startInfo.ArgumentList.Add($argument)
-    }
-
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    if (-not $process.Start()) {
-        throw 'Could not start the bounded Azure CLI deployment process.'
-    }
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-    $timeoutMilliseconds = $TimeoutSeconds * 1000
-    if (-not $process.WaitForExit($timeoutMilliseconds)) {
-        $process.Kill($true)
-        $process.WaitForExit()
-        throw 'Azure CLI exceeded the configured deployment timeout. The ARM deployment may still be active; do not retry until its state is checked.'
-    }
-    $null = $stdoutTask.GetAwaiter().GetResult()
-    $null = $stderrTask.GetAwaiter().GetResult()
-    return $process.ExitCode
+    return (Invoke-AzProcess -Arguments (@($Arguments) + @('--output', 'none'))).ExitCode
 }
 
-function Get-RemainingTestSeconds {
-    $remaining = [int][Math]::Floor(($script:testDeadline - [DateTimeOffset]::UtcNow).TotalSeconds)
-    if ($remaining -lt 1) {
-        throw 'The bounded comparison time budget expired.'
+function Get-ResourceGroupExists {
+    $result = Invoke-AzProcess -Arguments @(
+        'group', 'exists', '--subscription', $approvedSubscription,
+        '--name', $approvedResourceGroup, '--output', 'tsv'
+    )
+    if ($result.ExitCode -ne 0) {
+        throw "Could not determine exact spike resource-group existence (code=$($result.ErrorCode)); refusing to continue."
     }
-    return $remaining
+    switch ($result.StdOut.Trim()) {
+        'true' { return $true }
+        'false' { return $false }
+        default { throw 'Resource-group existence readback was ambiguous; refusing to continue.' }
+    }
 }
 
 function Assert-ApprovedScope {
@@ -129,6 +179,13 @@ function Get-TaggedResourceGroup {
         }
     }
     return $group
+}
+
+function Get-OptionalTaggedResourceGroup {
+    if (-not (Get-ResourceGroupExists)) {
+        return $null
+    }
+    return Get-TaggedResourceGroup
 }
 
 function Assert-ProfileAuthorization {
@@ -255,9 +312,11 @@ function Set-KeyVaultBypass {
         [Parameter(Mandatory)][ValidateSet('None', 'AzureServices')][string] $Bypass
     )
 
-    $null = & az resource update --subscription $approvedSubscription --ids $VaultId `
-        --set "properties.networkAcls.bypass=$Bypass" --only-show-errors --output none 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    $result = Invoke-AzProcess -Arguments @(
+        'resource', 'update', '--subscription', $approvedSubscription, '--ids', $VaultId,
+        '--set', "properties.networkAcls.bypass=$Bypass", '--output', 'none'
+    )
+    if ($result.ExitCode -ne 0) {
         throw "Azure rejected the requested trusted-services bypass setting: $Bypass."
     }
     $vault = Invoke-AzJson @('resource', 'show', '--subscription', $approvedSubscription, '--ids', $VaultId)
@@ -289,9 +348,8 @@ function New-FreshDiagnosticJob {
         '--parameters', "jobName=$jobName", "location=$approvedLocation",
         "environmentResourceId=$EnvironmentId", "identityResourceId=$IdentityId",
         "keyVaultSecretUrl=$KeyVaultSecretUrl", "workloadProfileName=$Profile",
-        "probeDigest=$ProbeDigest",
-        '--only-show-errors', '--output', 'none'
-    ) -TimeoutSeconds (Get-RemainingTestSeconds)
+        "probeDigest=$ProbeDigest"
+    )
     if ($exitCode -ne 0) {
         $operations = @(Invoke-AzJson @(
             'deployment', 'operation', 'group', 'list', '--subscription', $approvedSubscription,
@@ -374,7 +432,7 @@ function Invoke-JobAndWait {
         if ($script:testDeadline -and [DateTimeOffset]::UtcNow -ge $script:testDeadline) {
             throw 'The bounded comparison time budget expired while awaiting the ACA execution.'
         }
-        Start-Sleep -Seconds $pollSeconds
+        Start-Sleep -Seconds ([Math]::Min($pollSeconds, (Get-RemainingActionSeconds)))
         $execution = Invoke-AzJson @(
             'containerapp', 'job', 'execution', 'show', '--subscription', $approvedSubscription,
             '--resource-group', $approvedResourceGroup, '--name', $JobName,
@@ -437,6 +495,7 @@ if ($Action -eq 'Validate') {
 if (-not $SubscriptionId) {
     throw 'An explicit --subscription ID is required for every Azure operation.'
 }
+$script:actionDeadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
 Assert-ApprovedScope
 
 switch ($Action) {
@@ -445,8 +504,7 @@ switch ($Action) {
         if ($env:OS -ne 'Windows_NT') {
             throw 'Secure temporary parameter files require Windows ACLs; run this script on Windows.'
         }
-        $exists = & az group exists --subscription $approvedSubscription --name $approvedResourceGroup --output tsv 2>$null
-        if ($LASTEXITCODE -ne 0 -or $exists -cne 'false') {
+        if (Get-ResourceGroupExists) {
             throw 'The exact spike resource group must be absent before deployment; no existing group was changed.'
         }
 
@@ -473,14 +531,18 @@ switch ($Action) {
             $deploymentExitCode = Invoke-AzBounded @(
                 'deployment', 'group', 'create', '--subscription', $approvedSubscription,
                 '--resource-group', $approvedResourceGroup, '--name', 'issue7-spike',
-                '--template-file', $templatePath, '--parameters', "@$parameterFile",
-                '--only-show-errors', '--output', 'none'
+                '--template-file', $templatePath, '--parameters', "@$parameterFile"
             )
             if ($deploymentExitCode -ne 0) {
-                $deploymentState = & az deployment group show --subscription $approvedSubscription `
-                    --resource-group $approvedResourceGroup --name 'issue7-spike' `
-                    --query 'properties.error.code' --output tsv 2>$null
-                if ($LASTEXITCODE -eq 0 -and $deploymentState -match '^[A-Za-z0-9._-]+$') {
+                $deploymentReadback = Invoke-AzProcess -Arguments @(
+                    'deployment', 'group', 'show', '--subscription', $approvedSubscription,
+                    '--resource-group', $approvedResourceGroup, '--name', 'issue7-spike',
+                    '--query', 'properties.error.code', '--output', 'tsv'
+                )
+                $deploymentState = if ($deploymentReadback.ExitCode -eq 0) {
+                    $deploymentReadback.StdOut.Trim()
+                } else { $deploymentReadback.ErrorCode }
+                if ($deploymentState -match '^[A-Za-z][A-Za-z0-9._-]{0,127}$') {
                     throw "Issue-7 infrastructure deployment failed at stage=resource-group-deployment with Azure error code: $deploymentState. The owned resource group was retained for explicit cleanup."
                 }
                 throw 'Issue-7 infrastructure deployment failed at stage=resource-group-deployment. The owned resource group was retained for explicit cleanup.'
@@ -506,7 +568,7 @@ switch ($Action) {
         }
         $evidenceFile = [System.IO.Path]::GetFullPath($EvidencePath)
         $records = [System.Collections.Generic.List[object]]::new()
-        $script:testDeadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
+        $script:testDeadline = $script:actionDeadline
         [void](Get-TaggedResourceGroup)
         $deployment = Invoke-AzJson @(
             'deployment', 'group', 'show', '--subscription', $approvedSubscription,
@@ -582,20 +644,22 @@ switch ($Action) {
     }
 
     'Cleanup' {
-        [void](Get-TaggedResourceGroup)
-        $null = & az group delete --subscription $approvedSubscription --name $approvedResourceGroup `
-            --yes --no-wait --only-show-errors 2>$null
-        if ($LASTEXITCODE -ne 0) {
+        $group = Get-OptionalTaggedResourceGroup
+        if (-not $group) {
+            Write-Output 'The explicitly scoped issue-7 resource group is already absent; cleanup is complete.'
+            return
+        }
+        $deleteResult = Invoke-AzProcess -Arguments @(
+            'group', 'delete', '--subscription', $approvedSubscription, '--name', $approvedResourceGroup,
+            '--yes', '--no-wait', '--output', 'none'
+        )
+        if ($deleteResult.ExitCode -ne 0) {
             throw 'Azure did not accept deletion of the explicitly owned issue-7 resource group.'
         }
         $timer = [System.Diagnostics.Stopwatch]::StartNew()
         do {
-            Start-Sleep -Seconds $pollSeconds
-            $exists = & az group exists --subscription $approvedSubscription --name $approvedResourceGroup --output tsv 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                throw 'Could not verify issue-7 resource-group cleanup.'
-            }
-            if ($exists -ceq 'false') {
+            Start-Sleep -Seconds ([Math]::Min($pollSeconds, (Get-RemainingActionSeconds)))
+            if (-not (Get-ResourceGroupExists)) {
                 Write-Output 'The explicitly owned issue-7 resource group is absent.'
                 return
             }

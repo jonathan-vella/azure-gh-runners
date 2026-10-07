@@ -5,6 +5,7 @@ const template = await readFile(new URL('../infra/spike7/main.bicep', import.met
 const jobTemplate = await readFile(new URL('../infra/spike7/job.bicep', import.meta.url), 'utf8');
 const runner = await readFile(new URL('../infra/spike7/Invoke-Spike.ps1', import.meta.url), 'utf8');
 const comparison = await readFile(new URL('../infra/spike7/Comparison.psm1', import.meta.url), 'utf8');
+const boundedProcess = await readFile(new URL('./spikes/keda-egress/Process.psm1', import.meta.url), 'utf8');
 
 const requiredTemplateText = [
   "'br/public:avm/res/network/public-ip-address:0.13.0'",
@@ -78,6 +79,25 @@ assert.match(runner, /stage=resource-group-deployment/);
 assert.match(runner, /Stage = 'job-provisioning'/);
 assert.match(runner, /'containerapp', 'env', 'show', '--subscription', \$approvedSubscription/);
 assert.match(runner, /'containerapp', 'job', 'show', '--subscription', \$approvedSubscription/);
+assert.match(runner, /function Invoke-AzProcess[\s\S]*Invoke-BoundedProcess[\s\S]*Get-RemainingActionSeconds/);
+assert.match(runner, /function Invoke-AzJson[\s\S]*Invoke-AzProcess/);
+assert.match(runner, /function Invoke-AzBounded[\s\S]*Invoke-AzProcess/);
+assert.match(runner, /function Get-ResourceGroupExists[\s\S]*Invoke-AzProcess/);
+assert.match(runner, /function Get-OptionalTaggedResourceGroup[\s\S]*Get-ResourceGroupExists[\s\S]*Get-TaggedResourceGroup/);
+assert.match(runner, /'Cleanup'\s*\{[\s\S]*Get-OptionalTaggedResourceGroup[\s\S]*already absent; cleanup is complete/);
+assert.equal((runner.match(/Invoke-BoundedProcess/g) ?? []).length, 1, 'All subprocesses use the single bounded wrapper');
+assert.doesNotMatch(runner, /(?:^|\n)\s*&\s*az(?:\.cmd|\.exe)?\b/m, 'No Azure CLI call can bypass the wrapper');
+assert.doesNotMatch(runner, /ProcessStartInfo|WaitForExit|\.Kill\(/, 'Process lifecycle is delegated to the shared helper');
+assert.match(boundedProcess, /RedirectStandardOutput = \$true/);
+assert.match(boundedProcess, /RedirectStandardError = \$true/);
+assert.match(boundedProcess, /ReadToEndAsync\(\)/);
+assert.match(boundedProcess, /Kill\(\$true\)/);
+assert.match(boundedProcess, /WaitForExit\(5000\)/);
+assert.match(boundedProcess, /WaitAll/);
+assert.match(boundedProcess, /\$process\.Dispose\(\)/);
+assert.match(runner, /function Get-OptionalTaggedResourceGroup[\s\S]*if \(-not \(Get-ResourceGroupExists\)\)[\s\S]*return \$null/);
+assert.match(runner, /Resource-group existence readback was ambiguous/);
+assert.match(runner, /unexpected scope\/location/);
 assert.match(runner, /SetAccessRuleProtection\(\$true, \$false\)/);
 assert.match(runner, /New-FreshDiagnosticJob/);
 assert.match(runner, /Invoke-SpikeBypassComparison/);

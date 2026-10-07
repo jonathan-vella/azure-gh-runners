@@ -39,6 +39,118 @@ $consumptionProfile = Assert-EnvironmentProfile -EnvironmentState $consumptionEn
 Assert-Equal $consumptionProfile.maximumCount 1 'Consumption default remains unchanged'
 Assert-Equal $consumptionEnvironment.properties.zoneRedundant $false 'Consumption remains non-zonal'
 
+$fakePwsh = Get-Command pwsh -CommandType Application -ErrorAction Stop |
+    Select-Object -First 1 -ExpandProperty Source
+$fakeAzPath = Join-Path ([System.IO.Path]::GetTempPath()) "issue7-fake-az-$([guid]::NewGuid().ToString('N')).ps1"
+$fakeAzScript = @'
+if ($args -contains 'exists') {
+    if ($env:SPIKE7_FAKE_AZ_OUTPUT -eq 'read-failure') {
+        [Console]::Error.Write('SENSITIVE EXISTENCE READ FAILURE')
+        exit 4
+    }
+    [Console]::Out.Write($env:SPIKE7_FAKE_AZ_OUTPUT)
+} elseif ($args -contains 'fail') {
+    [Console]::Error.Write('SENSITIVE FAKE AZ FAILURE')
+    exit 7
+} elseif ($args -contains 'hang') {
+    Start-Sleep -Seconds 30
+} elseif ($env:SPIKE7_FAKE_AZ_TAG_MISMATCH -eq '1') {
+    [Console]::Out.Write('{"id":"/subscriptions/b47d2942-f5ad-4d3c-b28e-c23e4f83d97e/resourceGroups/rg-ghrunners-spike7-swc","location":"swedencentral","tags":{"application":"unexpected"}}')
+} else {
+    [Console]::Out.Write('{"ok":true}')
+}
+'@
+[System.IO.File]::WriteAllText($fakeAzPath, $fakeAzScript)
+$previousFakeAzOutput = $env:SPIKE7_FAKE_AZ_OUTPUT
+$previousTagMismatch = $env:SPIKE7_FAKE_AZ_TAG_MISMATCH
+function script:Get-BoundedAzureCli {
+    return [pscustomobject]@{
+        fileName = $script:fakePwsh
+        prefix = $script:fakePrefix
+    }
+}
+$script:fakePwsh = $fakePwsh
+$script:fakeAzPath = $fakeAzPath
+$script:fakePrefix = @('-NoProfile', '-File', $fakeAzPath)
+$script:actionDeadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+try {
+    $fakeResult = Invoke-AzJson -Arguments @('synthetic', 'read')
+    Assert-Equal $fakeResult.ok $true 'JSON Azure CLI calls run through the bounded wrapper'
+    Assert-Equal (Invoke-AzBounded -Arguments @('synthetic', 'run')) 0 'Output-suppressed Azure CLI call uses the same wrapper'
+
+    $env:SPIKE7_FAKE_AZ_OUTPUT = 'false'
+    Assert-Equal ($null -eq (Get-OptionalTaggedResourceGroup)) $true 'Cleanup treats exact absent group as idempotent success'
+
+    $env:SPIKE7_FAKE_AZ_OUTPUT = 'unknown'
+    $ambiguousReadRejected = $false
+    try {
+        $null = Get-OptionalTaggedResourceGroup
+    } catch {
+        $ambiguousReadRejected = $_.Exception.Message -like '*ambiguous*'
+    }
+    Assert-Equal $ambiguousReadRejected $true 'Cleanup fails closed on ambiguous group existence'
+
+    $env:SPIKE7_FAKE_AZ_OUTPUT = 'read-failure'
+    $failedReadRejected = $false
+    try {
+        $null = Get-OptionalTaggedResourceGroup
+    } catch {
+        $failedReadRejected = $_.Exception.Message -like '*refusing to continue*' -and
+            $_.Exception.Message -notmatch 'SENSITIVE EXISTENCE READ FAILURE'
+    }
+    Assert-Equal $failedReadRejected $true 'Cleanup fails closed on failed existence reads without leaking diagnostics'
+
+    $env:SPIKE7_FAKE_AZ_OUTPUT = 'true'
+    $env:SPIKE7_FAKE_AZ_TAG_MISMATCH = '1'
+    $ownershipMismatchRejected = $false
+    try {
+        $null = Get-OptionalTaggedResourceGroup
+    } catch {
+        $ownershipMismatchRejected = $_.Exception.Message -like '*ownership tag mismatch*'
+    }
+    Assert-Equal $ownershipMismatchRejected $true 'Cleanup fails closed on resource ownership mismatch'
+
+    $sanitizedFailure = $false
+    try {
+        $null = Invoke-AzJson -Arguments @('synthetic', 'fail')
+    } catch {
+        $sanitizedFailure = $_.Exception.Message -notmatch 'SENSITIVE FAKE AZ FAILURE'
+    }
+    Assert-Equal $sanitizedFailure $true 'Azure CLI failure diagnostics are suppressed'
+
+    $script:actionDeadline = [DateTimeOffset]::UtcNow.AddSeconds(2)
+    $timeoutWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $timeoutRejected = $false
+    $timeoutMessage = $null
+    try {
+        $script:fakePrefix = @('-NoProfile', '-File', $fakeAzPath)
+        $null = Invoke-AzProcess -Arguments @('synthetic', 'hang')
+    } catch {
+        $timeoutMessage = $_.Exception.Message
+        $timeoutRejected = $timeoutMessage -like '*timed out and was terminated*'
+    } finally {
+        $timeoutWatch.Stop()
+    }
+    if (-not $timeoutRejected) {
+        throw "Synthetic timeout was not sanitized as expected: $timeoutMessage"
+    }
+    Assert-Equal ($timeoutWatch.Elapsed.TotalSeconds -lt 10) $true 'Synthetic subprocess timeout remains bounded'
+} finally {
+    if ($null -eq $previousFakeAzOutput) {
+        Remove-Item Env:\SPIKE7_FAKE_AZ_OUTPUT -ErrorAction SilentlyContinue
+    } else {
+        $env:SPIKE7_FAKE_AZ_OUTPUT = $previousFakeAzOutput
+    }
+    if ($null -eq $previousTagMismatch) {
+        Remove-Item Env:\SPIKE7_FAKE_AZ_TAG_MISMATCH -ErrorAction SilentlyContinue
+    } else {
+        $env:SPIKE7_FAKE_AZ_TAG_MISMATCH = $previousTagMismatch
+    }
+    if (Test-Path -LiteralPath $fakeAzPath) {
+        Remove-Item -LiteralPath $fakeAzPath -Force
+    }
+}
+
 foreach ($invalidEnvironment in @(
     [pscustomobject]@{
         properties = [pscustomobject]@{
