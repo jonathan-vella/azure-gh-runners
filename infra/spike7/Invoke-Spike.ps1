@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('Deploy', 'Test', 'Cleanup', 'Validate')]
+    [ValidateSet('Deploy', 'Test', 'Diagnose', 'Cleanup', 'Validate')]
     [string] $Action,
 
     [string] $SubscriptionId,
@@ -68,6 +68,7 @@ function Get-SanitizedAzureCliCode {
         'ManagedEnvironmentNotReadyForAppCreation',
         'AuthorizationFailed',
         'ResourceNotFound',
+        'DeploymentNotFound',
         'DeploymentFailed',
         'InvalidTemplate',
         'InvalidTemplateDeployment',
@@ -78,12 +79,62 @@ function Get-SanitizedAzureCliCode {
         'ForbiddenByRbac',
         'KeyVaultSecretRefIdentityError'
     )
-    foreach ($code in $knownCodes) {
-        if ($Diagnostics -match "(?<![A-Za-z])$([regex]::Escape($code))(?![A-Za-z])") {
-            return $code
+    $codes = [System.Collections.Generic.List[string]]::new()
+    try {
+        $structured = ConvertFrom-Json -InputObject $Diagnostics -ErrorAction Stop
+        $pending = [System.Collections.Generic.Queue[object]]::new()
+        $pending.Enqueue($structured)
+        while ($pending.Count) {
+            $node = $pending.Dequeue()
+            if ($node.code) { $codes.Add([string]$node.code) }
+            foreach ($child in @($node.error, $node.innererror) + @($node.details)) {
+                if ($null -ne $child) { $pending.Enqueue($child) }
+            }
+        }
+    } catch {
+        # Accept only exact readback codes or the CLI's explicit error-code prefix.
+        foreach ($code in $knownCodes) {
+            if ($Diagnostics.Trim() -ceq $code -or
+                $Diagnostics -cmatch "(?m)^ERROR:\s*\($([regex]::Escape($code))\)") {
+                $codes.Add($code)
+            }
         }
     }
+    foreach ($code in $knownCodes) {
+        if ($codes.Contains($code)) { return $code }
+    }
     return 'unclassified'
+}
+
+function Get-SafeCliFailure {
+    param([string] $Diagnostics)
+
+    $code = Get-SanitizedAzureCliCode -Diagnostics $Diagnostics
+    $category = switch -Regex ($code) {
+        '^(AuthorizationFailed|ForbiddenByRbac)$' { 'Authentication'; break }
+        '^InvalidTemplate' { 'Validation'; break }
+        '^unclassified$' { 'Unclassified'; break }
+        default { 'Arm'; break }
+    }
+    if ($code -ceq 'unclassified') {
+        $category = switch -Regex ($Diagnostics) {
+            'BCP\d{3}\b|Bicep compilation failed' { 'Bicep'; break }
+            'No such file or directory|FileNotFoundError|could not find file|Unable to load parameters' { 'LocalFile'; break }
+            'az login|AADSTS\d+|AuthenticationFailed|ExpiredAuthenticationToken' { 'Authentication'; break }
+            'unrecognized arguments:|the following arguments are required:|invalid choice:' { 'CliArguments'; break }
+            default { 'Unclassified'; break }
+        }
+    }
+    $correlationId = $null
+    try {
+        $structured = ConvertFrom-Json -InputObject $Diagnostics -ErrorAction Stop
+        if ([string]$structured.correlationId -cmatch '^[a-fA-F0-9]{8}(-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$') {
+            $correlationId = [string]$structured.correlationId
+        }
+    } catch {
+        # Non-JSON CLI diagnostics are classified only into fixed categories/codes.
+    }
+    return [pscustomobject]@{ Category = $category; Code = $code; CorrelationId = $correlationId }
 }
 
 function Invoke-AzProcess {
@@ -103,12 +154,15 @@ function Invoke-AzProcess {
         throw 'Bounded Azure CLI operation failed; process diagnostics were suppressed.'
     }
 
+    $failure = Get-SafeCliFailure -Diagnostics ([string]$result.stderr + "`n" + [string]$result.stdout)
     return [pscustomobject]@{
         ExitCode = [int]$result.exitCode
         StdOut = [string]$result.stdout
         ErrorCode = if ($result.exitCode -ne 0) {
-            Get-SanitizedAzureCliCode -Diagnostics ([string]$result.stderr + "`n" + [string]$result.stdout)
+            $failure.Code
         } else { $null }
+        ErrorCategory = if ($result.exitCode -ne 0) { $failure.Category } else { $null }
+        CorrelationId = $failure.CorrelationId
     }
 }
 
@@ -135,6 +189,76 @@ function Invoke-AzBounded {
     )
 
     return (Invoke-AzProcess -Arguments (@($Arguments) + @('--output', 'none'))).ExitCode
+}
+
+function Invoke-InfrastructureDeployment {
+    param([Parameter(Mandatory)][string] $ParameterFile)
+
+    $result = Invoke-AzProcess -Arguments @(
+        'deployment', 'group', 'create', '--subscription', $approvedSubscription,
+        '--resource-group', $approvedResourceGroup, '--name', 'issue7-spike',
+        '--template-file', $templatePath, '--parameters', "@$ParameterFile", '--output', 'none'
+    )
+    if ($result.ExitCode -eq 0) { return }
+
+    $readbackCode = 'Unavailable'
+    try {
+        $readback = Invoke-AzProcess -Arguments @(
+            'deployment', 'group', 'show', '--subscription', $approvedSubscription,
+            '--resource-group', $approvedResourceGroup, '--name', 'issue7-spike',
+            '--query', 'properties.error.code', '--output', 'tsv'
+        )
+        $readbackCode = if ($readback.ExitCode -eq 0) {
+            Get-SanitizedAzureCliCode -Diagnostics $readback.StdOut
+        } else { $readback.ErrorCode }
+    } catch {
+        $readbackCode = 'Unavailable'
+    }
+    throw "Issue-7 infrastructure deployment failed at stage=resource-group-deployment; originalExit=$($result.ExitCode); category=$($result.ErrorCategory); originalCode=$($result.ErrorCode); correlationId=$($result.CorrelationId); readbackCode=$readbackCode. Output was suppressed; explicit cleanup is required."
+}
+
+function Get-SpikeDeploymentState {
+    $group = Get-OptionalTaggedResourceGroup
+    if (-not $group) { return 'ResourceGroupAbsent' }
+    $deployments = Get-SpikeJsonArray @(
+        'deployment', 'group', 'list', '--subscription', $approvedSubscription,
+        '--resource-group', $approvedResourceGroup,
+        '--query', '[].{name:name,state:properties.provisioningState}'
+    )
+    if ($deployments.Count -eq 0) {
+        $resources = Get-SpikeJsonArray @(
+            'resource', 'list', '--subscription', $approvedSubscription,
+            '--resource-group', $approvedResourceGroup, '--query', '[].id'
+        )
+        if ($resources.Count -ne 0) {
+            throw 'Deployment is positively absent but the owned resource group is not empty; refusing deletion.'
+        }
+        return 'DeploymentAbsentOwnedGroupEmpty'
+    }
+    foreach ($deployment in $deployments) {
+        if ($deployment.state -cnotin @('Succeeded', 'Failed', 'Canceled')) {
+            return 'NonTerminal'
+        }
+    }
+    return 'Terminal'
+}
+
+function Get-SpikeJsonArray {
+    param([Parameter(Mandatory)][string[]] $Arguments)
+
+    $result = Invoke-AzProcess -Arguments (@($Arguments) + @('--output', 'json'))
+    if ($result.ExitCode -ne 0) {
+        throw "Spike inventory read failed (code=$($result.ErrorCode)); refusing deletion."
+    }
+    try {
+        $items = ConvertFrom-Json -InputObject $result.StdOut -NoEnumerate -ErrorAction Stop
+    } catch {
+        throw 'Spike inventory read returned invalid JSON; refusing deletion.'
+    }
+    if ($items -isnot [array]) {
+        throw 'Spike inventory read did not return an explicit array; refusing deletion.'
+    }
+    return ,$items
 }
 
 function Get-ResourceGroupExists {
@@ -528,25 +652,7 @@ switch ($Action) {
         $parameterFile = Join-Path ([System.IO.Path]::GetTempPath()) "issue7-$([guid]::NewGuid().ToString('N')).parameters.json"
         try {
             Set-PrivateParametersFile -Path $parameterFile -Secret $secret
-            $deploymentExitCode = Invoke-AzBounded @(
-                'deployment', 'group', 'create', '--subscription', $approvedSubscription,
-                '--resource-group', $approvedResourceGroup, '--name', 'issue7-spike',
-                '--template-file', $templatePath, '--parameters', "@$parameterFile"
-            )
-            if ($deploymentExitCode -ne 0) {
-                $deploymentReadback = Invoke-AzProcess -Arguments @(
-                    'deployment', 'group', 'show', '--subscription', $approvedSubscription,
-                    '--resource-group', $approvedResourceGroup, '--name', 'issue7-spike',
-                    '--query', 'properties.error.code', '--output', 'tsv'
-                )
-                $deploymentState = if ($deploymentReadback.ExitCode -eq 0) {
-                    $deploymentReadback.StdOut.Trim()
-                } else { $deploymentReadback.ErrorCode }
-                if ($deploymentState -match '^[A-Za-z][A-Za-z0-9._-]{0,127}$') {
-                    throw "Issue-7 infrastructure deployment failed at stage=resource-group-deployment with Azure error code: $deploymentState. The owned resource group was retained for explicit cleanup."
-                }
-                throw 'Issue-7 infrastructure deployment failed at stage=resource-group-deployment. The owned resource group was retained for explicit cleanup.'
-            }
+            Invoke-InfrastructureDeployment -ParameterFile $parameterFile
         } finally {
             [Array]::Clear($secretBytes, 0, $secretBytes.Length)
             $secret = $null
@@ -643,12 +749,26 @@ switch ($Action) {
         Write-Output "Comparison summary: None=$($comparison.None); AzureServices=$($comparison.AzureServices)."
     }
 
+    'Diagnose' {
+        Write-Output "Issue-7 deployment diagnostic state: $(Get-SpikeDeploymentState)."
+    }
+
     'Cleanup' {
         $group = Get-OptionalTaggedResourceGroup
         if (-not $group) {
             Write-Output 'The explicitly scoped issue-7 resource group is already absent; cleanup is complete.'
             return
         }
+        do {
+            $state = Get-SpikeDeploymentState
+            if ($state -ceq 'ResourceGroupAbsent') {
+                Write-Output 'The explicitly scoped issue-7 resource group is already absent; cleanup is complete.'
+                return
+            }
+            if ($state -cne 'NonTerminal') { break }
+            Start-Sleep -Seconds ([Math]::Min($pollSeconds, (Get-RemainingActionSeconds)))
+        } while ($true)
+        # A timed-out client does not establish that ARM has stopped.
         $deleteResult = Invoke-AzProcess -Arguments @(
             'group', 'delete', '--subscription', $approvedSubscription, '--name', $approvedResourceGroup,
             '--yes', '--no-wait', '--output', 'none'

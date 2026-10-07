@@ -405,4 +405,109 @@ try {
     if (Test-Path -LiteralPath $evidencePath) { Remove-Item -LiteralPath $evidencePath }
 }
 
-Write-Output 'Issue-7 comparison mocked-status and provisioning callback tests passed.'
+Import-Module (Join-Path $PSScriptRoot '..\infra\spike7\Lifecycle.psm1') -Force
+foreach ($scenario in @('Success', 'BeforeRecord', 'ValidationAcceptedNoWrite', 'TestFailure', 'DiagnosticFailure', 'CleanupFailure', 'AllFailures')) {
+    $script:calls = [System.Collections.Generic.List[string]]::new()
+    $caught = $null
+    try {
+        Invoke-SpikeLifecycle -Deploy {
+            $script:calls.Add('Deploy')
+            if ($scenario -in @('BeforeRecord', 'ValidationAcceptedNoWrite', 'AllFailures')) { throw 'original' }
+        } -Test {
+            $script:calls.Add('Test')
+            if ($scenario -ceq 'TestFailure') { throw 'test' }
+        } -Diagnose {
+            $script:calls.Add('Diagnose')
+            if ($scenario -in @('DiagnosticFailure', 'AllFailures')) { throw 'diagnostic' }
+        } -Cleanup {
+            $script:calls.Add('Cleanup')
+            if ($scenario -in @('CleanupFailure', 'AllFailures')) { throw 'cleanup' }
+        }
+    } catch { $caught = $_.Exception }
+    Assert-Equal $script:calls[-1] 'Cleanup' "$scenario always invokes cleanup last"
+    Assert-Equal ($script:calls -contains 'Test') ($scenario -notin @('BeforeRecord', 'ValidationAcceptedNoWrite', 'AllFailures')) "$scenario test gating"
+    if ($scenario -ceq 'Success') {
+        Assert-Equal ($null -eq $caught) $true 'Successful lifecycle returns normally'
+    } else {
+        Assert-Equal ($caught -is [System.AggregateException]) $true "$scenario preserves errors"
+        $expected = switch ($scenario) {
+            'AllFailures' { 'original,diagnostic,cleanup' }
+            'DiagnosticFailure' { 'diagnostic' }
+            'CleanupFailure' { 'cleanup' }
+            'TestFailure' { 'test' }
+            default { 'original' }
+        }
+        Assert-Equal (($caught.InnerExceptions | ForEach-Object Message) -join ',') $expected "$scenario error order"
+    }
+}
+
+foreach ($case in @(
+    @{ Input = 'ERROR: BCP091 SENSITIVE'; Category = 'Bicep'; Code = 'unclassified' },
+    @{ Input = 'FileNotFoundError: SENSITIVE'; Category = 'LocalFile'; Code = 'unclassified' },
+    @{ Input = 'Please run az login SENSITIVE'; Category = 'Authentication'; Code = 'unclassified' },
+    @{ Input = 'unrecognized arguments: SENSITIVE'; Category = 'CliArguments'; Code = 'unclassified' },
+    @{ Input = '{"error":{"code":"InvalidTemplate","message":"SENSITIVE"},"correlationId":"e966fd8b-8aa2-489a-9e1a-fd8b8b0e1ce5"}'; Category = 'Validation'; Code = 'InvalidTemplate' },
+    @{ Input = 'SENSITIVE unknown failure'; Category = 'Unclassified'; Code = 'unclassified' }
+)) {
+    $safe = Get-SafeCliFailure -Diagnostics $case.Input
+    Assert-Equal $safe.Category $case.Category 'Fixed failure category'
+    Assert-Equal $safe.Code $case.Code 'Safe original error code'
+    Assert-Equal (($safe | ConvertTo-Json) -match 'SENSITIVE') $false 'No raw diagnostics retained'
+}
+$safe = Get-SafeCliFailure -Diagnostics '{"correlationId":"e966fd8b-8aa2-489a-9e1a-fd8b8b0e1ce5"}'
+Assert-Equal $safe.CorrelationId 'e966fd8b-8aa2-489a-9e1a-fd8b8b0e1ce5' 'Structured correlation retained'
+Assert-Equal (Get-SafeCliFailure -Diagnostics '{"error":{"message":"InvalidTemplate SENSITIVE"}}').Code 'unclassified' 'Provider message is not a structured ARM code'
+Assert-Equal ($null -eq (Get-SafeCliFailure -Diagnostics '{"correlationId":"SENSITIVE"}').CorrelationId) $true 'Invalid correlation omitted'
+
+function Invoke-AzProcess {
+    param([string[]] $Arguments)
+    if ($Arguments[2] -ceq 'create') {
+        return [pscustomobject]@{ ExitCode = 7; ErrorCategory = 'Bicep'; ErrorCode = 'unclassified'; CorrelationId = $null }
+    }
+    if ($script:inventoryJson) {
+        return [pscustomobject]@{ ExitCode = 0; StdOut = $script:inventoryJson }
+    }
+    if ($script:readbackThrows) { throw 'sanitized readback failure' }
+    return [pscustomobject]@{ ExitCode = 3; ErrorCode = 'DeploymentNotFound' }
+}
+foreach ($script:readbackThrows in @($false, $true)) {
+    $message = $null
+    try { Invoke-InfrastructureDeployment -ParameterFile 'mock.parameters.json' } catch { $message = $_.Exception.Message }
+    Assert-Equal ($message -match 'originalExit=7; category=Bicep; originalCode=unclassified') $true 'Original classification survives absent/failed readback'
+}
+$script:inventoryJson = '[]'
+Assert-Equal (Get-SpikeJsonArray @('resource', 'list')).Count 0 'Explicit JSON empty array'
+foreach ($script:inventoryJson in @('null', '{}', 'invalid')) {
+    $rejected = $false
+    try { Get-SpikeJsonArray @('resource', 'list') } catch { $rejected = $true }
+    Assert-Equal $rejected $true 'Malformed/null inventory cannot prove absence'
+}
+$script:inventoryJson = $null
+
+function Get-OptionalTaggedResourceGroup { return [pscustomobject]@{ owned = $true } }
+function Get-SpikeJsonArray {
+    param([string[]] $Arguments)
+    if ($script:inventoryThrows) { throw 'inventory unavailable' }
+    if ($Arguments[0] -ceq 'resource') { return ,$script:mockResources }
+    return ,$script:mockDeployments
+}
+$script:inventoryThrows = $false
+$script:mockDeployments = @()
+$script:mockResources = @()
+Assert-Equal (Get-SpikeDeploymentState) 'DeploymentAbsentOwnedGroupEmpty' 'Positive absent deployment/empty owned RG'
+$script:mockResources = @('mock-resource')
+$rejected = $false
+try { Get-SpikeDeploymentState } catch { $rejected = $_.Exception.Message -like '*not empty*' }
+Assert-Equal $rejected $true 'Absent deployment with resources fails closed'
+foreach ($state in @('Succeeded', 'Failed', 'Canceled', 'Accepted', 'Running', 'Unknown')) {
+    $script:mockDeployments = @([pscustomobject]@{ state = $state })
+    Assert-Equal (Get-SpikeDeploymentState) $(if ($state -in @('Succeeded', 'Failed', 'Canceled')) { 'Terminal' } else { 'NonTerminal' }) "$state deletion guard"
+}
+$script:inventoryThrows = $true
+$rejected = $false
+try { Get-SpikeDeploymentState } catch { $rejected = $true }
+Assert-Equal $rejected $true 'Failed deployment inventory is not absence'
+function Get-OptionalTaggedResourceGroup { return $null }
+Assert-Equal (Get-SpikeDeploymentState) 'ResourceGroupAbsent' 'Positive group absence needs no deployment read'
+
+Write-Output 'Issue-7 comparison, lifecycle, safe CLI classification and cleanup guard tests passed.'
