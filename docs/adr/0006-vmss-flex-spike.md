@@ -21,6 +21,8 @@ Deployment remains disabled. One subscription foundation deployment nests RG/fou
 deployment nests CSE. The literal two-invocation cap is not two trials and cannot cover separate allow/reject workers.
 Native Ubuntu bootstrap preserves the shared tool manifest/hook rather than reproducing a container rootfs.
 No cloud experiment was performed; implementation is not runtime proof or an accepted backend decision.
+Reviewed smoke commit/blob pins and a spike-only pre-job commit guard prevent mutable `main` from admitting
+unreviewed workflow code; the shared consumer policy schema and hook remain unchanged.
 
 ## Consequences
 

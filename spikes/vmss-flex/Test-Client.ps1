@@ -11,7 +11,7 @@ try {
         '--mount', "type=bind,source=$root,target=/src,readonly",
         '--workdir', '/src/spikes/vmss-flex', '--env', 'GOTOOLCHAIN=local',
         $builder, 'sh', '-ec',
-        'bash -n guest-bootstrap.sh native-bootstrap.sh run-one-job.sh; mkdir /tmp/client; cp *.go go.mod go.sum /tmp/client/; cd /tmp/client; go test -race -mod=readonly ./...; go vet -mod=readonly ./...; CGO_ENABLED=0 go build -C /tmp/client -mod=readonly -o /tmp/vmss-spike-controller .'
+        'bash -n guest-bootstrap.sh native-bootstrap.sh run-one-job.sh pre-job-spike.sh; mkdir /tmp/client; cp *.go go.mod go.sum /tmp/client/; cd /tmp/client; go test -race -mod=readonly ./...; go vet -mod=readonly ./...; CGO_ENABLED=0 go build -C /tmp/client -mod=readonly -o /tmp/vmss-spike-controller .'
     ) -TimeoutSeconds 600
     if ($result.exitCode -ne 0) {
         throw "Pinned Go client build/tests failed (exit $($result.exitCode)); no cloud operation was performed."

@@ -29,6 +29,9 @@ test('native bootstrap stays bounded, reuses full verifier and never starts jobs
   assert.match(script, /\/opt\/runner-image\/verify-tools.sh/);
   assert.doesNotMatch(script, /--jitconfig|encodedJITConfig|identity\/oauth2|role assignment/);
   assert.match(script, /worker-ready/);
+  assert.match(script, /pre-job-spike\.sh/);
+  assert.match(read('pre-job-spike.sh'), /exec \/opt\/runner-image\/pre-job-policy\.sh/);
+  assert.match(read('run-one-job.sh'), /ACTIONS_RUNNER_HOOK_JOB_STARTED:-.*\/opt\/ghr-vmss\/pre-job-spike\.sh/);
 });
 
 test('guest bootstrap bounds traffic, DNS, compiler and service without starting it', () => {

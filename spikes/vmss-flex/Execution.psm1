@@ -31,7 +31,8 @@ function Assert-SpikeExecutionApproval {
     param([hashtable]$Approval, [hashtable]$Manifest, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow)
     Assert-SpikeManifest $Manifest
     $keys = @('schemaVersion', 'reviewedHead', 'executionDirectionConfirmed', 'secretReadApproved',
-        'canonicalUbuntuVersion', 'installationId', 'workflowRef', 'archiveSha256', 'adminSshPublicKey', 'pricing', 'quota')
+        'canonicalUbuntuVersion', 'installationId', 'workflowRef', 'smokeCommitSha', 'smokeWorkflowBlobSha',
+        'archiveSha256', 'adminSshPublicKey', 'pricing', 'quota')
     if ($Approval.Count -ne $keys.Count -or @($keys | Where-Object { -not $Approval.ContainsKey($_) }).Count -ne 0 -or
         $Approval.schemaVersion -ne 1 -or $Approval.reviewedHead -cne $Manifest.head -or
         $Approval.executionDirectionConfirmed -isnot [bool] -or $Approval.executionDirectionConfirmed -ne $true -or
@@ -39,6 +40,7 @@ function Assert-SpikeExecutionApproval {
         $Approval.canonicalUbuntuVersion -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or
         ($Approval.installationId -isnot [long] -and $Approval.installationId -isnot [int]) -or
         $Approval.installationId -le 0 -or $Approval.archiveSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        $Approval.smokeCommitSha -cnotmatch '^[a-f0-9]{40}$' -or $Approval.smokeWorkflowBlobSha -cnotmatch '^[a-f0-9]{40}$' -or
         $Approval.adminSshPublicKey -cnotmatch '^(ssh-ed25519|ssh-rsa) [A-Za-z0-9+/]+={0,2}$' -or
         $Approval.adminSshPublicKey.Length -gt 4096 -or
         $Approval.workflowRef -cnotmatch '^jonathan-vella/ghr-smoke/\.github/workflows/[A-Za-z0-9_-]+\.ya?ml@refs/heads/main$') {
@@ -135,14 +137,18 @@ function Assert-SpikePreflight {
         throw 'Approved public/default-main smoke contract changed; no deployment.'
     }
     $workflowPath = ($Approval.workflowRef -split '@')[0].Substring('jonathan-vella/ghr-smoke/'.Length)
+    $branch = Invoke-BoundedProcess -FileName $gh -Arguments @('api',
+        'repos/jonathan-vella/ghr-smoke/git/ref/heads/main') -TimeoutSeconds 20
+    if ($branch.exitCode -ne 0) { throw 'Smoke default-branch commit unavailable; no deployment.' }
+    try { $branchMetadata = $branch.stdout | ConvertFrom-Json -AsHashtable }
+    catch { throw 'Smoke branch metadata invalid; provider output suppressed.' }
+    Assert-SpikeSmokePins $Approval $branchMetadata $null
     $workflow = Invoke-BoundedProcess -FileName $gh -Arguments @('api',
-        "repos/jonathan-vella/ghr-smoke/contents/${workflowPath}?ref=main") -TimeoutSeconds 20
+        "repos/jonathan-vella/ghr-smoke/contents/${workflowPath}?ref=$($Approval.smokeCommitSha)") -TimeoutSeconds 20
     if ($workflow.exitCode -ne 0) { throw 'Reviewed smoke workflow absent/inaccessible; separate scope required.' }
     try { $file = $workflow.stdout | ConvertFrom-Json -AsHashtable }
     catch { throw 'Smoke workflow metadata invalid; provider output suppressed.' }
-    if ($file.type -cne 'file' -or $file.path -cne $workflowPath -or $file.sha -cnotmatch '^[a-f0-9]{40}$') {
-        throw 'Reviewed smoke workflow contract unavailable.'
-    }
+    Assert-SpikeSmokePins $Approval $branchMetadata $file
     Assert-SpikeCleanupPermission $Manifest
     $available = Invoke-SpikeCommand @('keyvault', 'check-name', '--subscription', $sub,
         '--name', 'kv-ghr-spike60-swc', '--query', 'nameAvailable', '-o', 'json', '--only-show-errors')
@@ -173,6 +179,20 @@ function Assert-SpikePreflight {
     $regional = @($usage | Where-Object { $_.name.value -ieq 'cores' })
     if ($regional.Count -ne 1 -or $regional[0].currentValue + 6 -gt $regional[0].limit) {
         throw 'Regional six-vCPU ceiling has insufficient quota.'
+    }
+}
+
+function Assert-SpikeSmokePins {
+    param([hashtable]$Approval, [hashtable]$Branch, [AllowNull()][hashtable]$File)
+    if ($Branch.ref -cne 'refs/heads/main' -or $Branch.object.type -cne 'commit' -or
+        $Branch.object.sha -cne $Approval.smokeCommitSha) {
+        throw 'Smoke main changed since review; no deployment.'
+    }
+    if ($null -ne $File) {
+        $path = ($Approval.workflowRef -split '@')[0].Substring('jonathan-vella/ghr-smoke/'.Length)
+        if ($File.type -cne 'file' -or $File.path -cne $path -or $File.sha -cne $Approval.smokeWorkflowBlobSha) {
+            throw 'Smoke workflow content differs from reviewed blob; no deployment.'
+        }
     }
 }
 
@@ -271,6 +291,7 @@ function Invoke-SpikeExecution {
         policy = @{
             repository = 'jonathan-vella/ghr-smoke'; visibility = 'public'; allowedEvents = @('workflow_dispatch')
             allowedRefs = @('refs/heads/main'); allowedWorkflows = @($Approval.workflowRef)
+            workflowSha = $Approval.smokeCommitSha
         }
         workerParameters = @{
             runId = $Manifest.runId; head = $Manifest.head; workerIndex = 1

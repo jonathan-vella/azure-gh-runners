@@ -73,7 +73,8 @@ install -o root -g root -m 0444 "$manifest" /opt/runner-image/versions.json
 install -o root -g root -m 0555 "$root/image/install-tools.sh" "$root/image/verify-tools.sh" \
   "$root/image/pre-job-policy.sh" "$root/image/pre-job-policy.py" /opt/runner-image/
 install -d -o root -g root -m 0755 /opt/ghr-vmss
-install -o root -g root -m 0555 "$root/spikes/vmss-flex/run-one-job.sh" /opt/ghr-vmss/run-one-job.sh
+install -o root -g root -m 0555 "$root/spikes/vmss-flex/run-one-job.sh" \
+  "$root/spikes/vmss-flex/pre-job-spike.sh" "$root/spikes/vmss-flex/pre-job-spike.py" /opt/ghr-vmss/
 /bin/bash /opt/runner-image/install-tools.sh
 [[ ! -S /var/run/docker.sock ]]
 if command -v dockerd >/dev/null; then

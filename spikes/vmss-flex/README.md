@@ -15,6 +15,10 @@ Keep #60 open and ADR-0006 Proposed. This does not select a backend or enable VM
   Demand comes from the official listener's `TotalAssignedJobs`, not speculative workflow/queue matching.
   The client uses verified ClientID `Iv23liLOmKrlxX0rFd2z`, never a numeric App-ID substitution.
   Personal-installation/default-group-1/custom-label behavior remains a live compatibility assertion.
+  Approval pins the smoke `main` commit and workflow Git blob. Preflight rejects changed `main` and fetches
+  the workflow at the immutable approved commit, comparing the exact blob ID. A root-owned spike-only
+  pre-job wrapper requires both `GITHUB_WORKFLOW_SHA` and `GITHUB_SHA` to equal that reviewed commit before
+  invoking the unchanged shared policy hook. A branch movement after preflight therefore cannot admit new code.
 - The private controller persists its original clock, scale-set ID, captured runner ID, request ID and attempt
   reservation before mutation. Re-delivery is idempotent; a second job/request is rejected. Provisioning is
   asynchronous so CSE execution cannot block listener callbacks. Restarts recover/clean up; they never provision
@@ -151,6 +155,7 @@ of that decision, not a substitute for it. Keep the PR draft/do-not-merge and #6
 
 The nonsecret `approval_json` has exactly these keys: `schemaVersion=1`, `reviewedHead`,
 `executionDirectionConfirmed`, `secretReadApproved`, `canonicalUbuntuVersion`, `installationId`, `workflowRef`,
+`smokeCommitSha`, `smokeWorkflowBlobSha` (both exact 40-character lowercase Git object IDs),
 `archiveSha256`, `adminSshPublicKey` (no comment), `pricing`, `quota`. No key/token belongs in this record.
 The two confirmations must be actual booleans and explicitly approved; defaults are not approval.
 

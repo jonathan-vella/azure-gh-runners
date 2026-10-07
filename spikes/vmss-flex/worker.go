@@ -18,6 +18,7 @@ type workerPolicy struct {
 	AllowedEvents    []string `json:"allowedEvents"`
 	AllowedRefs      []string `json:"allowedRefs"`
 	AllowedWorkflows []string `json:"allowedWorkflows"`
+	WorkflowSHA      string   `json:"workflowSha"`
 }
 
 // The returned bytes belong only in the ARM extension's protectedSettings.
@@ -27,7 +28,8 @@ func workerProtectedSettings(ctx context.Context, api scaleSetAPI, scaleSetID in
 		policy.Repository != "jonathan-vella/ghr-smoke" || policy.Visibility != "public" ||
 		len(policy.AllowedRefs) != 1 || policy.AllowedRefs[0] != "refs/heads/main" ||
 		len(policy.AllowedEvents) != 1 || policy.AllowedEvents[0] != "workflow_dispatch" ||
-		len(policy.AllowedWorkflows) == 0 || len(policy.AllowedWorkflows) > 2 {
+		len(policy.AllowedWorkflows) != 1 ||
+		!regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(policy.WorkflowSHA) {
 		return nil, 0, errors.New("worker_handoff_contract_invalid")
 	}
 	workflowPattern := regexp.MustCompile(`^jonathan-vella/ghr-smoke/\.github/workflows/[A-Za-z0-9_-]+\.ya?ml@refs/heads/main$`)
@@ -50,7 +52,11 @@ func workerProtectedSettings(ctx context.Context, api scaleSetAPI, scaleSetID in
 		!regexp.MustCompile(`^[A-Za-z0-9+/]+={0,2}$`).MatchString(jit.EncodedJITConfig) {
 		return nil, jit.Runner.ID, errors.New("worker_jit_response_invalid")
 	}
-	policyJSON, err := json.Marshal(policy)
+	policyJSON, err := json.Marshal(map[string]any{
+		"repository": policy.Repository, "visibility": policy.Visibility,
+		"allowedEvents": policy.AllowedEvents, "allowedRefs": policy.AllowedRefs,
+		"allowedWorkflows": policy.AllowedWorkflows,
+	})
 	if err != nil {
 		return nil, jit.Runner.ID, errors.New("worker_policy_encoding_failed")
 	}
@@ -72,16 +78,16 @@ for ((attempt=0; attempt<180; attempt++)); do
 done
 [[ $ready == true ]]
 chmod -R go-rwx /var/lib/waagent
-for file in /opt/ghr-vmss/run-one-job.sh /opt/runner-image/pre-job-policy.sh /opt/runner-image/pre-job-policy.py; do
+for file in /opt/ghr-vmss/run-one-job.sh /opt/ghr-vmss/pre-job-spike.sh /opt/ghr-vmss/pre-job-spike.py /opt/runner-image/pre-job-policy.sh /opt/runner-image/pre-job-policy.py; do
   [[ $(stat -c '%%u:%%a' "$file") == 0:555 ]]
 done
 printf '%%s\n' %s | /usr/sbin/runuser --user runner -- /usr/bin/env -i \
   HOME=/home/runner PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  CONSUMER_POLICY_JSON=%s ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/runner-image/pre-job-policy.sh \
+  CONSUMER_POLICY_JSON=%s GHR_SPIKE_WORKFLOW_SHA=%s ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/ghr-vmss/pre-job-spike.sh \
   AZURE_CORE_COLLECT_TELEMETRY=false AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no \
   AZURE_BICEP_USE_BINARY_FROM_PATH=true POWERSHELL_TELEMETRY_OPTOUT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 \
   /usr/bin/timeout --signal=TERM --kill-after=10s 900s /bin/bash /opt/ghr-vmss/run-one-job.sh >/dev/null 2>&1
-`, shellQuote(jit.EncodedJITConfig), shellQuote(string(policyJSON)))
+`, shellQuote(jit.EncodedJITConfig), shellQuote(string(policyJSON)), shellQuote(policy.WorkflowSHA))
 	encodedScript := base64.StdEncoding.EncodeToString([]byte(script))
 	if len(encodedScript) > 262144 {
 		return nil, jit.Runner.ID, errors.New("worker_cse_script_too_large")

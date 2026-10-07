@@ -32,6 +32,7 @@ func TestWorkerProtectedHandoff(t *testing.T) {
 		Repository: "jonathan-vella/ghr-smoke", Visibility: "public",
 		AllowedEvents: []string{"workflow_dispatch"}, AllowedRefs: []string{"refs/heads/main"},
 		AllowedWorkflows: []string{"jonathan-vella/ghr-smoke/.github/workflows/smoke.yml@refs/heads/main"},
+		WorkflowSHA:      strings.Repeat("b", 40),
 	}
 	api := &workerFake{jit: "ZmFrZS1qaXQ="}
 	name := "vm-ghr-spike60-" + strings.Repeat("a", 25) + "-1"
@@ -49,6 +50,24 @@ func TestWorkerProtectedHandoff(t *testing.T) {
 		strings.Contains(string(script), "GH_APP") || strings.Contains(string(body), api.jit) {
 		t.Fatal("handoff did not isolate JIT delivery/worker env")
 	}
+	if !strings.Contains(string(script), "GHR_SPIKE_WORKFLOW_SHA='"+policy.WorkflowSHA+"'") ||
+		!strings.Contains(string(script), "ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/ghr-vmss/pre-job-spike.sh") {
+		t.Fatal("reviewed commit guard not wired into worker pre-job hook")
+	}
+	var shared map[string]any
+	sharedJSON, _ := json.Marshal(map[string]any{
+		"repository": policy.Repository, "visibility": policy.Visibility, "allowedEvents": policy.AllowedEvents,
+		"allowedRefs": policy.AllowedRefs, "allowedWorkflows": policy.AllowedWorkflows,
+	})
+	if json.Unmarshal(sharedJSON, &shared) != nil || strings.Contains(string(sharedJSON), "workflowSha") ||
+		!strings.Contains(string(script), shellQuote(string(sharedJSON))) {
+		t.Fatal("spike commit pin leaked into unchanged shared policy schema")
+	}
+	policy.WorkflowSHA = ""
+	if _, _, err := workerProtectedSettings(context.Background(), api, 42, name, policy); err == nil {
+		t.Fatal("missing reviewed workflow commit allowed")
+	}
+	policy.WorkflowSHA = strings.Repeat("b", 40)
 	api.fail = true
 	if _, _, err = workerProtectedSettings(context.Background(), api, 42, name, policy); err == nil ||
 		err.Error() != "worker_jit_generation_failed" {

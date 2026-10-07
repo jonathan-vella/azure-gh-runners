@@ -12,6 +12,7 @@ $approval = @{
     schemaVersion = 1; reviewedHead = $manifest.head; executionDirectionConfirmed = $true; secretReadApproved = $true
     canonicalUbuntuVersion = '24.04.202609260'; installationId = 1
     workflowRef = 'jonathan-vella/ghr-smoke/.github/workflows/vmss-smoke.yml@refs/heads/main'
+    smokeCommitSha = ('c' * 40); smokeWorkflowBlobSha = ('d' * 40)
     archiveSha256 = ('b' * 64); adminSshPublicKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefixture'
     pricing = @{
         refreshedUtc = $now.ToString('o'); b2sHourly = 0.0432; d2lsHourly = 0.091; p4Hourly = 0.008
@@ -40,6 +41,21 @@ $approval.unexpected = 'fake-input'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.Remove('unexpected')
 $module = Get-Module Execution
+& $module {
+    param($approval)
+    $branch = @{ ref = 'refs/heads/main'; object = @{ type = 'commit'; sha = $approval.smokeCommitSha } }
+    $file = @{ type = 'file'; path = '.github/workflows/vmss-smoke.yml'; sha = $approval.smokeWorkflowBlobSha }
+    Assert-SpikeSmokePins $approval $branch $file
+    $branch.object.sha = 'e' * 40
+    $rejected = $false
+    try { Assert-SpikeSmokePins $approval $branch $file } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Mutation of smoke main after approval accepted.' }
+    $branch.object.sha = $approval.smokeCommitSha
+    $file.sha = 'e' * 40
+    $rejected = $false
+    try { Assert-SpikeSmokePins $approval $branch $file } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Unreviewed workflow blob accepted.' }
+} $approval
 & $module {
     $script:permissionFixture = @{ value = @(@{ actions = @('*'); notActions = @(); condition = $null }) }
     function script:Invoke-SpikeCommand { return $script:permissionFixture }
