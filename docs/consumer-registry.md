@@ -22,10 +22,39 @@ Each onboarded repository has one JSON declaration in `config/consumers/<name>.j
 | `notes` | Optional maintainer context; never include credentials or secrets. |
 
 The schema rejects unknown fields. The registry validator in issue [#17](https://github.com/jonathan-vella/azure-gh-runners/issues/17)
-will also check cross-file uniqueness, the `ghr-<name>` label, and the remote default branch.
+also checks cross-file uniqueness, the `ghr-<name>` label, and the remote default branch.
 The schema cannot know a repository's current default branch by itself. Public consumers must be limited to
 `workflow_dispatch`, `schedule`, and default-branch `push`; private consumers may opt into `pull_request` where policy
 allows it. The runner pre-job hook remains responsible for enforcing the policy at runtime.
+
+## Generated deployment parameters
+
+Run `npm run generate:consumers` after changing a registry declaration. It first runs the same schema, cross-entry,
+policy, and GitHub repository metadata validation as the registry validator, then atomically writes
+[`infra/generated/consumers.json`](../infra/generated/consumers.json). `npm run validate` runs the generator's
+`--check` mode, which fails if the artifact is missing or stale and never writes it.
+
+The artifact is an ARM deployment parameters document with `parameters.consumers.value` as an array. Consumers are
+sorted by `name`; `labels`, `allowedEvents`, `allowedRefs`, and `allowedWorkflows` are sorted because their registry
+semantics are set-valued. Each consumer has this typed shape:
+
+| Field | JSON type | Source |
+| --- | --- | --- |
+| `name` | string | Registry `name` |
+| `repo` | string | Verified registry `repo` |
+| `visibility` | `public` or `private` | Registry value verified against GitHub |
+| `labels` | string array | Registry labels |
+| `cpu` | number | Registry `cpu` |
+| `memory` | string | Registry `memory` |
+| `maxExecutions` | integer | Registry `maxExecutions` |
+| `replicaTimeoutSeconds` | integer | Registry `replicaTimeoutSeconds` |
+| `policyJson` | string containing a JSON object | Normalized runner-hook policy below |
+
+`policyJson` contains exactly `repository` (string), `visibility` (string), `allowedEvents` (string array),
+`allowedRefs` (string array), and `allowedWorkflows` (string array). It does not include GitHub metadata such as the
+default branch because the hook policy uses the validated allowed-ref list. Optional maintainer-only `notes` are not
+deployed. This parameter payload is the contract for future Bicep consumer-job work; the current `main.bicep` does not
+consume it yet.
 
 ## ACA CPU and memory
 

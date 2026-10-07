@@ -42,11 +42,13 @@ npm ci
 npm run validate
 ```
 
-`npm run validate` runs the consumer schema and policy tests, validates active consumer entries against GitHub
-visibility/default-branch metadata, builds the Bicep template and parameter file, runs Bicep lint, and checks Markdown
-with the repository's Markdown configuration. An empty registry passes without GitHub access; active entries require
-GitHub CLI access to every registered repository. The command does not deploy resources or require an Azure login.
-Add future validators to the existing `validate` script so it remains the single documented local check.
+`npm run validate` runs the consumer schema, policy, and generator tests; validates active consumer entries against
+GitHub visibility/default-branch metadata; checks the generated consumer parameters for drift; builds the Bicep
+template and parameter file; runs Bicep lint; and checks Markdown with the repository's Markdown configuration. Use
+`npm run generate:consumers` to update `infra/generated/consumers.json` after changing the registry. An empty registry
+passes without GitHub access; active entries require GitHub CLI access to every registered repository. The command
+does not deploy resources or require an Azure login. Add future validators to the existing `validate` script so it
+remains the single documented local check.
 
 ## Non-negotiable security and platform invariants
 
