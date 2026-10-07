@@ -1,0 +1,464 @@
+name: Spike - private ACR agent pool
+
+on:
+  workflow_dispatch:
+    inputs:
+      client_id:
+        description: Temporary spike app client ID printed by the setup script
+        required: true
+        type: string
+      resource_group:
+        description: Exact isolated spike resource group created by the setup script
+        required: true
+        type: string
+      registry_name:
+        description: Exact Premium registry created by the setup script
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike6-rg-ghrunners-spike6-swc
+  cancel-in-progress: false
+
+jobs:
+  private-agent-pool-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ inputs.client_id }}
+      AZURE_TENANT_ID: 30bac921-1547-4b1e-8445-72455da783f1
+      AZURE_SUBSCRIPTION_ID: b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
+      AZURE_LOCATION: swedencentral
+      RESOURCE_GROUP: ${{ inputs.resource_group }}
+      REGISTRY_NAME: ${{ inputs.registry_name }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Validate scope for the main-branch OIDC identity
+        id: scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$AZURE_CLIENT_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$RESOURCE_GROUP" == rg-ghrunners-spike6-swc ]]
+          [[ "$REGISTRY_NAME" == ghrunners6jv20261007 ]]
+          az version --output none
+
+      - uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906
+        with:
+          client-id: ${{ inputs.client_id }}
+          tenant-id: 30bac921-1547-4b1e-8445-72455da783f1
+          subscription-id: b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
+
+      - name: Assert the exact throwaway scope and private registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          account=$(az account show --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --query '{id:id,tenantId:tenantId,name:name}' --output json)
+          jq -e --arg sub "$AZURE_SUBSCRIPTION_ID" --arg tenant "$AZURE_TENANT_ID" \
+            '.id == $sub and .tenantId == $tenant and .name == "shared"' \
+            <<<"$account" >/dev/null
+          group_exists=$(az group exists --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --name "$RESOURCE_GROUP" --output tsv)
+          if [[ "$group_exists" != true ]]; then
+            echo "Refusing duplicate or stale dispatch: the pre-created spike resource group is absent."
+            exit 1
+          fi
+          group=$(az group show --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --name "$RESOURCE_GROUP" --query '{location:location,tags:tags}' --output json)
+          prior_run=$(jq -r '.tags.spike6RunId // empty' <<<"$group")
+          if [[ -n "$prior_run" ]]; then
+            echo "Refusing duplicate spike run: resource group is marked by workflow run ${prior_run}."
+            exit 1
+          fi
+          jq -e --arg location "$AZURE_LOCATION" \
+            '.location == $location and .tags.environment == "spike" and .tags.application == "ghrunners"' \
+            <<<"$group" >/dev/null
+          registry=$(az acr show --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --name "$REGISTRY_NAME" \
+            --query '{location:location,sku:sku.name,publicNetworkAccess:publicNetworkAccess,adminUserEnabled:adminUserEnabled}' \
+            --output json)
+          jq -e --arg location "$AZURE_LOCATION" \
+            '.location == $location and .sku == "Premium" and .publicNetworkAccess == "Disabled" and .adminUserEnabled == false' \
+            <<<"$registry" >/dev/null
+          echo "The exact spike scope is valid and has no prior workflow-run marker."
+
+      - name: Claim the spike resource group for this run
+        shell: bash
+        run: |
+          set -euo pipefail
+          az group update --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --name "$RESOURCE_GROUP" --set "tags.spike6RunId=$GITHUB_RUN_ID" \
+            --only-show-errors --output none
+          run_id=$(az group show --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --name "$RESOURCE_GROUP" --query tags.spike6RunId --output tsv)
+          [[ "$run_id" == "$GITHUB_RUN_ID" ]] || {
+            echo "Could not claim the spike resource group for this workflow run."
+            exit 1
+          }
+
+      - name: Create isolated pool network, NAT, private endpoint, and DNS
+        shell: bash
+        run: |
+          set -euo pipefail
+          nsg=nsg-spike6-pool
+          vnet=vnet-spike6
+          nat=nat-spike6
+          pip=pip-spike6-nat
+          zone=privatelink.azurecr.io
+
+          az network nsg create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --name "$nsg" \
+            --location "$AZURE_LOCATION" \
+            --tags application=ghrunners environment=spike workload=gh-runners \
+              owner=jonathan-vella costcenter=platform-engineering \
+              tech-contact=jonathan-vella technical-contact=jonathan-vella \
+              sla=development backup-policy=none maint-window=none --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name DenyInbound \
+            --priority 100 --direction Inbound --access Deny --protocol '*' \
+            --source-address-prefixes '*' --source-port-ranges '*' \
+            --destination-address-prefixes '*' --destination-port-ranges '*' --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name AllowAcrPrivateEndpoint \
+            --priority 100 --direction Outbound --access Allow --protocol Tcp \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes 10.61.0.64/27 --destination-port-ranges 443 --output none
+
+          priority=110
+          for service in AzureActiveDirectory Storage EventHub AzureKeyVault; do
+            az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+              --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name "Allow${service}" \
+              --priority "$priority" --direction Outbound --access Allow --protocol Tcp \
+              --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+              --destination-address-prefixes "$service" --destination-port-ranges 443 --output none
+            priority=$((priority + 10))
+          done
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name AllowAzureMonitorHttps \
+            --priority 150 --direction Outbound --access Allow --protocol Tcp \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes AzureMonitor --destination-port-ranges 443 --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name AllowAzureMonitorDiagnostics \
+            --priority 151 --direction Outbound --access Allow --protocol Tcp \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes AzureMonitor --destination-port-ranges 12000 --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name AllowAzureDnsUdp \
+            --priority 160 --direction Outbound --access Allow --protocol Udp \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes 168.63.129.16/32 --destination-port-ranges 53 --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name AllowAzureDnsTcp \
+            --priority 161 --direction Outbound --access Allow --protocol Tcp \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes 168.63.129.16/32 --destination-port-ranges 53 --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name AllowExternalHttps \
+            --priority 170 --direction Outbound --access Allow --protocol Tcp \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes Internet --destination-port-ranges 443 --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name DenyRfc1918_10 \
+            --priority 180 --direction Outbound --access Deny --protocol '*' \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes 10.0.0.0/8 --destination-port-ranges '*' --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name DenyRfc1918_172 \
+            --priority 181 --direction Outbound --access Deny --protocol '*' \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes 172.16.0.0/12 --destination-port-ranges '*' --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name DenyRfc1918_192 \
+            --priority 182 --direction Outbound --access Deny --protocol '*' \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes 192.168.0.0/16 --destination-port-ranges '*' --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name DenyOtherVnet \
+            --priority 2000 --direction Outbound --access Deny --protocol '*' \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes VirtualNetwork --destination-port-ranges '*' --output none
+          az network nsg rule create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --nsg-name "$nsg" --name DenyOtherInternet \
+            --priority 2010 --direction Outbound --access Deny --protocol '*' \
+            --source-address-prefixes VirtualNetwork --source-port-ranges '*' \
+            --destination-address-prefixes Internet --destination-port-ranges '*' --output none
+
+          az network vnet create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --name "$vnet" --location "$AZURE_LOCATION" \
+            --address-prefixes 10.61.0.0/24 \
+            --tags application=ghrunners environment=spike workload=gh-runners \
+              owner=jonathan-vella costcenter=platform-engineering \
+              tech-contact=jonathan-vella technical-contact=jonathan-vella \
+              sla=development backup-policy=none maint-window=none --output none
+          az network vnet subnet create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --vnet-name "$vnet" --name snet-acr-agents \
+            --address-prefixes 10.61.0.0/26 --network-security-group "$nsg" \
+            --service-endpoints Microsoft.AzureActiveDirectory Microsoft.EventHub Microsoft.KeyVault Microsoft.Storage \
+            --output none
+          az network vnet subnet create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --vnet-name "$vnet" --name snet-acr-pe \
+            --address-prefixes 10.61.0.64/27 --private-endpoint-network-policies Disabled --output none
+
+          az network public-ip create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --name "$pip" --location "$AZURE_LOCATION" \
+            --sku Standard --allocation-method Static --version IPv4 \
+            --tags application=ghrunners environment=spike workload=gh-runners \
+              owner=jonathan-vella costcenter=platform-engineering \
+              tech-contact=jonathan-vella technical-contact=jonathan-vella \
+              sla=development backup-policy=none maint-window=none --output none
+          az network nat gateway create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --name "$nat" --location "$AZURE_LOCATION" \
+            --public-ip-addresses "$pip" \
+            --tags application=ghrunners environment=spike workload=gh-runners \
+              owner=jonathan-vella costcenter=platform-engineering \
+              tech-contact=jonathan-vella technical-contact=jonathan-vella \
+              sla=development backup-policy=none maint-window=none --output none
+          az network vnet subnet update --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --vnet-name "$vnet" --name snet-acr-agents \
+            --nat-gateway "$nat" --output none
+
+          az network private-dns zone create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --name "$zone" \
+            --tags application=ghrunners environment=spike workload=gh-runners \
+              owner=jonathan-vella costcenter=platform-engineering \
+              tech-contact=jonathan-vella technical-contact=jonathan-vella \
+              sla=development backup-policy=none maint-window=none --output none
+          vnet_id=$(az network vnet show --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --name "$vnet" --query id --output tsv)
+          registry_id=$(az acr show --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --name "$REGISTRY_NAME" --query id --output tsv)
+          az network private-dns link vnet create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --zone-name "$zone" --name spike6-vnet-link \
+            --virtual-network "$vnet_id" --registration-enabled false --output none
+          az network private-endpoint create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --name pe-spike6-acr --location "$AZURE_LOCATION" \
+            --vnet-name "$vnet" --subnet snet-acr-pe --private-connection-resource-id "$registry_id" \
+            --connection-name spike6-acr-connection --group-id registry \
+            --tags application=ghrunners environment=spike workload=gh-runners \
+              owner=jonathan-vella costcenter=platform-engineering \
+              tech-contact=jonathan-vella technical-contact=jonathan-vella \
+              sla=development backup-policy=none maint-window=none --output none
+          az network private-endpoint dns-zone-group create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --endpoint-name pe-spike6-acr --name acr-dns \
+            --private-dns-zone "$zone" --zone-name privatelink-azurecr-io --output none
+          for attempt in $(seq 1 20); do
+            state=$(az network private-endpoint show --subscription "$AZURE_SUBSCRIPTION_ID" \
+              --resource-group "$RESOURCE_GROUP" --name pe-spike6-acr \
+              --query 'privateLinkServiceConnections[0].privateLinkServiceConnectionState.status' --output tsv)
+            [[ "$state" == Approved ]] && break
+            [[ "$state" == Pending ]] || { echo "Unexpected private endpoint state: $state"; exit 1; }
+            sleep 15
+          done
+          [[ "$state" == Approved ]]
+
+      - name: Create S1 and S2 pools with bounded provisioning
+        id: pools
+        shell: bash
+        run: |
+          set -u
+          subnet=$(az network vnet subnet show --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" --vnet-name vnet-spike6 \
+            --name snet-acr-agents --query id --output tsv)
+          if timeout 900s az acr agentpool create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --registry "$REGISTRY_NAME" --name pools1spike6 --tier S1 \
+            --subnet-id "$subnet" --output none; then
+            s1_state=$(az acr agentpool show --subscription "$AZURE_SUBSCRIPTION_ID" \
+              --registry "$REGISTRY_NAME" --name pools1spike6 \
+              --query provisioningState --output tsv 2>/dev/null || true)
+          else
+            s1_state=failed
+          fi
+          echo "S1 pool provisioning state: ${s1_state:-unavailable}"
+          echo "s1_state=${s1_state:-unavailable}" >> "$GITHUB_OUTPUT"
+
+          if timeout 120s az acr agentpool create --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --registry "$REGISTRY_NAME" --name pools2spike6 --tier S2 \
+            --subnet-id "$subnet" --no-wait --output none; then
+            echo "s2_create=started" >> "$GITHUB_OUTPUT"
+          else
+            echo "S2 pool creation request failed."
+            echo "s2_create=failed" >> "$GITHUB_OUTPUT"
+          fi
+          [[ "$s1_state" == Succeeded ]]
+
+      - name: Wait for the S2 pool while preserving build results
+        id: s2-pool
+        if: always() && steps.scope.outcome == 'success'
+        shell: bash
+        run: |
+          set -u
+          state=failed
+          if [[ "${{ steps.pools.outputs.s2_create }}" == started ]]; then
+            for attempt in $(seq 1 16); do
+              state=$(az acr agentpool show --subscription "$AZURE_SUBSCRIPTION_ID" \
+                --registry "$REGISTRY_NAME" --name pools2spike6 \
+                --query provisioningState --output tsv 2>/dev/null || echo unavailable)
+              echo "S2 provisioning check ${attempt}: ${state}"
+              [[ "$state" == Succeeded || "$state" == Failed ]] && break
+              sleep 30
+            done
+          fi
+          echo "s2_state=${state}" >> "$GITHUB_OUTPUT"
+
+      - name: Probe the public ACR endpoint from GitHub-hosted compute
+        id: public-probe
+        shell: bash
+        run: |
+          set -u
+          status=$(curl --silent --show-error --connect-timeout 10 --max-time 15 \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://${REGISTRY_NAME}.azurecr.io/v2/" 2>/dev/null) || status=unreachable
+          echo "Public endpoint HTTP result: ${status}"
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+
+      - name: Build from the GitHub-hosted runner's local source context
+        id: source-context
+        shell: bash
+        run: |
+          set +e
+          log_file="$RUNNER_TEMP/source-context.log"
+          umask 077
+          trap 'rm -f -- "$log_file"' EXIT
+          timeout 480s az acr build --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --registry "$REGISTRY_NAME" --agent-pool pools1spike6 \
+            --file Dockerfile --image "spike/source-${GITHUB_SHA}" --timeout 360 \
+            image/spike >"$log_file" 2>&1
+          result=$?
+          run_id=$(sed -nE 's/.*Run ID: ([A-Za-z0-9-]+).*/\1/p' "$log_file" | tail -n 1)
+          if [[ "$result" == 0 ]]; then
+            diagnostic=success
+          elif [[ "$result" == 124 || "$result" == 137 ]]; then
+            diagnostic=timeout
+          elif grep -Eiq 'quota|capacity|too many requests' "$log_file"; then
+            diagnostic=quota_or_capacity
+          elif grep -Eiq 'unauthorized|forbidden|authentication|authorization|permission denied' "$log_file"; then
+            diagnostic=authorization
+          elif grep -Eiq 'upload.*(fail|error)|source context.*(fail|error)' "$log_file"; then
+            diagnostic=source_context_upload
+          elif grep -Eiq 'network|connection|resolve|ghcr\.io|registry.*(fail|error)' "$log_file"; then
+            diagnostic=network_or_registry
+          elif grep -Eiq 'failed|error' "$log_file"; then
+            diagnostic=task_or_cli_failure
+          else
+            diagnostic=unclassified_failure
+          fi
+          rm -f -- "$log_file"
+          trap - EXIT
+          echo "Source-context exit code: ${result}; run ID: ${run_id:-not-returned}; diagnostic: ${diagnostic}"
+          echo "exit_code=${result}" >> "$GITHUB_OUTPUT"
+          echo "run_id=${run_id:-not-returned}" >> "$GITHUB_OUTPUT"
+          echo "diagnostic=${diagnostic}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Build from the pinned public Git commit
+        id: git-context
+        shell: bash
+        run: |
+          set +e
+          log_file="$RUNNER_TEMP/git-context.log"
+          umask 077
+          trap 'rm -f -- "$log_file"' EXIT
+          timeout 480s az acr build --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --registry "$REGISTRY_NAME" --agent-pool pools1spike6 \
+            --file image/spike/Dockerfile --image "spike/git-${GITHUB_SHA}" \
+            --timeout 360 \
+            "https://github.com/${GITHUB_REPOSITORY}.git#${GITHUB_SHA}" \
+            >"$log_file" 2>&1
+          result=$?
+          run_id=$(sed -nE 's/.*Run ID: ([A-Za-z0-9-]+).*/\1/p' "$log_file" | tail -n 1)
+          if [[ "$result" == 0 ]]; then
+            diagnostic=success
+          elif [[ "$result" == 124 || "$result" == 137 ]]; then
+            diagnostic=timeout
+          elif grep -Eiq 'quota|capacity|too many requests' "$log_file"; then
+            diagnostic=quota_or_capacity
+          elif grep -Eiq 'unauthorized|forbidden|authentication|authorization|permission denied' "$log_file"; then
+            diagnostic=authorization
+          elif grep -Eiq 'git context|git fetch|clone.*(fail|error)' "$log_file"; then
+            diagnostic=git_context_fetch
+          elif grep -Eiq 'network|connection|resolve|ghcr\.io|registry.*(fail|error)' "$log_file"; then
+            diagnostic=network_or_registry
+          elif grep -Eiq 'failed|error' "$log_file"; then
+            diagnostic=task_or_cli_failure
+          else
+            diagnostic=unclassified_failure
+          fi
+          rm -f -- "$log_file"
+          trap - EXIT
+          echo "Pinned Git-context exit code: ${result}; run ID: ${run_id:-not-returned}; diagnostic: ${diagnostic}"
+          echo "exit_code=${result}" >> "$GITHUB_OUTPUT"
+          echo "run_id=${run_id:-not-returned}" >> "$GITHUB_OUTPUT"
+          echo "diagnostic=${diagnostic}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Record evidence and require both build outcomes
+        if: always()
+        shell: bash
+        env:
+          S1_STATE: ${{ steps.pools.outputs.s1_state }}
+          S2_STATE: ${{ steps.s2-pool.outputs.s2_state }}
+          PUBLIC_STATUS: ${{ steps.public-probe.outputs.status }}
+          SOURCE_EXIT: ${{ steps.source-context.outputs.exit_code }}
+          SOURCE_RUN: ${{ steps.source-context.outputs.run_id }}
+          SOURCE_DIAGNOSTIC: ${{ steps.source-context.outputs.diagnostic }}
+          GIT_EXIT: ${{ steps.git-context.outputs.exit_code }}
+          GIT_RUN: ${{ steps.git-context.outputs.run_id }}
+          GIT_DIAGNOSTIC: ${{ steps.git-context.outputs.diagnostic }}
+        run: |
+          {
+            echo "## Private ACR agent-pool spike"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Subscription / region | \`shared\` / \`${AZURE_LOCATION}\` |"
+            echo "| Registry | \`${REGISTRY_NAME}\` (Premium, public network disabled) |"
+            echo "| S1 pool | \`${S1_STATE:-not-attempted}\` |"
+            echo "| S2 pool | \`${S2_STATE:-not-attempted}\` |"
+            echo "| Public ACR endpoint | \`${PUBLIC_STATUS:-not-attempted}\` |"
+            echo "| GitHub-hosted source-context build | exit \`${SOURCE_EXIT:-not-attempted}\`, run \`${SOURCE_RUN:-none}\`, diagnostic \`${SOURCE_DIAGNOSTIC:-not-attempted}\` |"
+            echo "| Pinned Git-context build | exit \`${GIT_EXIT:-not-attempted}\`, run \`${GIT_RUN:-none}\`, diagnostic \`${GIT_DIAGNOSTIC:-not-attempted}\` |"
+            echo
+            echo "The Dockerfile pins the official actions-runner base image by digest; a successful task therefore demonstrates its GHCR pull."
+            echo "Raw task logs are not emitted or uploaded and are removed from the ephemeral runner after classification."
+            echo "A failed or unattempted check is not evidence of success."
+          } >> "$GITHUB_STEP_SUMMARY"
+          [[ "${S1_STATE:-}" == Succeeded ]] || exit 1
+          [[ "${S2_STATE:-}" == Succeeded ]] || exit 1
+          [[ "${PUBLIC_STATUS:-}" == 403 || "${PUBLIC_STATUS:-}" == unreachable ]] || exit 1
+          [[ "${SOURCE_EXIT:-}" == 0 ]] || exit 1
+          [[ "${GIT_EXIT:-}" == 0 ]] || exit 1
+
+      - name: Delete and verify the exact spike resource group
+        if: always() && steps.scope.outcome == 'success'
+        id: cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          group=$(az group show --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --name "$RESOURCE_GROUP" --query '{location:location,tags:tags}' --output json)
+          jq -e --arg location "$AZURE_LOCATION" \
+            '.location == $location and .tags.environment == "spike" and .tags.application == "ghrunners"' \
+            <<<"$group" >/dev/null
+          az group delete --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --name "$RESOURCE_GROUP" --yes --no-wait --only-show-errors
+          for attempt in $(seq 1 20); do
+            exists=$(az group exists --subscription "$AZURE_SUBSCRIPTION_ID" \
+              --name "$RESOURCE_GROUP" --output tsv)
+            [[ "$exists" == false ]] && break
+            sleep 30
+          done
+          [[ "${exists:-true}" == false ]]
+          echo "Verified the spike resource group is absent."
+          echo "## Cleanup: verified resource group \`${RESOURCE_GROUP}\` is absent." \
+            >> "$GITHUB_STEP_SUMMARY"
