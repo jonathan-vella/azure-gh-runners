@@ -123,13 +123,13 @@ Acceptance criteria:
 
 ### `entra-oidc` — Bootstrap Entra OIDC identities for platform CI ([#4](https://github.com/jonathan-vella/azure-gh-runners/issues/4))
 
-Create the resource group and the Entra application/service principal used by this repo's workflows. Federated credentials are created via Microsoft Graph / az CLI (not Bicep). Record the commands as a runbook.
+Create the resource group and two separate Entra applications/service principals used by this repo's workflows. Federated credentials are created via Microsoft Graph / az CLI (not Bicep). Record the commands as a runbook.
 
 Acceptance criteria:
 
-- Resource group `rg-ghrunners-prod-swc` in `swedencentral` in subscription `apex-shared`, tagged per governance contract
-- Federated credential `repo:jonathan-vella/azure-gh-runners:environment:platform-prod` with least-privilege deploy rights on the RG (Contributor + constrained role-assignment rights)
-- Separate federated credential `repo:jonathan-vella/azure-gh-runners:pull_request` mapped to Reader for what-if
+- Resource group `rg-ghrunners-prod-swc` in `swedencentral` in approved subscription `shared` (`b47d2942-f5ad-4d3c-b28e-c23e4f83d97e`, replacing the planned `apex-shared` name), tagged per governance contract
+- Federated credential `repo:jonathan-vella/azure-gh-runners:environment:platform-prod` on `sp-ghrunners-platform-prod` with least-privilege deploy rights on the RG (Contributor + role-assignment write and delete constrained to AcrPull, AcrPush, and Key Vault Secrets User)
+- Separate federated credential `repo:jonathan-vella/azure-gh-runners:pull_request` on `sp-ghrunners-whatif`, mapped only to Reader for what-if; repository variable `AZURE_WHATIF_CLIENT_ID`, no GitHub environment on the PR job
 - GitHub environment `platform-prod`: required reviewer, deployment branch `main` only; holds `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
 - Runbook `docs/runbooks/bootstrap-identity.md` with exact, re-runnable commands
 

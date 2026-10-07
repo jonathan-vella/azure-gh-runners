@@ -8,7 +8,7 @@ The GitHub repos are public, are owned by a personal account, and need jobs that
 
 - **New private repo** `jonathan-vella/azure-gh-runners`, cloned to `~/repos/azure-gh-runners`. It is project-agnostic, and vnext is just one consumer.
 - **One shared Azure platform**: VNet, internal ACA workload-profiles environment, ACR Premium, Key Vault, Log Analytics, NAT Gateway. Plus **one ACA event-driven runner job per onboarded repo**, generated from a typed consumer registry.
-- **Location**: subscription `apex-shared`, region `swedencentral`, RG `rg-ghrunners-prod-swc`.
+- **Location**: approved subscription `shared` (`b47d2942-f5ad-4d3c-b28e-c23e4f83d97e`, replacing the planned `apex-shared` name), region `swedencentral`, RG `rg-ghrunners-prod-swc`.
 - **IaC**: Bicep with AVM modules (exact version pins), following apex conventions (CAF naming, governance tags, a single `uniqueSuffix`).
 - **Image**: one generic image built **in Azure** on an **ACR Tasks dedicated agent pool** (preview) inside the VNet, pushed to private ACR Premium.
 - **Auth to GitHub**: one GitHub App owned by the personal account and installed on selected repos. Its key is deployed to Key Vault through ARM (a Bicep secure param).
@@ -63,7 +63,7 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 
 ### 2. Azure + GitHub identity bootstrap (one-time, documented runbook)
 
-- **entra-oidc**: Entra app/SP for the runners repo. Federated credentials: `environment:platform-prod` (Contributor + RBAC Admin, constrained, on the RG) and `pull_request` (Reader on the RG, for what-if). Created through Graph/CLI, not Bicep.
+- **entra-oidc**: two separate Entra apps/SPs, created through Graph/CLI, not Bicep. `sp-ghrunners-platform-prod` trusts only `environment:platform-prod` (Contributor + RBAC Admin on the RG, with both role-assignment write and delete constrained to AcrPull, AcrPush, and Key Vault Secrets User). `sp-ghrunners-whatif` trusts only `pull_request` (Reader on the RG). Never put both credentials on one app: federated credentials authenticate the same SP and do not select different RBAC roles. The PR job has no GitHub environment and uses repository variable `AZURE_WHATIF_CLIENT_ID`; the deploy job uses protected `platform-prod` secrets. See [identity bootstrap](runbooks/bootstrap-identity.md).
 - **github-app**: create the App on the personal account. Permissions: Administration RW, Actions R, Metadata R. No webhook. Install it on selected repos. Store App ID, installation ID, and private key as secrets in the runners repo's `platform-prod` environment.
 
 ### 3. Platform IaC (Bicep/AVM)

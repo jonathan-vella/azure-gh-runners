@@ -82,7 +82,7 @@ consumer registry in this repo; nothing is project-specific.
 
 | ID | Requirement |
 | --- | --- |
-| NFR-1 | Region `swedencentral`; subscription `apex-shared`; RG `rg-ghrunners-prod-swc`. |
+| NFR-1 | Region `swedencentral`; approved subscription `shared` (`b47d2942-f5ad-4d3c-b28e-c23e4f83d97e`); RG `rg-ghrunners-prod-swc`. |
 | NFR-2 | Bicep with Azure Verified Modules at exact versions; CAF naming; governance-contract tags. |
 | NFR-3 | Queue-to-start latency within the scaler polling interval plus container start (target: under 2 minutes). |
 | NFR-4 | Idle compute cost zero (scale to zero); fixed baseline ≈ USD 110/month (network, private endpoints, ACR Premium). |
