@@ -42,6 +42,20 @@ var acaSecurityRules = [
     }
   }
   {
+    name: 'Allow-ACA-Subnet-Inbound-Dependencies'
+    properties: {
+      access: 'Allow'
+      description: 'Allow required Container Apps platform communication from the dedicated ACA subnet only.'
+      destinationAddressPrefix: networkConfig.subnets.aca
+      destinationPortRange: '*'
+      direction: 'Inbound'
+      priority: 110
+      protocol: '*'
+      sourceAddressPrefix: networkConfig.subnets.aca
+      sourcePortRange: '*'
+    }
+  }
+  {
     name: 'Deny-Other-Inbound'
     properties: {
       access: 'Deny'
@@ -205,7 +219,7 @@ var acrAgentsSecurityRules = [
     name: 'Deny-Other-Inbound'
     properties: {
       access: 'Deny'
-      description: 'Agent-pool operations do not require inbound connections.'
+      description: 'ACR agent-pool firewall guidance documents outbound dependencies only; block unsolicited inbound connections.'
       destinationAddressPrefix: '*'
       destinationPortRange: '*'
       direction: 'Inbound'

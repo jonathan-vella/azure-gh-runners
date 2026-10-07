@@ -47,6 +47,12 @@ const acaReservedRanges = [
   '100.100.192.0/19',
 ];
 
+const privateIpv4Ranges = [
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+];
+
 function parseCidr(value, label) {
   if (typeof value !== 'string') {
     throw new Error(`${label} must be an IPv4 CIDR string.`);
@@ -90,6 +96,16 @@ function overlaps(left, right) {
   return left.start <= right.end && right.start <= left.end;
 }
 
+function containsRange(parent, child) {
+  return child.start >= parent.start && child.end <= parent.end;
+}
+
+function isValidDnsZoneName(name) {
+  return name.length <= 253 && name.split('.').every(
+    (label) => label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label),
+  );
+}
+
 function validateGovernanceTags(tags) {
   if (!tags || typeof tags !== 'object' || Array.isArray(tags)) {
     throw new Error('governanceTags must be an object.');
@@ -120,6 +136,9 @@ function validateNetworkConfig(config) {
   }
 
   const addressSpace = parseCidr(config.addressSpace, 'addressSpace');
+  if (!privateIpv4Ranges.some((range) => containsRange(parseCidr(range, 'RFC1918 range'), addressSpace))) {
+    throw new Error('addressSpace must be contained within one RFC1918 private IPv4 range.');
+  }
 
   if (!config.subnets || typeof config.subnets !== 'object' || Array.isArray(config.subnets)) {
     throw new Error('subnets must be an object.');
@@ -135,6 +154,10 @@ function validateNetworkConfig(config) {
 
   const subnetRanges = requiredSubnets.map((name) => {
     const range = parseCidr(config.subnets[name], `subnets.${name}`);
+
+    if (range.prefix > 29) {
+      throw new Error(`subnets.${name} must be /29 or larger for an Azure subnet.`);
+    }
 
     if (range.start < addressSpace.start || range.end > addressSpace.end) {
       throw new Error(`subnets.${name} must be contained within addressSpace.`);
@@ -179,13 +202,20 @@ function validateNetworkConfig(config) {
   }
 
   if (
-    config.privateDnsZones.some((zone) => typeof zone !== 'string' || !zone)
-    || new Set(config.privateDnsZones).size !== config.privateDnsZones.length
+    config.privateDnsZones.some(
+      (zone) => typeof zone !== 'string' || !zone || !isValidDnsZoneName(zone),
+    )
   ) {
-    throw new Error('privateDnsZones must contain unique, non-empty zone names.');
+    throw new Error('privateDnsZones must contain valid DNS zone names.');
   }
 
-  const missingZones = requiredDnsZones.filter((zone) => !config.privateDnsZones.includes(zone));
+  const normalizedZones = config.privateDnsZones.map((zone) => zone.toLowerCase());
+  if (new Set(normalizedZones).size !== normalizedZones.length) {
+    throw new Error('privateDnsZones must contain unique zone names, ignoring case.');
+  }
+
+  const normalizedZoneSet = new Set(normalizedZones);
+  const missingZones = requiredDnsZones.filter((zone) => !normalizedZoneSet.has(zone.toLowerCase()));
   if (missingZones.length > 0) {
     throw new Error(`privateDnsZones is missing required zones: ${missingZones.join(', ')}.`);
   }

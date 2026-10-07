@@ -40,6 +40,13 @@ test('network configuration rejects subnets outside the VNet address space', () 
   assert.throws(() => validateNetworkConfig(invalidConfig), /contained within addressSpace/);
 });
 
+test('VNet address space must use RFC1918 private IPv4 addresses', () => {
+  const invalidConfig = copyConfig();
+  invalidConfig.addressSpace = '8.0.0.0/22';
+
+  assert.throws(() => validateNetworkConfig(invalidConfig), /addressSpace must be contained within one RFC1918/);
+});
+
 test('network configuration enforces ACA and ACR agent subnet sizing', () => {
   const undersizedAca = copyConfig();
   undersizedAca.subnets.aca = '10.60.0.0/28';
@@ -50,6 +57,16 @@ test('network configuration enforces ACA and ACR agent subnet sizing', () => {
   assert.throws(
     () => validateNetworkConfig(undersizedAgents),
     new RegExp('acrAgents must be /27 or larger'),
+  );
+});
+
+test('all subnets reject ranges smaller than Azure minimum /29', () => {
+  const invalidConfig = copyConfig();
+  invalidConfig.subnets.privateEndpoints = '10.60.0.64/32';
+
+  assert.throws(
+    () => validateNetworkConfig(invalidConfig),
+    new RegExp('privateEndpoints must be /29 or larger'),
   );
 });
 
@@ -79,6 +96,16 @@ test('private DNS configuration includes all required zones', () => {
   invalidConfig.privateDnsZones = ['privatelink.blob.core.windows.net'];
 
   assert.throws(() => validateNetworkConfig(invalidConfig), /missing required zones/);
+});
+
+test('private DNS names reject invalid syntax and case-insensitive duplicates', () => {
+  const invalidSyntax = copyConfig();
+  invalidSyntax.privateDnsZones.push('invalid zone name');
+  assert.throws(() => validateNetworkConfig(invalidSyntax), /valid DNS zone names/);
+
+  const duplicate = copyConfig();
+  duplicate.privateDnsZones.push('PRIVATELINK.BLOB.CORE.WINDOWS.NET');
+  assert.throws(() => validateNetworkConfig(duplicate), /unique zone names, ignoring case/);
 });
 
 test('governance tags require the approved contract and permit additional tags', () => {
@@ -142,6 +169,39 @@ test('VNet subnets use the required layout and share NAT only across compute sub
   );
   assert.match(networkBicep, /publicIPAllocationMethod: 'Static'/);
   assert.match(networkBicep, /skuName: 'Standard'/);
+});
+
+test('ACA permits only its own subnet and platform probes inbound before the deny', () => {
+  const inboundRule = rulesNamed('Allow-ACA-Subnet-Inbound-Dependencies');
+  const inboundDeny = rulesNamed('Deny-Other-Inbound');
+  const probeRule = rulesNamed('Allow-ACA-Load-Balancer-Probes');
+
+  assert.equal(inboundRule.length, 1);
+  assert.equal(inboundDeny.length, 2);
+  assert.equal(probeRule.length, 1);
+  assert.match(inboundRule[0], /sourceAddressPrefix: networkConfig\.subnets\.aca/);
+  assert.match(inboundRule[0], /destinationAddressPrefix: networkConfig\.subnets\.aca/);
+  assert.match(inboundRule[0], /direction: 'Inbound'/);
+  assert.match(inboundRule[0], /priority: 110/);
+  assert.match(probeRule[0], /sourceAddressPrefix: 'AzureLoadBalancer'/);
+  assert.match(probeRule[0], /priority: 100/);
+  assert.match(inboundDeny[0], /priority: 4096/);
+});
+
+test('ACA platform communication is explicitly allowed in both directions', () => {
+  const inboundRule = rulesNamed('Allow-ACA-Subnet-Inbound-Dependencies');
+  const outboundRule = rulesNamed('Allow-ACA-Subnet-Dependencies');
+
+  assert.equal(inboundRule.length, 1);
+  assert.equal(outboundRule.length, 1);
+  for (const rule of [...inboundRule, ...outboundRule]) {
+    assert.match(rule, /sourceAddressPrefix: networkConfig\.subnets\.aca/);
+    assert.match(rule, /destinationAddressPrefix: networkConfig\.subnets\.aca/);
+    assert.match(rule, /destinationPortRange: '\*'/);
+    assert.match(rule, /protocol: '\*'/);
+  }
+  assert.match(inboundRule[0], /direction: 'Inbound'/);
+  assert.match(outboundRule[0], /direction: 'Outbound'/);
 });
 
 test('network Bicep uses exact AVM module versions and exposes downstream resource IDs', () => {
