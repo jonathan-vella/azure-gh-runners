@@ -71,9 +71,9 @@ GH App secrets are still read only after the protected environment's authorized 
    resource IDs, versionless Key Vault secret URL, immutable image references, and an observation window from 5 to 45
    minutes. Select capacity confirmation only after checking capacity. The existing required reviewer must approve
    `platform-prod`; do not bypass this gate. No resources are deployed while waiting for approval.
-4. Once the deployment run enters its bounded observation window, run
-   `.\spikes\jit-labels\Observe-JitLabelScale.ps1 -DeploymentRunId <deployment-run-id>` from an operator workstation
-   authenticated to the fixed shared subscription and `ghr-smoke`. Use the numeric GitHub Actions run ID from the
+4. Once the deployment run enters its bounded observation window, run the observer from PowerShell 7 (`pwsh`) on an
+   operator workstation authenticated to the fixed shared subscription and `ghr-smoke`:
+   `.\spikes\jit-labels\Observe-JitLabelScale.ps1 -DeploymentRunId <deployment-run-id>`. Use the numeric GitHub Actions run ID from the
    deployment URL. Before it acts on executions, the observer verifies that the named ACA job's run-ownership tag
    matches this exact ID; it rechecks the marker before cleanup. The observer correlates each dispatch by a unique
    nonce, requires the matching
@@ -85,10 +85,12 @@ GH App secrets are still read only after the protected environment's authorized 
    update ADR-0005 to Accepted or check issue criteria without this evidence.
 
 The deployment workflow tags the job with its owning GitHub run ID, refuses to overwrite an existing job, and keeps
-the key-bearing scaler available only for the bounded observation window. It attempts deletion on success, failure,
-timeout, or cancellation, and deletes only if the run-ID ownership marker matches. If the cleanup step is interrupted
-or reports failure, use the following external cleanup after confirming the run's `spike-deployment-run-id` tag equals
-the cancelled/failed workflow run ID:
+the key-bearing scaler available only for the bounded observation window. Every Azure CLI call is timeout-bounded;
+deployment setup has a 30-minute step limit, the observation hold is capped at 50 minutes for a maximum 45-minute
+requested window, cleanup has its own 10-minute step limit, and the job has a 105-minute ceiling to leave runner
+startup/step-transition margin. Cleanup is attempted on success, failure, timeout, or cancellation, and deletes only
+if the run-ID ownership marker matches. If the cleanup step is interrupted or reports failure, use the following
+external cleanup after confirming the run's `spike-deployment-run-id` tag equals the cancelled/failed workflow run ID:
 
 ```powershell
 az containerapp job delete `
@@ -99,7 +101,9 @@ az containerapp job delete `
 ```
 
 Verify the job is absent, no test runner remains registered, and no owned execution remains active. Then remove the
-temporary identity by its exact `ClientId`; cleanup refuses unexpected RBAC grants/FICs and supports `-WhatIf`:
+temporary identity by its exact `ClientId`; cleanup is safe to rerun after the spike resource group or pull identity
+has already been removed, accepts only zero-to-two remaining expected role grants and zero-to-one exact FIC, rejects
+unexpected roles/credentials, and verifies app/service-principal absence. It supports `-WhatIf`:
 
 ```powershell
 .\spikes\jit-labels\Prepare-Cleanup-SpikeIdentity.ps1 `

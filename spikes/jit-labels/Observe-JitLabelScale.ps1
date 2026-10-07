@@ -24,14 +24,41 @@ $script:runnerToClean = $null
 $script:baselineExecutionNames = @()
 $script:baselineExecutionsCaptured = $false
 $script:ownedExecutionNames = [System.Collections.Generic.HashSet[string]]::new()
+$script:commandDeadline = $null
+Import-Module (Join-Path $PSScriptRoot 'Bounded-Command.psm1') -Force
+
+function Invoke-BoundedCommand {
+    param(
+        [Parameter(Mandatory)][string]$Command,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 15
+    )
+
+    $invokeArguments = @{
+        Command = $Command
+        Arguments = $Arguments
+        TimeoutSeconds = $TimeoutSeconds
+        CommandRunner = $script:CommandRunner
+    }
+    if ($script:commandDeadline) {
+        $invokeArguments.Deadline = $script:commandDeadline
+    }
+    return Invoke-BoundedNativeCommand @invokeArguments
+}
+
+function New-CommandDeadline {
+    param([Parameter(Mandatory)][ValidateRange(1, 600)][int]$Seconds)
+    $deadline = [datetime]::UtcNow.AddSeconds($Seconds)
+    if ($script:commandDeadline -and $script:commandDeadline -lt $deadline) {
+        return $script:commandDeadline
+    }
+    return $deadline
+}
 
 function Invoke-GhJson {
     param([Parameter(Mandatory)][string[]]$Arguments)
 
-    $output = & gh @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "GitHub CLI command failed: gh $($Arguments -join ' ')"
-    }
+    $output = Invoke-BoundedCommand -Command 'gh' -Arguments $Arguments
     if ([string]::IsNullOrWhiteSpace(($output -join ''))) {
         return $null
     }
@@ -39,26 +66,19 @@ function Invoke-GhJson {
 }
 
 function Get-Executions {
-    $output = & az containerapp job execution list `
-        --name $JobName `
-        --resource-group $ResourceGroup `
-        --subscription $SubscriptionId `
-        --output json
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Unable to list executions for the named issue 10 ACA job.'
-    }
+    $output = Invoke-BoundedCommand -Command 'az' -Arguments @(
+        'containerapp', 'job', 'execution', 'list',
+        '--name', $JobName, '--resource-group', $ResourceGroup,
+        '--subscription', $SubscriptionId, '--output', 'json'
+    )
     return @($output | ConvertFrom-Json)
 }
 
 function Assert-OwnedJob {
-    $output = & az containerapp job show `
-        --name $JobName `
-        --resource-group $ResourceGroup `
-        --subscription $SubscriptionId `
-        --output json
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Unable to verify ownership of the named issue 10 ACA job.'
-    }
+    $output = Invoke-BoundedCommand -Command 'az' -Arguments @(
+        'containerapp', 'job', 'show', '--name', $JobName,
+        '--resource-group', $ResourceGroup, '--subscription', $SubscriptionId, '--output', 'json'
+    )
     $job = $output | ConvertFrom-Json
     if ($job.tags.'spike-id' -ne '10' -or
         $job.tags.'spike-name' -ne 'jit-runner-labels' -or
@@ -99,19 +119,24 @@ function Start-Workflow {
 
     $nonce = [guid]::NewGuid().ToString('N')
     $startedAt = [datetime]::UtcNow.AddSeconds(-3)
-    & gh workflow run $Workflow --repo $fullRepository --ref main --field "spike_nonce=$nonce"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to dispatch $Workflow in $fullRepository."
-    }
+    Invoke-BoundedCommand -Command 'gh' -Arguments @(
+        'workflow', 'run', $Workflow, '--repo', $fullRepository, '--ref', 'main', '--field', "spike_nonce=$nonce"
+    ) | Out-Null
 
-    $deadline = [datetime]::UtcNow.AddSeconds(60)
-    do {
-        Start-Sleep -Seconds 3
-        $run = Get-WorkflowRun -Workflow $Workflow -NotBeforeUtc $startedAt -Nonce $nonce
-        if ($run) {
-            return $run
-        }
-    } while ([datetime]::UtcNow -lt $deadline)
+    $deadline = New-CommandDeadline -Seconds 60
+    $priorDeadline = $script:commandDeadline
+    $script:commandDeadline = $deadline
+    try {
+        do {
+            Start-Sleep -Seconds 3
+            $run = Get-WorkflowRun -Workflow $Workflow -NotBeforeUtc $startedAt -Nonce $nonce
+            if ($run) {
+                return $run
+            }
+        } while ([datetime]::UtcNow -lt $deadline)
+    } finally {
+        $script:commandDeadline = $priorDeadline
+    }
 
     throw "The dispatched $Workflow run did not appear in GitHub Actions."
 }
@@ -148,23 +173,26 @@ function Cancel-RunIfActive {
         return
     }
     if ($run.status -ne 'completed') {
-        & gh run cancel $RunId --repo $fullRepository
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to cancel queued/active smoke workflow run $RunId."
-        }
-        $deadline = [datetime]::UtcNow.AddSeconds(60)
-        do {
-            Start-Sleep -Seconds 3
-            $run = Invoke-GhJson -Arguments @(
-                'run', 'view', "$RunId", '--repo', $fullRepository, '--json', 'status,conclusion'
-            )
-            if ($run.status -eq 'completed') {
-                if ($run.conclusion -ne 'cancelled') {
-                    throw "Smoke workflow run $RunId completed with unexpected conclusion '$($run.conclusion)'."
+        Invoke-BoundedCommand -Command 'gh' -Arguments @('run', 'cancel', "$RunId", '--repo', $fullRepository) | Out-Null
+        $deadline = New-CommandDeadline -Seconds 60
+        $priorDeadline = $script:commandDeadline
+        $script:commandDeadline = $deadline
+        try {
+            do {
+                Start-Sleep -Seconds 3
+                $run = Invoke-GhJson -Arguments @(
+                    'run', 'view', "$RunId", '--repo', $fullRepository, '--json', 'status,conclusion'
+                )
+                if ($run.status -eq 'completed') {
+                    if ($run.conclusion -ne 'cancelled') {
+                        throw "Smoke workflow run $RunId completed with unexpected conclusion '$($run.conclusion)'."
+                    }
+                    return
                 }
-                return
-            }
-        } while ([datetime]::UtcNow -lt $deadline)
+            } while ([datetime]::UtcNow -lt $deadline)
+        } finally {
+            $script:commandDeadline = $priorDeadline
+        }
         throw "Smoke workflow run $RunId did not reach a cancelled terminal state."
     }
 }
@@ -197,22 +225,27 @@ function Stop-NewExecutions {
 
         $escapedName = [uri]::EscapeDataString($execution.name)
         $resourceId = "https://management.azure.com/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.App/jobs/$JobName/executions/$escapedName/stop?api-version=2026-07-01"
-        & az rest --method post --url $resourceId --output none
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to stop the unexpected issue 10 execution '$($execution.name)'."
-        }
+        Invoke-BoundedCommand -Command 'az' -Arguments @(
+            'rest', '--method', 'post', '--url', $resourceId, '--output', 'none'
+        ) | Out-Null
         Write-Host "Stopped unexpected issue 10 execution: $($execution.name)"
     }
 
     foreach ($executionName in @($script:ownedExecutionNames)) {
-        $deadline = [datetime]::UtcNow.AddSeconds(30)
-        do {
-            $current = Get-Executions | Where-Object name -eq $executionName | Select-Object -First 1
-            if (-not $current -or $current.properties.status -ne 'Running') {
-                break
-            }
-            Start-Sleep -Seconds 3
-        } while ([datetime]::UtcNow -lt $deadline)
+        $deadline = New-CommandDeadline -Seconds 30
+        $priorDeadline = $script:commandDeadline
+        $script:commandDeadline = $deadline
+        try {
+            do {
+                $current = Get-Executions | Where-Object name -eq $executionName | Select-Object -First 1
+                if (-not $current -or $current.properties.status -ne 'Running') {
+                    break
+                }
+                Start-Sleep -Seconds 3
+            } while ([datetime]::UtcNow -lt $deadline)
+        } finally {
+            $script:commandDeadline = $priorDeadline
+        }
         if ($current -and $current.properties.status -eq 'Running') {
             throw "Issue 10 execution '$executionName' remains active after cleanup."
         }
@@ -251,19 +284,17 @@ function Assert-NoActiveProbeRuns {
 
 function Invoke-JitLabelScaleObservation {
 try {
-    $activeSubscription = & az account show --subscription $SubscriptionId --query id --output tsv 2>$null
-    if ($LASTEXITCODE -ne 0 -or $activeSubscription -ne $SubscriptionId) {
+    $activeSubscription = Invoke-BoundedCommand -Command 'az' -Arguments @(
+        'account', 'show', '--subscription', $SubscriptionId, '--query', 'id', '--output', 'tsv'
+    )
+    if ($activeSubscription.Trim() -ne $SubscriptionId) {
         throw 'Azure CLI must be authenticated to the approved shared subscription before observation.'
     }
 
-    $jobState = & az containerapp job show `
-        --name $JobName `
-        --resource-group $ResourceGroup `
-        --subscription $SubscriptionId `
-        --output json 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'The issue 10 diagnostic job is not available in the approved subscription and resource group.'
-    }
+    $jobState = Invoke-BoundedCommand -Command 'az' -Arguments @(
+        'containerapp', 'job', 'show', '--name', $JobName, '--resource-group', $ResourceGroup,
+        '--subscription', $SubscriptionId, '--output', 'json'
+    )
     $jobState = $jobState | ConvertFrom-Json
     if ($jobState.tags.'spike-id' -ne '10' -or
         $jobState.tags.'spike-name' -ne 'jit-runner-labels' -or
@@ -291,7 +322,8 @@ try {
     $script:matchRunId = [long]$matchRun.databaseId
     Write-Host "Matched-label test run: $($script:matchRunId)"
 
-    $deadline = [datetime]::UtcNow.AddSeconds($MatchTimeoutSeconds)
+    $deadline = New-CommandDeadline -Seconds $MatchTimeoutSeconds
+    $script:commandDeadline = $deadline
     $observedLabels = @()
     $runnerName = $null
     do {
@@ -329,6 +361,7 @@ try {
     if (-not $runnerName -or -not ($observedLabels | Where-Object { $_ -ieq $CustomLabel })) {
         throw 'The actual registered JIT runner label set was not observed while the matching job was active.'
     }
+    $script:commandDeadline = $null
     if (-not ($observedLabels | Where-Object { $_ -ieq 'self-hosted' })) {
         Write-Host 'Observed JIT registration did not include self-hosted.'
     } else {
@@ -345,7 +378,8 @@ try {
     }
     Write-Host "Matched-label ACA execution succeeded: $($newMatchExecutions[0].name)"
 
-    $runnerRemovalDeadline = [datetime]::UtcNow.AddSeconds(30)
+    $runnerRemovalDeadline = New-CommandDeadline -Seconds 30
+    $script:commandDeadline = $runnerRemovalDeadline
     $remainingRunners = Get-RunnerByName -Name $runnerName
     while ($remainingRunners.Count -gt 0 -and [datetime]::UtcNow -lt $runnerRemovalDeadline) {
         Start-Sleep -Seconds 3
@@ -355,6 +389,7 @@ try {
     if (-not $automaticRemovalSucceeded) {
         Remove-TestRunnerIfPresent -Name $runnerName
         $script:runnerToClean = $null
+        $script:commandDeadline = $null
         throw "The ephemeral runner did not deregister itself; explicit cleanup removed it."
     }
     $script:runnerToClean = $null
@@ -365,7 +400,8 @@ try {
     $script:noWakeRunId = [long]$noWakeRun.databaseId
     Write-Host "Self-hosted-only no-wake test run: $($script:noWakeRunId)"
 
-    $noWakeDeadline = [datetime]::UtcNow.AddSeconds($NoWakeObservationSeconds)
+    $noWakeDeadline = New-CommandDeadline -Seconds $NoWakeObservationSeconds
+    $script:commandDeadline = $noWakeDeadline
     do {
         $currentExecutionRecords = @(Get-Executions)
         $unexpectedExecutions = @($currentExecutionRecords | Where-Object { $_.name -notin $beforeNoWake })
@@ -390,8 +426,10 @@ try {
 
     Cancel-RunIfActive -RunId $script:noWakeRunId
     $script:noWakeRunId = $null
+    $script:commandDeadline = $null
     Write-Host "The self-hosted-only job stayed queued without an assignment for $NoWakeObservationSeconds seconds; no ACA execution started."
 } finally {
+    $script:commandDeadline = [datetime]::UtcNow.AddSeconds(90)
     $cleanupErrors = [System.Collections.Generic.List[string]]::new()
     foreach ($runId in @($script:noWakeRunId, $script:matchRunId)) {
         if ($runId) {
@@ -425,6 +463,7 @@ try {
     if ($cleanupErrors.Count -gt 0) {
         throw "Observer cleanup had failures: $($cleanupErrors -join '; ')"
     }
+    $script:commandDeadline = $null
 }
 }
 

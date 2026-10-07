@@ -53,9 +53,11 @@ and exact cleanup procedure.
    it contains only resources tagged `spike-id=10`.
 
 The diagnostic job is automatically deleted after its bounded 5–45 minute observation window, including workflow
-failure/cancellation when the run-ID ownership marker can be confirmed. If that cleanup is interrupted, follow the
-explicit verification and external cleanup steps in [OPERATIONS.md](OPERATIONS.md). The workflow uses a temporary
-spike-scoped identity, not the production deployment identity. The protected deployment workflow cannot be run from
+failure/cancellation when the run-ID ownership marker can be confirmed. Azure CLI calls have hard timeouts; deployment
+setup, observation, and cleanup use separate bounded steps, with a job ceiling that leaves additional cleanup margin.
+If that cleanup is interrupted, follow the explicit verification and external cleanup steps in
+[OPERATIONS.md](OPERATIONS.md). The workflow uses a temporary spike-scoped identity, not the production deployment
+identity. The protected deployment workflow cannot be run from
 this PR branch; its human reviewer gate remains mandatory after it is available on `main`. Do not deploy while the
 regional capacity blocker is unresolved.
 

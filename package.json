@@ -5,7 +5,7 @@
     "validate": "npm run validate:consumers && npm run validate:bicep && npm run validate:spike && npm run validate:spike7 && npm run validate:network && npm run validate:markdown",
     "validate:consumers": "node --test tests/consumer-schema.test.cjs",
     "validate:bicep": "az bicep build --file infra/main.bicep --stdout && az bicep build-params --file infra/main.bicepparam --stdout && az bicep lint --file infra/main.bicep && az bicep lint --file infra/modules/network.bicep && az bicep build --file infra/spike7/main.bicep --stdout && az bicep lint --file infra/spike7/main.bicep && az bicep build --file infra/spike7/job.bicep --stdout && az bicep lint --file infra/spike7/job.bicep && az bicep build --file spikes/jit-labels/job.bicep --stdout && az bicep lint --file spikes/jit-labels/job.bicep",
-    "validate:spike": "node --test spikes/jit-labels/tests/*.test.mjs",
+    "validate:spike": "node --test spikes/jit-labels/tests/*.test.mjs && pwsh -NoProfile -File spikes/jit-labels/tests/Observe-JitLabelScale.Tests.ps1 && pwsh -NoProfile -File spikes/jit-labels/tests/SpikeIdentity-Cleanup.Tests.ps1",
     "validate:spike7": "node tools/validate-spike7.mjs && pwsh -NoProfile -File tools/test-spike7.ps1",
     "validate:network": "node --test tools/network.test.js && node tools/validate-network.js",
     "validate:markdown": "markdownlint-cli2 \"**/*.md\""

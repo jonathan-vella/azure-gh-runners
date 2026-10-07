@@ -26,22 +26,20 @@ $ficSubjectPrefix = 'repo:jonathan-vella@25802147/azure-gh-runners@1408821667'
 $ficSubject = 'repo:jonathan-vella@25802147/azure-gh-runners@1408821667:environment:platform-prod'
 $ficAudience = 'api://AzureADTokenExchange'
 $expectedResourceGroup = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup"
+Import-Module (Join-Path $PSScriptRoot 'Bounded-Command.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'SpikeIdentity-Cleanup.psm1') -Force
 
 function Invoke-AzJson {
     param([Parameter(Mandatory)][string[]]$Arguments)
-    $output = & az @Arguments 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Azure CLI operation failed; details are suppressed.'
-    }
+    $output = Invoke-BoundedNativeCommand -Command 'az' -Arguments $Arguments -TimeoutSeconds 30
     if ([string]::IsNullOrWhiteSpace(($output -join ''))) { return $null }
     return ($output -join "`n") | ConvertFrom-Json
 }
 
 function Assert-GitHubSubjectTemplate {
-    $output = & gh api 'repos/jonathan-vella/azure-gh-runners/actions/oidc/customization/sub' 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Could not read repository OIDC subject customization; verify gh authentication and stop.'
-    }
+    $output = Invoke-BoundedNativeCommand -Command 'gh' -Arguments @(
+        'api', 'repos/jonathan-vella/azure-gh-runners/actions/oidc/customization/sub'
+    ) -TimeoutSeconds 15
     try {
         $metadata = ($output -join "`n") | ConvertFrom-Json
     } catch {
@@ -63,14 +61,15 @@ $account = Invoke-AzJson -Arguments @('account', 'show', '--subscription', $subs
 if ($account.id -ne $subscriptionId -or $account.tenantId -ne $tenantId -or $account.name -ne 'shared') {
     throw 'Authenticate to the approved shared subscription and tenant before running this script.'
 }
-$group = Invoke-AzJson -Arguments @('group', 'show', '--name', $resourceGroup, '--subscription', $subscriptionId, '--output', 'json')
-if ($group.id -ne $expectedResourceGroup -or $group.location -ne 'swedencentral') {
-    throw 'The exact issue 10 resource group is absent or has an unexpected scope/location.'
-}
-$identity = Invoke-AzJson -Arguments @('identity', 'show', '--ids', $identityId, '--subscription', $subscriptionId, '--output', 'json')
-if ($identity.id -ine $identityId) { throw 'The specified spike 10 pull identity could not be verified.' }
 
 if ($Action -eq 'Prepare') {
+    $group = Invoke-AzJson -Arguments @('group', 'show', '--name', $resourceGroup, '--subscription', $subscriptionId, '--output', 'json')
+    if ($group.id -ne $expectedResourceGroup -or $group.location -ne 'swedencentral') {
+        throw 'The exact issue 10 resource group is absent or has an unexpected scope/location.'
+    }
+    $identity = Invoke-AzJson -Arguments @('identity', 'show', '--ids', $identityId, '--subscription', $subscriptionId, '--output', 'json')
+    if ($identity.id -ine $identityId) { throw 'The specified spike 10 pull identity could not be verified.' }
+
     Assert-GitHubSubjectTemplate
     $existing = Invoke-AzJson -Arguments @(
         'ad', 'app', 'list', '--display-name', $appDisplayName, '--output', 'json'
@@ -209,36 +208,63 @@ if ($Action -eq 'Prepare') {
 if (-not $ClientId) {
     throw 'ClientId is required for exact temporary-identity cleanup.'
 }
-$app = Invoke-AzJson -Arguments @('ad', 'app', 'show', '--id', $ClientId, '--output', 'json')
-if ($app.displayName -cne $appDisplayName -or $app.appId -ine $ClientId) {
-    throw 'The requested client ID does not match the exact temporary spike app name; refusing cleanup.'
-}
-$servicePrincipal = Invoke-AzJson -Arguments @('ad', 'sp', 'show', '--id', $ClientId, '--output', 'json')
-$assignments = Invoke-AzJson -Arguments @(
-    'role', 'assignment', 'list',
-    '--assignee-object-id', $servicePrincipal.id,
-    '--all', '--include-inherited',
-    '--subscription', $subscriptionId,
-    '--output', 'json'
+$apps = Invoke-AzJson -Arguments @(
+    'ad', 'app', 'list', '--filter', "appId eq '$ClientId'", '--output', 'json'
 )
-if (@($assignments).Count -ne 2 -or
-    @($assignments | Where-Object { $_.roleDefinitionName -eq 'Contributor' -and $_.scope -ieq $expectedResourceGroup }).Count -ne 1 -or
-    @($assignments | Where-Object { $_.roleDefinitionName -eq 'Managed Identity Operator' -and $_.scope -ieq $identityId }).Count -ne 1) {
-    throw 'The temporary identity has unexpected RBAC assignments; refusing cleanup.'
+$servicePrincipals = Invoke-AzJson -Arguments @(
+    'ad', 'sp', 'list', '--filter', "appId eq '$ClientId'", '--output', 'json'
+)
+if (@($apps).Count -gt 1 -or @($servicePrincipals).Count -gt 1) {
+    throw 'Multiple Entra objects matched the temporary client ID; refusing cleanup.'
+}
+$app = @($apps | Where-Object { $_.appId -ieq $ClientId }) | Select-Object -First 1
+$servicePrincipal = @($servicePrincipals | Where-Object { $_.appId -ieq $ClientId }) | Select-Object -First 1
+if (-not $app -and -not $servicePrincipal) {
+    Write-Output "Temporary spike identity '$appDisplayName' is already absent; cleanup is complete."
+    return
 }
 
-$credentials = Invoke-AzJson -Arguments @(
-    'ad', 'app', 'federated-credential', 'list', '--id', $ClientId, '--output', 'json'
-)
-if (@($credentials).Count -ne 1 -or
-    $credentials[0].name -cne $ficName -or
-    $credentials[0].issuer -cne $ficIssuer -or
-    $credentials[0].subject -cne $ficSubject -or
-    @($credentials[0].audiences | Where-Object { $_ -ceq $ficAudience }).Count -ne 1) {
-    throw 'The temporary app has unexpected federated credentials; refusing deletion.'
+$assignments = @()
+if ($servicePrincipal) {
+    $assignments = @(
+        Invoke-AzJson -Arguments @(
+            'role', 'assignment', 'list',
+            '--assignee-object-id', $servicePrincipal.id,
+            '--all', '--include-inherited',
+            '--subscription', $subscriptionId,
+            '--output', 'json'
+        )
+    )
 }
 
-if ($PSCmdlet.ShouldProcess("$appDisplayName ($ClientId)", 'Remove the exact issue 10 FIC, scoped role grants, and app')) {
+$credentials = @()
+if ($app) {
+    $credentials = @(
+        Invoke-AzJson -Arguments @(
+            'ad', 'app', 'federated-credential', 'list', '--id', $ClientId, '--output', 'json'
+        )
+    )
+}
+Assert-SpikeIdentityCleanupState `
+    -App $app `
+    -ServicePrincipal $servicePrincipal `
+    -Assignments $assignments `
+    -FederatedCredentials $credentials `
+    -ExpectedDisplayName $appDisplayName `
+    -ExpectedResourceGroup $expectedResourceGroup `
+    -ExpectedPullIdentity $identityId `
+    -ExpectedCredentialName $ficName `
+    -ExpectedIssuer $ficIssuer `
+    -ExpectedSubject $ficSubject `
+    -ExpectedAudience $ficAudience | Out-Null
+
+if ($PSCmdlet.ShouldProcess("$appDisplayName ($ClientId)", 'Remove only verified issue 10 identity resources')) {
+    foreach ($credential in $credentials) {
+        Invoke-AzJson -Arguments @(
+            'ad', 'app', 'federated-credential', 'delete',
+            '--id', $ClientId, '--federated-credential-id', $credential.name, '--output', 'json'
+        ) | Out-Null
+    }
     foreach ($assignment in $assignments) {
         Invoke-AzJson -Arguments @(
             'role', 'assignment', 'delete',
@@ -247,6 +273,22 @@ if ($PSCmdlet.ShouldProcess("$appDisplayName ($ClientId)", 'Remove the exact iss
             '--output', 'json'
         ) | Out-Null
     }
-    Invoke-AzJson -Arguments @('ad', 'app', 'delete', '--id', $ClientId, '--output', 'json') | Out-Null
-    Write-Output "Removed '$appDisplayName' and only its two verified spike-scoped role assignments."
+    if ($servicePrincipal) {
+        Invoke-AzJson -Arguments @('ad', 'sp', 'delete', '--id', $ClientId, '--output', 'json') | Out-Null
+    }
+    if ($app) {
+        Invoke-AzJson -Arguments @('ad', 'app', 'delete', '--id', $ClientId, '--output', 'json') | Out-Null
+    }
+
+    $remainingApps = Invoke-AzJson -Arguments @(
+        'ad', 'app', 'list', '--filter', "appId eq '$ClientId'", '--output', 'json'
+    )
+    $remainingServicePrincipals = Invoke-AzJson -Arguments @(
+        'ad', 'sp', 'list', '--filter', "appId eq '$ClientId'", '--output', 'json'
+    )
+    if (@($remainingApps | Where-Object { $_.appId -ieq $ClientId }).Count -gt 0 -or
+        @($remainingServicePrincipals | Where-Object { $_.appId -ieq $ClientId }).Count -gt 0) {
+        throw 'Temporary app or service principal remains after cleanup.'
+    }
+    Write-Output "Removed '$appDisplayName' and only its remaining verified spike-scoped grants."
 }

@@ -49,7 +49,7 @@ on:
         type: boolean
         default: false
       observationWindowMinutes:
-        description: Keep the temporary scaler available for this many minutes (5-45)
+        description: Keep the temporary scaler available for this many minutes (5-45); deployment and cleanup have reserved timeouts
         required: true
         type: number
         default: 45
@@ -66,7 +66,7 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main' && inputs.capacityConfirmed
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 105
     environment: platform-prod
     steps:
       - name: Check out reviewed spike template
@@ -81,6 +81,7 @@ jobs:
           subscription-id: b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
 
       - name: Validate scope, region, network and private dependencies; deploy job
+        timeout-minutes: 30
         env:
           DEPLOYMENT_CLIENT_ID: ${{ inputs.deploymentClientId }}
           DEPLOYMENT_OBJECT_ID: ${{ inputs.deploymentPrincipalObjectId }}
@@ -97,12 +98,13 @@ jobs:
           SUBSCRIPTION_ID: b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
           TENANT_ID: 30bac921-1547-4b1e-8445-72455da783f1
           OBSERVATION_WINDOW_MINUTES: ${{ inputs.observationWindowMinutes }}
+          AZ_COMMAND_TIMEOUT_SECONDS: 60
         run: |
           set -euo pipefail
 
           az_checked() {
             local output
-            if ! output="$(az "$@" 2>/dev/null)"; then
+            if ! output="$(timeout --foreground --signal=TERM --kill-after=10s "${AZ_COMMAND_TIMEOUT_SECONDS}s" az "$@" 2>/dev/null)"; then
               echo "Azure CLI operation failed; details are suppressed to avoid exposing configuration." >&2
               return 1
             fi
@@ -178,7 +180,7 @@ jobs:
                 or ((.scope | ascii_downcase) == ($identity | ascii_downcase) and .roleDefinitionName == "Managed Identity Operator"))' \
             <<<"$assignments" >/dev/null
 
-          if existing_job="$(az containerapp job show \
+          if existing_job="$(timeout --foreground --signal=TERM --kill-after=10s 60s az containerapp job show \
             --name "$job_name" \
             --resource-group "$resource_group" \
             --subscription "$SUBSCRIPTION_ID" \
@@ -308,6 +310,7 @@ jobs:
             <<<"$pull_assignments" >/dev/null
 
           echo "SPIKE10_DEPLOYMENT_ATTEMPTED=true" >> "$GITHUB_ENV"
+          AZ_COMMAND_TIMEOUT_SECONDS=900
           az_checked deployment group create \
             --name "spike10-jit-labels-${GITHUB_RUN_ID}" \
             --resource-group "$resource_group" \
@@ -332,26 +335,29 @@ jobs:
             --output none
 
       - name: Keep scaler available for the bounded observation window
+        timeout-minutes: 50
         env:
           OBSERVATION_WINDOW_MINUTES: ${{ inputs.observationWindowMinutes }}
         run: sleep "$((OBSERVATION_WINDOW_MINUTES * 60))"
 
       - name: Remove only the job created by this workflow run
         if: always() && steps.azure-login.outcome == 'success' && env.SPIKE10_DEPLOYMENT_ATTEMPTED == 'true'
+        timeout-minutes: 10
         env:
           SUBSCRIPTION_ID: b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
+          AZ_COMMAND_TIMEOUT_SECONDS: 30
         run: |
           set -euo pipefail
           az_checked() {
             local output
-            if ! output="$(az "$@" 2>/dev/null)"; then
+            if ! output="$(timeout --foreground --signal=TERM --kill-after=10s "${AZ_COMMAND_TIMEOUT_SECONDS}s" az "$@" 2>/dev/null)"; then
               echo "Scoped cleanup operation failed; details are suppressed." >&2
               return 1
             fi
             printf '%s' "$output"
           }
 
-          if job_json="$(az containerapp job show \
+          if job_json="$(timeout --foreground --signal=TERM --kill-after=10s 30s az containerapp job show \
             --name caj-ghr-spike10-jit-labels \
             --resource-group rg-ghrunners-spike10-swc \
             --subscription "$SUBSCRIPTION_ID" \
@@ -378,7 +384,7 @@ jobs:
             --yes \
             --output none
           for attempt in {1..12}; do
-            if job_state="$(az containerapp job show \
+            if job_state="$(timeout --foreground --signal=TERM --kill-after=10s 15s az containerapp job show \
               --name caj-ghr-spike10-jit-labels \
               --resource-group rg-ghrunners-spike10-swc \
               --subscription "$SUBSCRIPTION_ID" \
