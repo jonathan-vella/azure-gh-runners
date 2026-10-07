@@ -4,6 +4,9 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createDiagnosticSettings } from './diagnostics-contract.mjs';
 
+const networkConfig = JSON.parse(
+  readFileSync(new URL('../infra/network-config.json', import.meta.url), 'utf8'),
+);
 const diagnosticsConfig = JSON.parse(
   readFileSync(new URL('../infra/diagnostics-config.json', import.meta.url), 'utf8'),
 );
@@ -13,27 +16,40 @@ const resourceProfiles = [
     outputName: 'acaNetworkSecurityGroupResourceId',
     profileName: 'networkSecurityGroup',
     resourceType: 'Microsoft.Network/networkSecurityGroups',
+    namePrefix: 'nsg-ghrunners-aca-prod-swc-',
   },
   {
     outputName: 'acrAgentsNetworkSecurityGroupResourceId',
     profileName: 'networkSecurityGroup',
     resourceType: 'Microsoft.Network/networkSecurityGroups',
+    namePrefix: 'nsg-ghrunners-acr-agents-prod-swc-',
   },
   {
     outputName: 'virtualNetworkResourceId',
     profileName: 'virtualNetwork',
     resourceType: 'Microsoft.Network/virtualNetworks',
+    namePrefix: 'vnet-ghrunners-prod-swc-',
   },
   {
     outputName: 'natGatewayPublicIpResourceId',
     profileName: 'publicIpAddress',
     resourceType: 'Microsoft.Network/publicIPAddresses',
+    namePrefix: 'pip-ghrunners-prod-swc-',
   },
 ];
 
-export function parseAvailableCategories(categories) {
-  if (!Array.isArray(categories)) {
-    throw new TypeError('Azure CLI must return a JSON array of diagnostic categories.');
+const azureCliOptions = {
+  encoding: 'utf8',
+  maxBuffer: 1024 * 1024,
+  stdio: ['ignore', 'pipe', 'pipe'],
+  timeout: 30_000,
+  windowsHide: true,
+};
+
+export function parseAvailableCategories(response) {
+  const categories = Array.isArray(response) ? response : response?.value;
+  if (!Array.isArray(categories) || categories.length === 0) {
+    throw new TypeError('Azure CLI must return a non-empty category array or an object with a non-empty value array.');
   }
 
   const logs = [];
@@ -45,14 +61,12 @@ export function parseAvailableCategories(categories) {
       throw new TypeError('Azure CLI returned a diagnostic category without a name.');
     }
 
-    if (typeof type === 'string' && type.toLowerCase().includes('metric')) {
+    if (type === 'Metrics') {
       metrics.push(name);
-    } else if (typeof type === 'string' && type.toLowerCase().includes('log')) {
+    } else if (type === 'Logs') {
       logs.push(name);
-    } else if (name === 'AllMetrics') {
-      metrics.push(name);
     } else {
-      throw new TypeError(`Azure CLI returned an unclassified diagnostic category: ${name}`);
+      throw new TypeError('Azure CLI returned a diagnostic category with an unsupported category type.');
     }
   }
 
@@ -61,7 +75,10 @@ export function parseAvailableCategories(categories) {
 
 export function validateLiveDiagnosticCategories(profile, availableCategories) {
   createDiagnosticSettings(profile);
-  const available = parseAvailableCategories(availableCategories);
+  return validateAgainstLiveCategories(profile, parseAvailableCategories(availableCategories));
+}
+
+function validateAgainstLiveCategories(profile, available) {
   return createDiagnosticSettings({
     ...profile,
     supportedLogCategories: available.logs,
@@ -75,20 +92,63 @@ function validateStaticConfiguration() {
   }
 }
 
-function requireResourceId(outputs, { outputName, resourceType }) {
-  const resourceId = outputs?.[outputName]?.value;
-  if (
-    typeof resourceId !== 'string'
-    || !/^\/[A-Za-z0-9._:/-]+$/.test(resourceId)
-    || !resourceId.toLowerCase().includes(`/providers/${resourceType.toLowerCase()}/`)
-  ) {
-    throw new Error(`Deployment output ${outputName} must contain a ${resourceType} resource ID.`);
+export function runValidation(args, {
+  loadOutputs = (outputsPath) => JSON.parse(readFileSync(resolve(outputsPath), 'utf8')),
+  liveValidator = validateLiveConfiguration,
+  writeOutput = console.log,
+  writeError = console.error,
+} = {}) {
+  try {
+    validateStaticConfiguration();
+    if (args.length === 0) {
+      writeOutput('Static diagnostic category configuration is valid.');
+      return 0;
+    }
+
+    if (args.length !== 2 || args[0] !== '--live') {
+      throw new Error('Usage: node tools/validate-diagnostics.mjs [--live <deployment-outputs.json>]');
+    }
+
+    liveValidator(loadOutputs(args[1]));
+    writeOutput('Live diagnostic categories verified for all monitored network resources.');
+    return 0;
+  } catch (error) {
+    writeError(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+function requireResourceId(outputs, resource, { subscriptionId, resourceGroup }) {
+  const resourceId = outputs?.[resource.outputName]?.value;
+  if (typeof resourceId !== 'string') {
+    throw new Error(`Deployment output ${resource.outputName} must contain a resource ID.`);
+  }
+
+  const escapedSubscriptionId = subscriptionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedResourceGroup = resourceGroup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedResourceType = resource.resourceType.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedNamePrefix = resource.namePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const resourceIdPattern = new RegExp(
+    `^/subscriptions/${escapedSubscriptionId}/resourceGroups/${escapedResourceGroup}/providers/${escapedResourceType}/${escapedNamePrefix}[a-z0-9]{5}$`,
+    'i',
+  );
+  if (!resourceIdPattern.test(resourceId)) {
+    throw new Error(`Deployment output ${resource.outputName} is outside the approved resource scope or name contract.`);
   }
 
   return resourceId;
 }
 
-function queryResourceCategories(resourceId) {
+function invokeAzureCli(args, executor, platform, comSpec) {
+  if (platform !== 'win32') {
+    return executor('az', args, azureCliOptions);
+  }
+
+  const command = `az ${args.map((argument) => `"${argument}"`).join(' ')}`;
+  return executor(comSpec, ['/d', '/s', '/c', command], azureCliOptions);
+}
+
+function queryResourceCategories(resource, resourceId, { executor, platform, comSpec, subscriptionId }) {
   const args = [
     'monitor',
     'diagnostic-settings',
@@ -96,49 +156,66 @@ function queryResourceCategories(resourceId) {
     'list',
     '--resource',
     resourceId,
+    '--subscription',
+    subscriptionId,
     '--output',
     'json',
+    '--only-show-errors',
   ];
-  const output = process.platform === 'win32'
-    ? execFileSync(
-      process.env.ComSpec ?? 'cmd.exe',
-      ['/d', '/s', '/c', `az ${args.join(' ')}`],
-      { encoding: 'utf8' },
-    )
-    : execFileSync('az', args, { encoding: 'utf8' });
 
-  return JSON.parse(output);
-}
-
-function validateLiveConfiguration(outputsPath) {
-  const outputs = JSON.parse(readFileSync(resolve(outputsPath), 'utf8'));
-  for (const resource of resourceProfiles) {
-    const resourceId = requireResourceId(outputs, resource);
-    const categories = queryResourceCategories(resourceId);
-    validateLiveDiagnosticCategories(diagnosticsConfig[resource.profileName], categories);
-    console.log(`Live diagnostic categories verified for ${resource.outputName}.`);
+  try {
+    const output = invokeAzureCli(args, executor, platform, comSpec);
+    try {
+      return JSON.parse(output);
+    } catch {
+      throw new Error('Azure CLI returned invalid JSON.');
+    }
+  } catch {
+    throw new Error(`Live diagnostic category validation failed for ${resource.outputName}. Check Azure CLI access and category support.`);
   }
 }
 
-function main(args) {
-  validateStaticConfiguration();
-  if (args.length === 0) {
-    console.log('Static diagnostic category configuration is valid.');
-    return;
+export function validateLiveConfiguration(outputs, {
+  executor = execFileSync,
+  platform = process.platform,
+  comSpec = process.env.ComSpec ?? 'cmd.exe',
+  subscriptionId = networkConfig.subscriptionId,
+  resourceGroup = networkConfig.resourceGroup,
+} = {}) {
+  const rawResourceIds = resourceProfiles.map((resource) => {
+    const resourceId = outputs?.[resource.outputName]?.value;
+    if (typeof resourceId !== 'string') {
+      throw new Error(`Deployment output ${resource.outputName} must contain a resource ID.`);
+    }
+    return resourceId;
+  });
+  const uniqueResourceIds = new Set(rawResourceIds.map((resourceId) => resourceId.toLowerCase()));
+  if (uniqueResourceIds.size !== rawResourceIds.length) {
+    throw new Error('Deployment outputs must contain distinct IDs for every monitored network resource.');
   }
 
-  if (args.length !== 2 || args[0] !== '--live') {
-    throw new Error('Usage: node tools/validate-diagnostics.mjs [--live <deployment-outputs.json>]');
-  }
+  const resolvedResourceIds = resourceProfiles.map((resource) => ({
+    resource,
+    resourceId: requireResourceId(outputs, resource, { subscriptionId, resourceGroup }),
+  }));
 
-  validateLiveConfiguration(args[1]);
+  for (const { resource, resourceId } of resolvedResourceIds) {
+    const response = queryResourceCategories(resource, resourceId, {
+      executor,
+      platform,
+      comSpec,
+      subscriptionId,
+    });
+    let availableCategories;
+    try {
+      availableCategories = parseAvailableCategories(response);
+    } catch {
+      throw new Error(`Live diagnostic category validation failed for ${resource.outputName}. Azure CLI returned no usable categories.`);
+    }
+    validateAgainstLiveCategories(diagnosticsConfig[resource.profileName], availableCategories);
+  }
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  try {
-    main(process.argv.slice(2));
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  }
+  process.exitCode = runValidation(process.argv.slice(2));
 }

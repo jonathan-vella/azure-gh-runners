@@ -83,8 +83,10 @@ subsequent deployment:
 1. Export the deployment outputs to a local JSON file (for example, `az deployment group show --resource-group
    rg-ghrunners-prod-swc --name <deployment-name> --query properties.outputs --output json > deployment-outputs.json`).
 2. Run `node tools/validate-diagnostics.mjs --live deployment-outputs.json`. The command queries Azure's live
-   diagnostic categories for both NSGs, the VNet, and the NAT public IP, then rejects any configured log/metric
-   category absent from the corresponding resource.
+   diagnostic categories for both NSGs, the VNet, and the NAT public IP using the explicitly configured `shared`
+   subscription ID. It accepts only the exact expected resource types, names, subscription, and resource group, and
+   rejects duplicate IDs or any configured log/metric category absent from the corresponding resource. Azure CLI
+   execution has a 30-second timeout, a 1 MiB output bound, and sanitized errors.
 3. Only after the check succeeds, run the protected deployment with `enableDiagnostics=true`.
 
 The outputs contain non-secret resource IDs. Do not commit the local outputs file. The live command requires an
