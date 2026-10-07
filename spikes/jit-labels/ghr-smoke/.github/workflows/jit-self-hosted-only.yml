@@ -1,0 +1,25 @@
+name: Spike 10 - self-hosted label must not scale
+
+on:
+  workflow_dispatch:
+    inputs:
+      spike_nonce:
+        description: Unique observer-generated nonce
+        required: true
+        type: string
+
+run-name: Spike 10 no-wake - ${{ inputs.spike_nonce }}
+permissions: {}
+concurrency:
+  group: spike10-jit-label-observation
+  cancel-in-progress: false
+
+jobs:
+  should-remain-queued:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: Fail if a runner without the spike label is assigned
+        run: |
+          printf 'Unexpected runner selected: %s\n' "$RUNNER_NAME"
+          exit 1
