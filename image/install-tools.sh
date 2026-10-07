@@ -53,6 +53,6 @@ ln -s /opt/pwsh/pwsh /usr/local/bin/pwsh
 
 # The base grants passwordless sudo and includes a daemon; neither belongs in job execution.
 usermod --groups users runner
-rm /usr/bin/dockerd
+rm -f /usr/bin/dockerd
 chmod 0750 /home/runner
 chmod -R go-w /opt/az /opt/node /opt/pwsh /opt/runner-image
