@@ -14,6 +14,10 @@ below applies to consumer jobs that target this platform's self-hosted runners.
 4. Check the relevant runbook before touching identity or GitHub App setup. These describe existing production resources;
    do not recreate them or change Azure/GitHub settings as part of ordinary repository work.
 5. Run `npm run validate` after repository changes. Do not deploy the platform from a local checkout.
+6. Agents may merge only after repository validation passes and agent code review reports no blocking findings.
+   Production deployment remains exclusive to the `platform-prod` workflow on `main`; the environment is main-only
+   and does not require a human reviewer. This merge gate does not authorize local deployment or bypass spike-specific
+   approval, scope, or time limits.
 
 ## Repository map
 
@@ -77,8 +81,16 @@ local check.
 - **Preserve platform conventions.** Deploy to the approved `shared` subscription, in `swedencentral`, using CAF
   naming and governance tags. Do not change approved scopes or conventions without an explicit decision.
 - **Keep deployment gated.** Production deployment belongs only to the protected `platform-prod` workflow. Do not
-  deploy from a local checkout or another workflow. The sole exception is an explicitly approved, time-boxed spike in
-  a separate spike resource group, which must be deleted afterward.
+  deploy from a local checkout or another workflow. The workflow is restricted to `main`; its environment does not
+  require a human reviewer. The sole exception is an explicitly approved, time-boxed spike in a separate spike
+  resource group, which must be deleted afterward.
+- **Keep RBAC changes exact.** Only after the controller-RBAC runbook PR in issue #69 is merged may the one-time
+  condition update authorized by this decision for `sp-ghrunners-platform-prod` at `rg-ghrunners-prod-swc` add
+  [Virtual Machine Contributor](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/compute#virtual-machine-contributor)
+  (`9980e02c-c2be-4d73-94e8-173b1dc7cf3c`) and `Network Contributor`
+  (`4d97b98b-1d4f-4787-a291-c67834d212e7`). Preserve the existing `AcrPull`, `AcrPush`, and Key Vault Secrets User
+  allowlist; stop on any unexpected state. This does not authorize other scopes, roles, identities, or condition
+  changes.
 - **Protect job-start permissions.** Never grant `Microsoft.App/jobs/start/action` broadly; it can expose job secrets.
 
 ## Documentation and runbooks

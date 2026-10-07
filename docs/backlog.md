@@ -111,6 +111,7 @@ Agent-executable architecture, onboarding, operations, and security documentatio
 | [#31](https://github.com/jonathan-vella/azure-gh-runners/issues/31) | `docs-operations` | Operations runbook | docs | [#27](https://github.com/jonathan-vella/azure-gh-runners/issues/27) |
 | [#32](https://github.com/jonathan-vella/azure-gh-runners/issues/32) | `docs-security` | Security model and threat analysis | docs, security | [#20](https://github.com/jonathan-vella/azure-gh-runners/issues/20) |
 | [#62](https://github.com/jonathan-vella/azure-gh-runners/issues/62) | `docs-prd-plan` | Update shared platform design for dual backends | docs, security | [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61); reuse #29–#32 where applicable |
+| [#75](https://github.com/jonathan-vella/azure-gh-runners/issues/75) | `docs-automation-gates` | Document automated merge and deployment gates | docs, security | — |
 
 ## M6 - v1.0 acceptance
 
@@ -163,9 +164,9 @@ Create the resource group and two separate Entra applications/service principals
 Acceptance criteria:
 
 - Resource group `rg-ghrunners-prod-swc` in `swedencentral` in approved subscription `shared` (`b47d2942-f5ad-4d3c-b28e-c23e4f83d97e`, replacing the planned `apex-shared` name), tagged per governance contract
-- Federated credential `repo:jonathan-vella/azure-gh-runners:environment:platform-prod` on `sp-ghrunners-platform-prod` with least-privilege deploy rights on the RG (Contributor + role-assignment write and delete constrained to AcrPull, AcrPush, and Key Vault Secrets User)
+- Federated credential `repo:jonathan-vella/azure-gh-runners:environment:platform-prod` on `sp-ghrunners-platform-prod` with least-privilege deploy rights on the RG (Contributor + role-assignment write and delete constrained to AcrPull, AcrPush, and Key Vault Secrets User). The controller role additions are a separate, one-time condition update only after the issue #69 runbook PR is merged; no other roles or scope changes are authorized.
 - Separate federated credential `repo:jonathan-vella/azure-gh-runners:pull_request` on `sp-ghrunners-whatif`, mapped only to Reader for what-if; repository variable `AZURE_WHATIF_CLIENT_ID`, no GitHub environment on the PR job
-- GitHub environment `platform-prod`: deployment branch `main` only; holds `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`. The required reviewer is currently removed under the owner's unattended automation decision; [#74](https://github.com/jonathan-vella/azure-gh-runners/issues/74) is an owner reminder, not a v1.0 gate or dependency.
+- GitHub environment `platform-prod`: deployment branch `main` only, no required human reviewer; holds `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`. [#74](https://github.com/jonathan-vella/azure-gh-runners/issues/74) is an owner reminder without a restoration deadline and is not a v1.0 gate or dependency.
 - Runbook `docs/runbooks/bootstrap-identity.md` with exact, re-runnable commands
 
 ### `github-app` — Create and install the runner GitHub App ([#5](https://github.com/jonathan-vella/azure-gh-runners/issues/5))
@@ -410,7 +411,7 @@ Acceptance criteria:
 
 Acceptance criteria:
 
-- Runs only on `main` through `platform-prod`; unattended deployments remain enabled under the current owner decision. The workflow must not broaden its branch/ref scope.
+- Runs only on `main`; environment `platform-prod` is restricted to `main` and has no required human reviewer. Unattended deployments remain enabled under the current owner decision; do not broaden the workflow's branch/ref scope.
 - Builds image if changed, deploys Bicep with the image digest
 - Post-deploy assertions: every PaaS resource has public network access disabled; job count equals registry entries; App key secret present
 - Deployment outputs published to `docs/platform-outputs.md` via PR or job summary
@@ -522,12 +523,12 @@ visible alongside the existing work items.
   the protected main-only `platform-prod` path.
 - **Controller RBAC #69:** Bicep may assign only Virtual Machine Contributor (`9980e02c-c2be-4d73-94e8-173b1dc7cf3c`)
   and Network Contributor (`4d97b98b-1d4f-4787-a291-c67834d212e7`) to the controller identity at
-  `rg-ghrunners-prod-swc`. Do not grant the broader Contributor role. The existing platform deployment identity's constrained condition currently
-  permits only AcrPull, AcrPush, and Key Vault Secrets User. After the controller-RBAC runbook PR merges, an agent may
-  perform the one-time update to add only those two exact controller role IDs; verify and record the exact
-  before/after state and stop on mismatch. Preserve all scope/action constraints. Persistent role assignments deploy
-  only through the main-only `platform-prod` workflow; no subscription-wide grant, worker identity, or extra role is
-  allowed.
+  `rg-ghrunners-prod-swc`. Do not grant the broader Contributor role. The existing platform deployment identity's
+  constrained condition currently permits only AcrPull, AcrPush, and Key Vault Secrets User. After the
+  controller-RBAC runbook PR merges, an agent may perform the one-time update to add only those two exact controller
+  role IDs; verify and record the exact before/after state and stop on mismatch. Preserve all scope/action constraints.
+  Persistent role assignments deploy only through the main-only `platform-prod` workflow; no subscription-wide grant,
+  worker identity, or extra role is allowed.
 - **Controller/runtime #71–#72:** pin `actions/scaleset` v0.4.0 behind an interface. Keep JIT data only in protected
   Custom Script Extension settings, never logs/arguments/source. Reconcile worker, NIC, disk, and extension cleanup
   after success, error, timeout, cancellation, and restart; surface cleanup failures as pending rather than success.

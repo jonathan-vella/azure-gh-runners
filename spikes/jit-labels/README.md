@@ -4,7 +4,7 @@ This is a bounded, isolated experiment for [issue #10](https://github.com/jonath
 It does not deploy to production or change resources/work owned by issues 6 through 9. No resources are provisioned by
 validation or by the PR.
 
-See [OPERATIONS.md](OPERATIONS.md) for the temporary identity bootstrap, reviewer gate, bounded observation window,
+See [OPERATIONS.md](OPERATIONS.md) for the temporary identity bootstrap, explicit spike authorization, bounded observation window,
 and exact cleanup procedure.
 
 ## Prepared experiment
@@ -34,9 +34,10 @@ and exact cleanup procedure.
 4. Have a maintainer review and land the scaffolding on `main`. Prepare a temporary deployment identity using the
    verified immutable-ID `platform-prod` subject, with the scoped role grants in
    [OPERATIONS.md](OPERATIONS.md). Then manually dispatch
-   **Spike 10 - Deploy isolated JIT label job** from `main`, provide its client ID, resource IDs, versionless secret
-   URL and image digests, set capacity confirmation only after verifying `swedencentral` capacity, and obtain the
-   authorized `platform-prod` reviewer approval. The workflow checks subscription/RG scope, temporary identity roles,
+   **Spike 10 - Deploy isolated JIT label job** from `main` only after the owner has explicitly authorized this
+   bounded spike in issue #10; the `platform-prod` environment is main-only and no longer requires a reviewer. Provide its client
+   ID, resource IDs, versionless secret URL and image digests, and set capacity confirmation only after verifying
+   `swedencentral` capacity. The workflow checks subscription/RG scope, temporary identity roles,
    supported Jobs API/location, private-network settings, delegated subnet/NSG/NAT, private registry/Key Vault, and
    image digests. It rejects a pre-existing job and tags the temporary job with its owning run ID.
 5. From an authenticated operator workstation, run
@@ -58,7 +59,8 @@ setup, observation, and cleanup use separate bounded steps, with a job ceiling t
 If that cleanup is interrupted, follow the explicit verification and external cleanup steps in
 [OPERATIONS.md](OPERATIONS.md). The workflow uses a temporary spike-scoped identity, not the production deployment
 identity. The protected deployment workflow cannot be run from
-this PR branch; its human reviewer gate remains mandatory after it is available on `main`. Do not deploy while the
+this PR branch; the main-only environment restriction remains after it is available on `main`, but it does not require
+a human reviewer. Explicit owner authorization and the other spike gates remain mandatory. Do not deploy while the
 regional capacity blocker is unresolved.
 
 ## Current evidence status

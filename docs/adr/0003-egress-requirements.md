@@ -93,6 +93,13 @@ destinations; use FQDN-aware egress controls where available rather than freezin
 and workload NAT behavior, but not the origin of the managed scaler's polling traffic. No Azure resources were created
 for this record, and no acceptance criterion is claimed complete.
 
+## Current policy note (2026-10-07)
+
+The owner removed the `platform-prod` required-reviewer rule and retained its `main`-only restriction. The reviewer
+steps above preserve the historical spike procedure and are not current approval requirements. Any future bounded
+spike still requires separate explicit authorization, capacity preflight, and the resource-scope and cleanup controls
+documented above. This policy note does not change the historical evidence or this ADR's Proposed status.
+
 ## References
 
 - [KEDA GitHub Runner scaler documentation](https://keda.sh/docs/2.20/scalers/github-runner/)
