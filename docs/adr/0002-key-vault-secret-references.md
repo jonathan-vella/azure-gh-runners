@@ -63,10 +63,12 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
   `minimumCount=0` can provision the managed environment without allocating any D4 node, environment provisioning
   must be recorded separately from successful D4 job placement and execution; only execution evidence can show that a
   D4 node was actually allocated. The job's `workloadProfileName` and the environment's profile/count/zone readback
-  must match before comparison; `D4` provides 4 vCPU and 16 GiB per node in Sweden Central, and `zoneRedundant=false`
-  is explicit ([workload profiles](https://learn.microsoft.com/en-us/azure/container-apps/workload-profiles-overview);
-  [zone redundancy](https://learn.microsoft.com/en-us/azure/container-apps/how-to-zone-redundancy)). The existing
-  Consumption default and its separate capacity-recovery gate remain.
+  must match before comparison; `D4` provides 4 vCPU and 16 GiB per node in Sweden Central, and
+  `zoneRedundant=false` is explicit with no zone pinning
+  ([workload profiles](https://learn.microsoft.com/en-us/azure/container-apps/workload-profiles-overview);
+  [zone redundancy](https://learn.microsoft.com/en-us/azure/container-apps/how-to-zone-redundancy)). Consumption
+  remains non-zonal as in the original template's effective default; its profile counts and separate
+  capacity-recovery gate are unchanged.
 - The reusable experiment pins AVM modules to exact stable versions: public IP `0.13.0`, NAT Gateway `2.1.1`,
   NSG `0.5.3`, VNet `0.10.2`, private DNS zone `0.8.1`, user-assigned identity `0.6.0`, Key Vault `0.14.2`,
   private endpoint `0.12.1`, ACA managed environment `0.16.0`, and ACA job `0.7.2`. These are the latest stable tags

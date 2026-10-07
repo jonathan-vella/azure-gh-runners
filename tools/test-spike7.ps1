@@ -29,7 +29,7 @@ Assert-Equal $d4Profile.maximumCount 3 'D4 maximumCount readback'
 $consumptionEnvironment = [pscustomobject]@{
     properties = [pscustomobject]@{
         provisioningState = 'Succeeded'
-        zoneRedundant = $true
+        zoneRedundant = $false
         workloadProfiles = @([pscustomobject]@{
             name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1
         })
@@ -37,6 +37,7 @@ $consumptionEnvironment = [pscustomobject]@{
 }
 $consumptionProfile = Assert-EnvironmentProfile -EnvironmentState $consumptionEnvironment -ExpectedProfile Consumption
 Assert-Equal $consumptionProfile.maximumCount 1 'Consumption default remains unchanged'
+Assert-Equal $consumptionEnvironment.properties.zoneRedundant $false 'Consumption remains non-zonal'
 
 foreach ($invalidEnvironment in @(
     [pscustomobject]@{
@@ -55,6 +56,14 @@ foreach ($invalidEnvironment in @(
                 [pscustomobject]@{ name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1 },
                 [pscustomobject]@{ name = 'D4'; workloadProfileType = 'D4'; minimumCount = 0; maximumCount = 3 }
             )
+        }
+    },
+    [pscustomobject]@{
+        properties = [pscustomobject]@{
+            provisioningState = 'Succeeded'; zoneRedundant = $true
+            workloadProfiles = @([pscustomobject]@{
+                name = 'Consumption'; workloadProfileType = 'Consumption'; minimumCount = 0; maximumCount = 1
+            })
         }
     },
     [pscustomobject]@{

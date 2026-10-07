@@ -156,6 +156,9 @@ function Assert-EnvironmentProfile {
     if ($properties.provisioningState -cne 'Succeeded') {
         throw 'Managed-environment provisioning has not succeeded.'
     }
+    if ($properties.zoneRedundant -cne $false) {
+        throw 'Managed-environment readback must confirm zoneRedundant=false.'
+    }
     $profiles = @($properties.workloadProfiles)
     $expectedNames = if ($ExpectedProfile -ceq 'D4') {
         @('Consumption', 'D4')
@@ -172,9 +175,6 @@ function Assert-EnvironmentProfile {
         $expectedType = 'D4'
         $expectedMinimum = 0
         $expectedMaximum = 3
-        if ($properties.zoneRedundant -cne $false) {
-            throw 'D4 environment readback must confirm zoneRedundant=false.'
-        }
         $pinnedProfiles = @($profiles | Where-Object {
             @($_.zones | Where-Object { $null -ne $_ }).Count -gt 0
         })

@@ -328,7 +328,7 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.16.
     internal: true
     publicNetworkAccess: 'Disabled'
     infrastructureSubnetResourceId: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'snet-aca')
-    zoneRedundant: workloadProfileName == 'D4' ? false : true
+    zoneRedundant: false
     workloadProfiles: workloadProfiles
     tags: tags
   }

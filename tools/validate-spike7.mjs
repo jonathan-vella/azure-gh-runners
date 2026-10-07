@@ -34,7 +34,7 @@ const requiredTemplateText = [
   "name: 'Consumption'",
   "workloadProfileType: 'Consumption'",
   'maximumCount: 1',
-  "zoneRedundant: workloadProfileName == 'D4' ? false : true",
+  'zoneRedundant: false',
   'output workloadProfileName string = workloadProfileName',
 ];
 
