@@ -60,11 +60,13 @@ test('runner is unprivileged and the inherited runtime contract stays unchanged'
   assert.match(verifier, /\/var\/run\/docker\.sock/);
   assert.match(verifier, /\/home\/runner\/bin\/Runner\.Listener --version/);
   assert.match(verifier, /az bicep version/);
-  assert.doesNotMatch(dockerfile + installer, /ACTIONS_RUNNER_HOOK|jitconfig|IDENTITY_ENDPOINT|registration-token/);
+  assert.match(dockerfile, /ACTIONS_RUNNER_HOOK_JOB_STARTED=\/opt\/runner-image\/pre-job-policy.sh/);
+  assert.match(dockerfile, /chmod 0555 \/opt\/runner-image\/pre-job-policy.sh \/opt\/runner-image\/pre-job-policy.py/);
+  assert.doesNotMatch(dockerfile + installer, /jitconfig|IDENTITY_ENDPOINT|registration-token/);
 });
 
 test('Linux build inputs use LF line endings', () => {
-  for (const name of ['Dockerfile', 'install-tools.sh', 'verify-tools.sh']) {
+  for (const name of ['Dockerfile', 'install-tools.sh', 'verify-tools.sh', 'pre-job-policy.sh', 'pre-job-policy.py']) {
     assert.ok(!read(name).includes('\r'), `${name} must use LF`);
   }
 });

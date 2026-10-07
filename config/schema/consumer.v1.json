@@ -108,7 +108,7 @@
         "type": "string",
         "pattern": "^refs/heads/[^\\s]+$"
       },
-      "description": "Allowed branch refs. The registry validator verifies the default branch remotely."
+      "description": "Allowed branch refs, or base branch refs for opted-in private PRs. The registry validator verifies the public default branch remotely."
     },
     "allowedWorkflows": {
       "type": "array",
@@ -118,7 +118,7 @@
         "type": "string",
         "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/\\.github/workflows/[^@]+@refs/heads/[^\\s]+$"
       },
-      "description": "Allowed GITHUB_WORKFLOW_REF values, including repository, workflow path, and branch ref."
+      "description": "Allowed branch workflow refs including repository and path. Private PRs authorize the path against the base branch and separately validate the actual merge workflow ref."
     },
     "notes": {
       "type": "string",

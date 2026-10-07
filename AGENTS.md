@@ -35,7 +35,8 @@ issue is taken up; do not treat an empty scaffold as evidence that the design re
 
 ## Local validation
 
-Prerequisites: Node.js/npm and Azure CLI with Bicep available. From the repository root, run:
+Prerequisites: Node.js/npm and Azure CLI with Bicep available, plus the test prerequisites in README.
+Hook fixtures require Bash, git, jq, and curl on Linux, or Linux Docker on Windows. From the repository root, run:
 
 ```powershell
 npm ci
@@ -44,7 +45,8 @@ npm run validate
 
 `npm run validate` runs consumer schema, policy, and generator tests; validates active consumer entries against
 GitHub visibility/default-branch metadata; checks generated consumer parameters for drift; builds the Bicep template,
-parameter file, network and observability modules; runs Bicep lint, diagnostic-category and offline image contract tests; and checks
+parameter file, network and observability modules; runs Bicep lint, diagnostic-category, offline image contract and
+executable Bats hook tests; and checks
 Markdown with the repository's Markdown configuration. Use `npm run generate:consumers` to update
 `infra/generated/consumers.json` after changing the registry. An empty registry passes without GitHub access; active
 entries require GitHub CLI access to every registered repository. The command does not deploy resources or require an

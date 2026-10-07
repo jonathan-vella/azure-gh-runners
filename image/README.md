@@ -1,8 +1,9 @@
 # Generic runner image
 
-Issue [#19](https://github.com/jonathan-vella/azure-gh-runners/issues/19) supplies the **linux/amd64 toolset only**.
-The image is not yet a deployable platform runner. JIT initialization, the pre-job policy hook, and the main
-entrypoint belong to issues #21, #20, and #22; identity isolation, labels, and the production build path still require
+Issues [#19](https://github.com/jonathan-vella/azure-gh-runners/issues/19) and
+[#20](https://github.com/jonathan-vella/azure-gh-runners/issues/20) supply the **linux/amd64 toolset and pre-job hook**.
+The image is not yet a deployable platform runner. JIT initialization and the main
+entrypoint belong to issues #21 and #22; identity isolation, labels, and the production build path still require
 their spike decisions. Nothing here publishes an image, onboards a consumer, or deploys Azure resources.
 
 ## Pins and provenance
@@ -43,6 +44,45 @@ The runner directory remains writable by `runner`; installed tools and the manif
 runner-writable. Upstream `WORKDIR`, `CMD`, runner files, and embedded action Node runtimes remain unchanged.
 The upstream image has no entrypoint and defaults to `/bin/bash`: this change deliberately does not add one.
 
+## Pre-job policy contract
+
+`ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/runner-image/pre-job-policy.sh` is baked into the image. The root-owned,
+non-runner-writable hook runs the inherited `/usr/bin/python3` in isolated mode with no new runtime dependencies.
+It consumes non-secret `CONSUMER_POLICY_JSON` from the runner process environment, with exactly the five fields
+emitted by the [registry generator](../docs/consumer-registry.md#generated-deployment-parameters). Missing/invalid
+policy or context exits nonzero with a fixed, sanitized reason; policy, event contents, tokens, and raw untrusted
+values are never logged. Python ignores user module paths, and branch validation uses the pinned `/usr/bin/git`.
+
+Public jobs must use the sole, registry-verified default-branch ref for dispatch, schedule, or push. Private branch
+jobs may use any explicitly allowed branch, but the workflow ref must equal the job ref. Repository comparisons are
+case-insensitive; workflow paths and branch refs are exact. Workflow paths must be direct `.yml`/`.yaml` files under
+the consumer's `.github/workflows`, not reusable-workflow repository or path substitutes.
+
+Private PR jobs require explicit `pull_request` opt-in, an open same-repository non-fork payload, and matching
+`refs/pull/<number>/merge` job **and workflow** refs. The base branch must be allowed and the workflow filename must
+match an entry at that base branch. `GITHUB_BASE_REF`/`GITHUB_HEAD_REF` must match the payload. Closed PRs,
+forks, missing metadata, mismatched numbers/visibility/repositories, head refs, and branch-ref fallbacks fail closed.
+`pull_request_target` and `workflow_run` are forbidden regardless of visibility or supplied policy.
+
+### Runner context and limits
+
+[GitHub's hook documentation](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/run-scripts)
+states that default variables and `GITHUB_EVENT_PATH` are available and that nonzero status fails the job before
+user steps, with output in **Set up runner**. This implementation also checked the pinned runner `v2.338.0` source:
+[JobHookProvider](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/JobHookProvider.cs) writes the event
+payload and starts a script handler with an empty custom environment;
+[ScriptHandler](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/Handlers/ScriptHandler.cs) exports
+runtime context; [GitHubContext](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/GitHubContext.cs)
+allowlists the required variables. The policy remains inherited administrator process configuration, not job `env`.
+Missing variables are errors, not permission to reconstruct context from less trustworthy fields.
+
+[JobExtension](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/JobExtension.cs) downloads/prepares
+actions before the hook, but schedules the hook before action pre-steps and job/service container setup. This is a
+before-user-execution policy gate, **not** a before-download gate. Policy JSON is limited to 64 KiB and PR payloads
+to 1 MiB; regular-file/nonblocking payload checks prevent FIFO hangs, and each git ref check has a five-second timeout.
+The hook performs no network requests. It does not itself prove ACA identity isolation, JIT/scaler behavior, or live
+GitHub hook invocation. These still need authorized end-to-end smoke evidence.
+
 ## Local verification
 
 From the repository root, with Linux Docker available:
@@ -50,6 +90,7 @@ From the repository root, with Linux Docker available:
 ```powershell
 docker build --platform linux/amd64 --progress plain -f image\Dockerfile -t ghrunners-issue19:local .
 docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --entrypoint bash ghrunners-issue19:local /opt/runner-image/verify-tools.sh
+node tools\test-prejob.js ghrunners-issue19:local
 Get-Content -Raw image\Dockerfile | docker run --rm -i hadolint/hadolint@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e
 npm run validate
 ```
@@ -62,3 +103,13 @@ capabilities and disallows privilege escalation. Neither probe registers a runne
 Those tests check committed pins and structure only: **they are not substitutes for Docker build, hadolint,
 or executable version/permission probes**. If Docker is unavailable, report those checks as blocked and keep the PR
 draft with **do not merge** until actual build evidence is available.
+
+`npm run validate:hook` downloads Bats **1.14.0**, checks archive SHA-256
+`bb537b70b15b732f6d8827dd6578e3d8ce166636ce1f18ea9a074184fcce9177` before extraction, and runs the fixtures.
+The release tag resolves to commit `eb7f42f8d608ac693d7a4b67474f6714ea68cfc5`. Bats lives in a temporary test directory,
+not the production image. Linux runs natively; Windows uses the manifest's digest-pinned runner base with
+network disabled and the source mounted read-only. Passing a local built-image tag as above instead exercises the
+baked hook under the final non-root user, with capabilities dropped and privilege escalation disabled.
+The fixtures include the exact generator output and allow/deny execution, fork payloads, malformed metadata,
+sanitized logs, and a failed-hook fixture that prevents a following synthetic user step. The full validation command
+includes these tests; it does not build/publish the production image or claim live GitHub/ACA proof.
