@@ -11,7 +11,9 @@ param(
     [ValidateRange(1, 45)]
     [int] $TimeoutMinutes = 45,
 
-    [switch] $ConfirmCapacityRecovered
+    [switch] $ConfirmCapacityRecovered,
+
+    [string] $EvidencePath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -206,6 +208,8 @@ function New-FreshDiagnosticJob {
     $mode = if ($Bypass -ceq 'None') { 'none' } else { 'svc' }
     $jobName = "caj-ghr7-$script:runSuffix-$mode-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
     $deploymentName = "issue7-$mode-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $script:legEvidence.JobName = $jobName
+    $script:legEvidence.DeploymentName = $deploymentName
     $exitCode = Invoke-AzBounded @(
         'deployment', 'group', 'create', '--subscription', $approvedSubscription,
         '--resource-group', $approvedResourceGroup, '--name', $deploymentName,
@@ -216,13 +220,55 @@ function New-FreshDiagnosticJob {
         '--only-show-errors', '--output', 'none'
     ) -TimeoutSeconds (Get-RemainingTestSeconds)
     if ($exitCode -ne 0) {
-        $deploymentState = & az deployment group show --subscription $approvedSubscription `
-            --resource-group $approvedResourceGroup --name $deploymentName `
-            --query 'properties.error.code' --output tsv 2>$null
-        if ($LASTEXITCODE -eq 0 -and $deploymentState -match '^[A-Za-z0-9._-]+$') {
-            throw "Fresh diagnostic job deployment failed with Azure error code: $deploymentState."
+        $operations = @(Invoke-AzJson @(
+            'deployment', 'operation', 'group', 'list', '--subscription', $approvedSubscription,
+            '--resource-group', $approvedResourceGroup, '--name', $deploymentName
+        ))
+        $failed = @($operations | Where-Object { $_.properties.provisioningState -ceq 'Failed' })
+        $resourceFailures = [System.Collections.Generic.List[object]]::new()
+        foreach ($operation in $failed) {
+            $targetId = [string]$operation.properties.targetResource.id
+            $deploymentPrefix = "/subscriptions/$approvedSubscription/resourceGroups/$approvedResourceGroup/providers/Microsoft.Resources/deployments/"
+            if ($targetId.StartsWith($deploymentPrefix, [StringComparison]::Ordinal) -and
+                $targetId.Substring($deploymentPrefix.Length) -cmatch '^job-[a-z0-9]{13}$') {
+                # The pinned AVM job is a child ARM deployment; inspect its resource error, not its wrapper.
+                $childName = $targetId.Substring($deploymentPrefix.Length)
+                $childOperations = @(Invoke-AzJson @(
+                    'deployment', 'operation', 'group', 'list', '--subscription', $approvedSubscription,
+                    '--resource-group', $approvedResourceGroup, '--name', $childName
+                ))
+                $childFailures = @($childOperations | Where-Object { $_.properties.provisioningState -ceq 'Failed' })
+                if ($childFailures.Count) {
+                    foreach ($childFailure in $childFailures) { $resourceFailures.Add($childFailure) }
+                } else { $resourceFailures.Add($operation) }
+            } else { $resourceFailures.Add($operation) }
         }
-        throw 'Fresh diagnostic job deployment failed; no deployment output was emitted.'
+        $jobId = "/subscriptions/$approvedSubscription/resourceGroups/$approvedResourceGroup/providers/Microsoft.App/jobs/$jobName"
+        $expectedDenial = $resourceFailures.Count -gt 0
+        $failureCodes = [System.Collections.Generic.List[string]]::new()
+        foreach ($operation in $resourceFailures) {
+            $message = $operation.properties.statusMessage
+            if ($message -is [string]) {
+                try { $message = $message | ConvertFrom-Json -ErrorAction Stop }
+                catch { $message = $null }
+            }
+            if ($message.error) {
+                $failureCodes.Add((Get-SpikeSanitizedErrorCode -ErrorDetail $message.error))
+            }
+            if ($operation.properties.targetResource.id -cne $jobId -or -not $message.error -or
+                -not (Test-SpikeKeyVaultNetworkDenial -ErrorDetail $message.error)) {
+                $expectedDenial = $false
+            }
+        }
+        if ($expectedDenial) {
+            $script:legEvidence.Status = 'Failed'
+            $script:legEvidence.Code = 'ForbiddenByFirewall'
+            return $null
+        }
+        $script:legEvidence.Code = if ($failureCodes.Count) {
+            ($failureCodes | Select-Object -Unique) -join ','
+        } else { 'UnclassifiedDeploymentFailure' }
+        throw 'Fresh diagnostic job deployment failed outside the documented Key Vault network-denial allowlist.'
     }
     return $jobName
 }
@@ -238,6 +284,7 @@ function Invoke-JobAndWait {
     if (-not $executionName) {
         throw 'ACA did not return a job execution name.'
     }
+    $script:legEvidence.ExecutionName = $executionName
 
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     do {
@@ -260,6 +307,33 @@ function Invoke-JobAndWait {
     } while ($timer.Elapsed -lt $maxExecutionWait)
 
     throw 'Job execution exceeded the bounded wait; no container logs or values were emitted.'
+}
+
+function Invoke-DiagnosticCase {
+    param(
+        [string] $Bypass, [string] $EnvironmentId, [string] $IdentityId,
+        [string] $KeyVaultSecretUrl, [string] $ProbeDigest
+    )
+
+    $script:legEvidence = [pscustomobject]@{
+        Status = 'OperationalError'; Stage = 'provisioning'; Code = $null
+        JobName = $null; ExecutionName = $null; DeploymentName = $null
+    }
+    try {
+        $jobName = New-FreshDiagnosticJob -Bypass $Bypass -EnvironmentId $EnvironmentId `
+            -IdentityId $IdentityId -KeyVaultSecretUrl $KeyVaultSecretUrl -ProbeDigest $ProbeDigest
+        if ($jobName) {
+            $script:legEvidence.Stage = 'execution'
+            $script:legEvidence.Status = Invoke-JobAndWait -JobName $jobName
+        }
+        return $script:legEvidence
+    } catch {
+        if (-not $script:legEvidence.Code) {
+            $script:legEvidence.Code = $_.Exception.GetType().Name
+        }
+        $_.Exception.Data['Evidence'] = $script:legEvidence
+        throw
+    }
 }
 
 if ($Action -eq 'Validate') {
@@ -333,6 +407,15 @@ switch ($Action) {
 
     'Test' {
         Assert-CapacityGate
+        if (-not $EvidencePath) {
+            throw 'Test requires an explicit -EvidencePath for sanitized per-leg JSON evidence.'
+        }
+        $evidenceFile = [System.IO.Path]::GetFullPath($EvidencePath)
+        $evidenceStream = [System.IO.File]::Open(
+            $evidenceFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write
+        )
+        $evidenceStream.Dispose()
+        $records = [System.Collections.Generic.List[object]]::new()
         $script:testDeadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
         [void](Get-TaggedResourceGroup)
         $deployment = Invoke-AzJson @(
@@ -374,11 +457,14 @@ switch ($Action) {
             } `
             -RunCase {
                 param($bypass)
-                $jobName = New-FreshDiagnosticJob -Bypass $bypass `
+                Invoke-DiagnosticCase -Bypass $bypass `
                     -EnvironmentId $environment.id -IdentityId $identity.id `
                     -KeyVaultSecretUrl "$($vaultState.properties.vaultUri)secrets/probe" `
                     -ProbeDigest $probeDigest
-                Invoke-JobAndWait -JobName $jobName
+            } `
+            -RecordResult {
+                param($bypass, $result)
+                Write-SpikeComparisonEvidence -Path $evidenceFile -Records $records -Bypass $bypass -Result $result
             }
         Write-Output "Comparison summary: None=$($comparison.None); AzureServices=$($comparison.AzureServices)."
     }

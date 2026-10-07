@@ -74,15 +74,29 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
   `AzureServices` while keeping public network access disabled. Each bypass leg creates a new, uniquely named ACA job
   only after setting and verifying that leg's Key Vault policy, so success cannot come from reusing a pre-existing
   job's cached secret reference. A terminal job failure is recorded as that leg's failed result and the second leg
-  still runs; deployment/start/polling/stopped-execution errors abort the comparison after recording only the error
-  type. The bypass is restored to `None` in `finally`. If neither leg succeeds, the experiment fails and reports both
-  terminal statuses.
+  still runs. Provisioning failure continues only when every failed ARM operation targets that fresh job and its
+  structured error tree has only documented Key Vault `ForbiddenByFirewall` leaves, with only
+  `DeploymentFailed`, `ResourceDeploymentFailure`, or `Forbidden` wrappers. The runner follows the linked AVM job
+  child deployment only within the owned resource group to inspect the actual resource operation. This code means the client address is
+  unauthorized and the caller is not a trusted service
+  ([official error-code reference](https://learn.microsoft.com/en-us/azure/key-vault/general/common-error-codes)).
+  No provider evidence currently establishes how ACA propagates this code; message-only errors, generic
+  `KeyVaultSecretRefIdentityError`, unknown codes, capacity, template, authentication, and RBAC errors remain
+  operational failures and abort. No new runtime evidence is claimed. Start/polling/stopped-execution errors also
+  abort. The bypass is restored to `None` in `finally`. If neither leg succeeds, the experiment fails and reports
+  both terminal statuses.
+  Test requires `-EvidencePath` pointing to a new JSON file: each leg persists its fresh job name, deployment name,
+  execution name (null when provisioning failed), UTC timestamp, status, stage, and sanitized code before acceptance
+  is evaluated. Operational failures are recorded too; raw provider messages, secrets, and container logs are never
+  persisted. Local mocks exercise the actual provisioning callback with structured network denial versus unrelated
+  deployment failures, in addition to the terminal-status cases.
 - After the coordinator confirms capacity recovery, the bounded rerun sequence is:
   `.\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered`,
-  followed by the same command with `-Action Test`; use `-Action Cleanup` to remove only the tagged issue-7
+  followed by the same command with `-Action Test -EvidencePath .\issue7-comparison.json`;
+  use `-Action Cleanup` to remove only the tagged issue-7
   resource group. Each ARM command supplies the approved subscription explicitly. Deploy requires the exact absent
   resource group, creates a random synthetic value into an ACL-restricted temporary secure parameter file, and removes
-  that file in a `finally` block. The test action is bounded, emits execution statuses only, and restores bypass to
+  that file in a `finally` block. The test action is bounded, emits sanitized statuses/stages/codes only, and restores bypass to
   `None` without ever enabling public access.
 - Use an outer `try/finally` so the owned spike group is cleaned up after a test failure. If the deployment client
   times out, it is killed at the configured bound, but the ARM deployment may still be active: first inspect that
@@ -92,7 +106,7 @@ experiment is now in `infra/spike7/main.bicep` with the bounded local runner in 
   ```powershell
   try {
       .\infra\spike7\Invoke-Spike.ps1 -Action Deploy -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered
-      .\infra\spike7\Invoke-Spike.ps1 -Action Test -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered
+      .\infra\spike7\Invoke-Spike.ps1 -Action Test -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc -ConfirmCapacityRecovered -EvidencePath .\issue7-comparison.json
   } finally {
       # On a deployment timeout, verify the ARM deployment is terminal before cleanup.
       .\infra\spike7\Invoke-Spike.ps1 -Action Cleanup -SubscriptionId b47d2942-f5ad-4d3c-b28e-c23e4f83d97e -ResourceGroupName rg-ghrunners-spike7-swc
