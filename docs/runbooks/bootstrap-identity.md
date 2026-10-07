@@ -23,33 +23,52 @@ deployment belongs to the gated `platform-prod` workflow.
 | Deploy client ID | `5ee406c4-2cac-4c4a-a900-f9bb6f95b6d0` |
 | Deploy app object ID | `4495f30e-3a65-4e94-8d4a-d13dcbe10204` |
 | Deploy SP object ID | `24ebb9cc-0e3b-4956-a333-5665a060f2c7` |
-| Deploy FIC | `gh-platform-prod` / `repo:jonathan-vella/azure-gh-runners:environment:platform-prod` |
+| Deploy FIC | `gh-platform-prod` / `repo:jonathan-vella@25802147/azure-gh-runners@1408821667:environment:platform-prod` |
 | What-if app | `sp-ghrunners-whatif` |
 | What-if client ID | `5432b0f4-2bc8-42b6-9c12-1018c9937d9a` |
 | What-if app object ID | `1536c7e0-d4f4-4979-a0b9-702a8fda4f87` |
 | What-if SP object ID | `70a73ebc-1a9a-4b56-9157-52ec84658ea5` |
-| What-if FIC | `gh-pull-request` / `repo:jonathan-vella/azure-gh-runners:pull_request` |
+| What-if FIC | `gh-pull-request` / `repo:jonathan-vella@25802147/azure-gh-runners@1408821667:pull_request` |
 | Both FIC issuers | `https://token.actions.githubusercontent.com` |
 | Both FIC audiences | Only `api://AzureADTokenExchange` |
+
+## Current repository OIDC subject configuration
+
+On 2026-10-07, the GitHub repository API returned `use_default: true`,
+`use_immutable_subject: true`, and the prefix
+`repo:jonathan-vella@25802147/azure-gh-runners@1408821667`. GitHub's
+[OIDC reference](https://docs.github.com/en/actions/reference/security/oidc) documents that immutable subject
+claims include immutable owner and repository IDs. During issue #6, a `workflow_dispatch` on `main` presented the
+exact subject `repo:jonathan-vella@25802147/azure-gh-runners@1408821667:ref:refs/heads/main`.
+
+On 2026-10-07, Entra readback confirmed the two stored production FIC subjects shown in the inventory match the
+repository's immutable subject prefix. GitHub's [OIDC reference](https://docs.github.com/en/actions/reference/security/oidc)
+documents that immutable subject claims include immutable owner and repository IDs. The #6 `workflow_dispatch`
+produced the observed `:ref:refs/heads/main` suffix; the environment and `pull_request` values above are Entra
+readbacks, not proof of successful workflow token exchange. End-to-end production deploy and PR what-if OIDC
+verification remains pending under their owning issues. Do not infer other suffixes by substituting them for the
+observed ref suffix, and do not change production identities as part of issue #6.
 
 Deploy has Contributor and constrained Role Based Access Control Administrator at the
 RG only. What-if has Reader at the RG only. Both apps have no password or certificate
 credentials. **Never combine these FICs on one app**: RBAC belongs to the SP, not to a
 FIC, so a PR could otherwise inherit deployment privileges.
 
-The PR what-if job must not reference a GitHub environment. An environment changes
-the OIDC subject to `environment:<name>`, which does not match the PR FIC. Do not create
-a `whatif` environment or give the Reader app deployment rights. Reader intentionally
-cannot deploy or manage assignments; if a future what-if implementation requires
-additional permissions, stop for a separate review rather than escalating automatically.
+The PR what-if job must not reference a GitHub environment. Environment and event
+context affect the OIDC subject; verify the exact current claim against the FIC rather
+than inferring its suffix. Do not create a `whatif` environment or give the Reader app
+deployment rights. Reader intentionally cannot deploy or manage assignments; if a
+future what-if implementation requires additional permissions, stop for a separate
+review rather than escalating automatically.
 
 ## Prerequisites and fixed scope
 
 Use an already-authenticated Azure CLI session in the approved tenant, with authority
 to read Entra metadata and update this RG's existing role assignment condition.
 Use an already-authenticated `gh` CLI session with repository environment/secret/variable
-administration rights. Do not create client secrets, export tokens, enable command
-tracing/transcripts, or read/log `GH_APP_PRIVATE_KEY`.
+administration rights and permission to read repository OIDC customization. Do not
+create client secrets, export tokens, enable command tracing/transcripts, or read/log
+`GH_APP_PRIVATE_KEY`.
 
 These commands target the Windows MSI Azure CLI's bundled Python directly to preserve
 JSON and condition quoting that `az.cmd` can corrupt. They do not install a runtime.
@@ -96,20 +115,25 @@ foreach ($key in $tags.Keys) {
 ## Verify the two exact federated credentials
 
 FICs are managed through Entra/Graph (`az ad app federated-credential`), not Bicep.
-No mutation is needed for the already-created, approved credentials. Require exactly
-one FIC per app and stop on any additional subject, issuer, audience, or credential.
+The following are approved stored values, not proof that they still match GitHub's
+current immutable subject claims. No production FIC mutation is authorized here.
+Require exactly one FIC per app and stop on any additional subject, issuer, audience,
+or credential; a mismatch is a blocker for the owning production issues, not permission
+to alter a production FIC in this runbook.
 
 ```powershell
 $identities = @(
     @{
         client = $deployClient; sp = $deploySp; name = 'sp-ghrunners-platform-prod'
         appObject = '4495f30e-3a65-4e94-8d4a-d13dcbe10204'
-        fic = 'gh-platform-prod'; subject = "repo:${repo}:environment:platform-prod"
+        fic = 'gh-platform-prod'
+        subject = 'repo:jonathan-vella@25802147/azure-gh-runners@1408821667:environment:platform-prod'
     },
     @{
         client = $readerClient; sp = $readerSp; name = 'sp-ghrunners-whatif'
         appObject = '1536c7e0-d4f4-4979-a0b9-702a8fda4f87'
-        fic = 'gh-pull-request'; subject = "repo:${repo}:pull_request"
+        fic = 'gh-pull-request'
+        subject = 'repo:jonathan-vella@25802147/azure-gh-runners@1408821667:pull_request'
     }
 )
 foreach ($identity in $identities) {
