@@ -15,6 +15,7 @@ Container Apps jobs for any onboarded repository.
 | [Backlog](docs/backlog.md) | Every work item with acceptance criteria and linked issue |
 | [Plan](docs/plan.md) | Approved implementation plan and target architecture |
 | [Consumer registry](docs/consumer-registry.md) | Consumer JSON contract, resource limits, and validation boundary |
+| [Security model](docs/security.md) | Threats, implemented controls, assurance limits, and residual risks |
 | [Observability](docs/observability.md) | Log Analytics network exception and diagnostic-settings contract |
 | [Runner image](image/README.md) | Pinned generic toolset, local image checks, and remaining runtime contracts |
 | [Identity bootstrap](docs/runbooks/bootstrap-identity.md) | Approved Azure identities, constrained RBAC, and GitHub OIDC configuration |
