@@ -55,10 +55,10 @@ def assert_metadata_token_denied(open_url=urllib.request.urlopen):
         raise RuntimeError("managed identity token request unexpectedly succeeded")
 
 
-def run():
+def run(handoff_path="/jit/config", environment=None, open_url=urllib.request.urlopen):
+    environment = os.environ if environment is None else environment
     require(os.getuid() == 65532, "main UID check failed")
 
-    handoff_path = "/jit/config"
     info = os.stat(handoff_path)
     require(
         info.st_uid == 65532
@@ -70,12 +70,12 @@ def run():
         content = handoff_file.read()
     content_hash = hashlib.sha256(content).hexdigest()
     require(
-        content_hash == os.environ["EXPECTED_JIT_SHA256"],
+        content_hash == environment["EXPECTED_JIT_SHA256"],
         "handoff content check failed",
     )
 
-    assert_environment_isolated(os.environ)
-    assert_metadata_token_denied()
+    assert_environment_isolated(environment)
+    assert_metadata_token_denied(open_url)
 
     os.unlink(handoff_path)
     require(not os.path.exists(handoff_path), "handoff file was not deleted")

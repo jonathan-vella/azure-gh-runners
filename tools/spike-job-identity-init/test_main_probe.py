@@ -1,8 +1,12 @@
 import hashlib
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
 import urllib.error
 
-from main_probe import assert_canaries_absent, assert_environment_isolated, assert_metadata_token_denied
+from main_probe import assert_canaries_absent, assert_environment_isolated, assert_metadata_token_denied, run
 
 
 class MainProbeTests(unittest.TestCase):
@@ -55,6 +59,47 @@ class MainProbeTests(unittest.TestCase):
             raise urllib.error.HTTPError(_url, 403, "denied", {}, None)
 
         assert_metadata_token_denied(denied_response)
+
+    @unittest.skipUnless(os.name == "posix", "real UID/GID handoff requires POSIX")
+    def test_non_root_process_reads_and_deletes_owned_handoff(self):
+        if os.geteuid() != 0 and os.getuid() != 65532:
+            self.skipTest("test requires root to drop privileges or an existing UID 65532")
+
+        jit_config = b"synthetic-jit-config"
+        jit_hash = hashlib.sha256(jit_config).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            os.chmod(temporary_directory, 0o700)
+            path = os.path.join(temporary_directory, "config")
+            with open(path, "wb") as handoff:
+                handoff.write(jit_config)
+            os.chown(temporary_directory, 65532, 65532)
+            os.chown(path, 65532, 65532)
+            os.chmod(path, 0o400)
+            environment = {
+                "EXPECTED_JIT_SHA256": jit_hash,
+                "EXPECTED_APP_KEY_SHA256": self.expected_hashes.pop(),
+                "EXPECTED_SCALE_AUTH_SHA256": self.expected_hashes.pop(),
+            }
+            probe = (
+                "import urllib.error; from main_probe import run; "
+                "deny=lambda *a,**k: (_ for _ in ()).throw(urllib.error.HTTPError('url', 403, 'denied', {}, None)); "
+                f"run({path!r}, {environment!r}, deny)"
+            )
+
+            if os.geteuid() == 0:
+                child_code = f"import os; os.setgroups([]); os.setgid(65532); os.setuid(65532); {probe}"
+            else:
+                child_code = probe
+            result = subprocess.run(
+                [sys.executable, "-B", "-c", child_code],
+                cwd=os.path.dirname(__file__),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("ASSERT_main_uid_65532=true", result.stdout)
+            self.assertFalse(os.path.exists(path))
 
 
 if __name__ == "__main__":

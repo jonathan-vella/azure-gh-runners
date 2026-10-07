@@ -94,4 +94,55 @@ function Assert-ProbeImageDigest {
     }
 }
 
-Export-ModuleMember -Function Test-SpikeResourceGroupTags, Test-SpikeResourceInventory, Test-SpikeExpiryTag, Test-CanaryHashLeak, Assert-DeploymentSucceeded, Assert-ProbeImageDigest
+function Assert-CapacityRecovered {
+    param([bool]$Confirmed)
+
+    if (-not $Confirmed) {
+        throw 'Test requires explicit confirmation that swedencentral ACA capacity has recovered.'
+    }
+}
+
+function Get-SanitizedAzureErrorCode {
+    param([string]$Diagnostics)
+
+    $knownCodes = @(
+        'AKSCapacityHeavyUsage',
+        'ManagedEnvironmentCapacityHeavyUsageError',
+        'AuthorizationFailed',
+        'ResourceNotFound',
+        'DeploymentFailed',
+        'InvalidTemplateDeployment',
+        'Conflict',
+        'TooManyRequests',
+        'OperationNotAllowed'
+    )
+    foreach ($code in $knownCodes) {
+        if ($Diagnostics -match "(?<![A-Za-z])$([regex]::Escape($code))(?![A-Za-z])") {
+            return $code
+        }
+    }
+    return 'unclassified'
+}
+
+function Assert-ImageTransferReceipt {
+    param(
+        [object]$Receipt,
+        [string]$SubscriptionId,
+        [string]$ResourceGroup,
+        [string]$RegistryName,
+        [string]$Digest
+    )
+
+    Assert-ProbeImageDigest -Digest $Digest
+    if ($Receipt.issue -ne 9 -or $Receipt.subscriptionId -cne $SubscriptionId -or
+        $Receipt.resourceGroup -cne $ResourceGroup -or $Receipt.registryName -cne $RegistryName -or
+        $Receipt.repository -cne 'probe' -or $Receipt.digest -cne $Digest -or
+        $Receipt.destinationDigestReadBack -cne $Digest -or $Receipt.privateEndpointApproved -ne $true -or
+        $Receipt.sourcePath -cne 'issue-6-private-agent-pool-transfer' -or
+        [string]::IsNullOrWhiteSpace([string]$Receipt.verifiedBy) -or
+        -not (Test-SpikeExpiryTag -Value ([string]$Receipt.verifiedAtUtc))) {
+        throw 'Image transfer receipt does not attest private digest readback into the prepared issue-9 ACR.'
+    }
+}
+
+Export-ModuleMember -Function Test-SpikeResourceGroupTags, Test-SpikeResourceInventory, Test-SpikeExpiryTag, Test-CanaryHashLeak, Assert-DeploymentSucceeded, Assert-ProbeImageDigest, Assert-CapacityRecovered, Get-SanitizedAzureErrorCode, Assert-ImageTransferReceipt

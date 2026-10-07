@@ -92,6 +92,46 @@ if (-not $invalidDigestRejected) {
 }
 Assert-ProbeImageDigest -Digest ('sha256:' + ('a' * 64))
 
+Assert-CapacityRecovered -Confirmed $true
+$capacityGateRejected = $false
+try {
+    Assert-CapacityRecovered -Confirmed $false
+} catch {
+    $capacityGateRejected = $true
+}
+if (-not $capacityGateRejected) {
+    throw 'Unit test failed: ACA test was allowed without capacity recovery confirmation.'
+}
+if ((Get-SanitizedAzureErrorCode -Diagnostics 'Error: AKSCapacityHeavyUsage; credential=must-not-appear') -cne 'AKSCapacityHeavyUsage' -or
+    (Get-SanitizedAzureErrorCode -Diagnostics 'credential=must-not-appear') -cne 'unclassified') {
+    throw 'Unit test failed: Azure CLI error sanitization did not use the allowlist.'
+}
+
+$receipt = [pscustomobject]@{
+    issue = 9
+    subscriptionId = 'subscription-id'
+    resourceGroup = 'rg-ghrunners-spike9-swc'
+    registryName = 'ghr9registry'
+    repository = 'probe'
+    digest = 'sha256:' + ('a' * 64)
+    destinationDigestReadBack = 'sha256:' + ('a' * 64)
+    privateEndpointApproved = $true
+    sourcePath = 'issue-6-private-agent-pool-transfer'
+    verifiedBy = 'operator'
+    verifiedAtUtc = '2026-10-07T16:48:22Z'
+}
+Assert-ImageTransferReceipt -Receipt $receipt -SubscriptionId 'subscription-id' -ResourceGroup 'rg-ghrunners-spike9-swc' -RegistryName 'ghr9registry' -Digest $receipt.digest
+$receipt.destinationDigestReadBack = 'sha256:' + ('b' * 64)
+$receiptRejected = $false
+try {
+    Assert-ImageTransferReceipt -Receipt $receipt -SubscriptionId 'subscription-id' -ResourceGroup 'rg-ghrunners-spike9-swc' -RegistryName 'ghr9registry' -Digest ('sha256:' + ('a' * 64))
+} catch {
+    $receiptRejected = $true
+}
+if (-not $receiptRejected) {
+    throw 'Unit test failed: mismatched destination digest receipt was accepted.'
+}
+
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {
     $python = Get-Command python3 -ErrorAction SilentlyContinue
@@ -109,7 +149,7 @@ try {
     Pop-Location
 }
 
-foreach ($templateName in @('main.bicep', 'job.bicep')) {
+foreach ($templateName in @('main.bicep', 'environment.bicep', 'job.bicep')) {
     $templatePath = Join-Path $PSScriptRoot $templateName
     az bicep build --file $templatePath --stdout | Out-Null
     if ($LASTEXITCODE -ne 0) {

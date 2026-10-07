@@ -1,6 +1,10 @@
 param(
-    [switch]$Resume,
-    [string]$ProbeImageDigest
+    [Parameter(Mandatory)]
+    [ValidateSet('Prepare', 'Test', 'Cleanup')]
+    [string]$Mode,
+    [string]$ProbeImageDigest,
+    [string]$ImageTransferReceipt,
+    [switch]$ConfirmCapacityRecovered
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,8 +14,11 @@ $resourceGroup = 'rg-ghrunners-spike9-swc'
 $managedResourceGroup = 'ME_ghr9-env_rg-ghrunners-spike9-swc_swedencentral'
 $location = 'swedencentral'
 $jobName = 'ghr9-secret-isolation'
+$preparedManifest = Join-Path $PSScriptRoot 'prepared.json'
 $artifactPath = Join-Path $PSScriptRoot 'evidence.json'
 $groupCreatedHere = $false
+$preservePreparedGroup = $false
+$cleanupOnExit = $false
 $secureParameterDirectory = $null
 $secureParameterFiles = [System.Collections.Generic.List[string]]::new()
 $ownershipTags = @{
@@ -30,16 +37,33 @@ $ownershipTags = @{
     purpose = 'init-container-secret-isolation-spike'
 }
 
-Assert-ProbeImageDigest -Digest $ProbeImageDigest
-
 function Invoke-AzText {
     param([string[]]$Arguments)
 
-    $result = & az @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Azure CLI command failed: az $($Arguments[0]) $($Arguments[1])"
+    $az = (Get-Command az -ErrorAction Stop).Source
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $az
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        $null = $startInfo.ArgumentList.Add($argument)
     }
-    return ($result -join "`n")
+
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    $null = $process.Start()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    if ($process.ExitCode -ne 0) {
+        $errorCode = Get-SanitizedAzureErrorCode -Diagnostics "$stdout`n$stderr"
+        throw "Azure CLI command failed (exit=$($process.ExitCode); errorCode=$errorCode)."
+    }
+    return $stdout.TrimEnd()
 }
 
 function Invoke-AzJson {
@@ -126,7 +150,7 @@ function Invoke-BoundedDeployment {
     try {
         Invoke-AzText @('deployment', 'group', 'cancel', '--name', $Name, '--resource-group', $resourceGroup, '--subscription', $subscription, '--output', 'none') | Out-Null
     } catch {
-        throw "Deployment '$Name' exceeded its time limit and cancellation failed; resource cleanup will still run."
+        throw "Deployment '$Name' exceeded its time limit; cancellation failed and cleanup will still run."
     }
     throw "Deployment '$Name' exceeded its $TimeoutMinutes minute time limit and was canceled."
 }
@@ -144,22 +168,34 @@ function Remove-SecureParameterFiles {
     $script:secureParameterDirectory = $null
 }
 
+function Get-SpikeResourceGroup {
+    param([switch]$AllowExpired)
+
+    $exists = Invoke-AzText @('group', 'exists', '--name', $resourceGroup, '--subscription', $subscription, '--output', 'tsv')
+    if ($exists.Trim() -ne 'true') {
+        throw "Issue-9 resource group '$resourceGroup' does not exist."
+    }
+    $group = Invoke-AzJson @('group', 'show', '--name', $resourceGroup, '--subscription', $subscription, '--output', 'json')
+    $expectedTags = $ownershipTags.Clone()
+    $expectedTags['expiresOn'] = $group.tags.expiresOn
+    if ($group.location -ne $location -or -not (Test-SpikeExpiryTag -Value $group.tags.expiresOn) -or
+        -not (Test-SpikeResourceGroupTags -Tags $group.tags -ExpectedTags $expectedTags)) {
+        throw 'Resource group does not match the approved issue-9 ownership and region contract.'
+    }
+    if (-not $AllowExpired -and [DateTimeOffset]::Parse($group.tags.expiresOn).UtcDateTime -le [DateTime]::UtcNow) {
+        throw 'Issue-9 resource group has expired.'
+    }
+    return $group
+}
+
 function Remove-SpikeResourceGroup {
     $exists = Invoke-AzText @('group', 'exists', '--name', $resourceGroup, '--subscription', $subscription, '--output', 'tsv')
     if ($exists.Trim() -eq 'true') {
-        $group = Invoke-AzJson @('group', 'show', '--name', $resourceGroup, '--subscription', $subscription, '--output', 'json')
-        $expectedTags = $ownershipTags.Clone()
-        $expectedTags['expiresOn'] = $group.tags.expiresOn
-        if ($group.location -ne $location -or -not (Test-SpikeExpiryTag -Value $group.tags.expiresOn) -or
-            -not (Test-SpikeResourceGroupTags -Tags $group.tags -ExpectedTags $expectedTags)) {
-            throw 'Refusing cleanup because the resource group does not carry the complete issue 9 ownership tag contract.'
-        }
-
+        $group = Get-SpikeResourceGroup -AllowExpired
         $resources = Invoke-AzJson @('resource', 'list', '--resource-group', $resourceGroup, '--subscription', $subscription, '--query', '[].{id:id,name:name,type:type}', '--output', 'json')
         if (-not (Test-SpikeResourceInventory -Resources $resources)) {
-            throw 'Refusing cleanup because the spike resource group contains an unrecognized resource.'
+            throw 'Refusing cleanup because the resource group contains an unrecognized resource.'
         }
-
         Invoke-AzText @('group', 'delete', '--name', $resourceGroup, '--subscription', $subscription, '--yes', '--no-wait', '--output', 'none') | Out-Null
         for ($attempt = 0; $attempt -lt 60; $attempt++) {
             Start-Sleep -Seconds 10
@@ -173,10 +209,12 @@ function Remove-SpikeResourceGroup {
     if ($exists.Trim() -eq 'true') {
         throw 'Spike resource group deletion did not complete within ten minutes.'
     }
-
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         $managedExists = Invoke-AzText @('group', 'exists', '--name', $managedResourceGroup, '--subscription', $subscription, '--output', 'tsv')
         if ($managedExists.Trim() -eq 'false') {
+            if (Test-Path -LiteralPath $preparedManifest) {
+                Remove-Item -LiteralPath $preparedManifest -Force
+            }
             Write-Output 'ASSERT_cleanup_resource_group_absent=true'
             Write-Output 'ASSERT_aca_managed_resource_group_absent=true'
             return
@@ -186,84 +224,176 @@ function Remove-SpikeResourceGroup {
     throw "ACA-managed resource group '$managedResourceGroup' remains after deleting the spike environment."
 }
 
-try {
+function New-SpikeResourceGroup {
     $exists = Invoke-AzText @('group', 'exists', '--name', $resourceGroup, '--subscription', $subscription, '--output', 'tsv')
     if ($exists.Trim() -eq 'true') {
-        if (-not $Resume) {
-            throw 'Spike resource group already exists. Use -Resume only for the tagged group created by this spike.'
-        }
-        $existingGroup = Invoke-AzJson @('group', 'show', '--name', $resourceGroup, '--subscription', $subscription, '--output', 'json')
-        $expectedTags = $ownershipTags.Clone()
-        $expectedTags['expiresOn'] = $existingGroup.tags.expiresOn
-        if ($existingGroup.location -ne $location -or -not (Test-SpikeExpiryTag -Value $existingGroup.tags.expiresOn) -or
-            -not (Test-SpikeResourceGroupTags -Tags $existingGroup.tags -ExpectedTags $expectedTags)) {
-            throw 'Existing resource group does not match the isolated issue 9 spike.'
-        }
-        if ([DateTimeOffset]::Parse($existingGroup.tags.expiresOn).UtcDateTime -le [DateTime]::UtcNow) {
-            throw 'Existing issue 9 spike resource group has expired and cannot be resumed.'
-        }
-        $groupResources = Invoke-AzJson @('resource', 'list', '--resource-group', $resourceGroup, '--subscription', $subscription, '--output', 'json')
-        if (@($groupResources).Count -gt 0) {
-            throw 'Resume requires an empty spike resource group.'
-        }
-    } else {
-        $expiry = [DateTime]::UtcNow.AddMinutes(40).ToString('yyyy-MM-ddTHH:mm:ssZ')
-        $groupTags = @{}
-        foreach ($tagName in $ownershipTags.Keys) {
-            $groupTags[$tagName] = $ownershipTags[$tagName]
-        }
-        $groupTags.expiresOn = $expiry
-        $tagArguments = @()
-        foreach ($tagName in $groupTags.Keys) {
-            $tagArguments += "$tagName=$($groupTags[$tagName])"
-        }
-        $createGroupArguments = @(
-            'group', 'create', '--name', $resourceGroup, '--location', $location, '--subscription', $subscription,
-            '--tags'
-        ) + $tagArguments + @('--output', 'none')
-        $groupCreatedHere = $true
-        Invoke-AzText $createGroupArguments | Out-Null
+        throw 'Prepare requires the issue-9 resource group to be absent; use Cleanup only for a verified issue-9-owned group.'
     }
+    $expiry = [DateTime]::UtcNow.AddMinutes(45).ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $tags = $ownershipTags.Clone()
+    $tags.expiresOn = $expiry
+    $tagArguments = @()
+    foreach ($tagName in $tags.Keys) {
+        $tagArguments += "$tagName=$($tags[$tagName])"
+    }
+    $arguments = @(
+        'group', 'create', '--name', $resourceGroup, '--location', $location, '--subscription', $subscription, '--tags'
+    ) + $tagArguments + @('--output', 'none')
+    $script:groupCreatedHere = $true
+    Invoke-AzText $arguments | Out-Null
+    return $expiry
+}
 
+function Assert-PreparedResources {
+    param([object]$Manifest)
+
+    $group = Get-SpikeResourceGroup
+    if ($group.tags.expiresOn -cne $Manifest.expiresOn -or
+        $Manifest.subscriptionId -cne $subscription -or
+        $Manifest.resourceGroup -cne $resourceGroup -or
+        $Manifest.region -cne $location) {
+        throw 'Prepared manifest does not match the live issue-9 resource group.'
+    }
+    $resources = Invoke-AzJson @('resource', 'list', '--resource-group', $resourceGroup, '--subscription', $subscription, '--query', '[].{id:id,name:name,type:type}', '--output', 'json')
+    if (-not (Test-SpikeResourceInventory -Resources $resources)) {
+        throw 'Prepared resource group contains an unrecognized resource.'
+    }
+    $acr = Invoke-AzJson @('resource', 'show', '--ids', $Manifest.registryId, '--api-version', '2025-11-01', '--subscription', $subscription, '--output', 'json')
+    $vault = Invoke-AzJson @('resource', 'show', '--ids', $Manifest.vaultId, '--api-version', '2026-05-15', '--subscription', $subscription, '--output', 'json')
+    $identity = Invoke-AzJson @('resource', 'show', '--ids', $Manifest.identityId, '--api-version', '2024-11-30', '--subscription', $subscription, '--output', 'json')
+    $vnet = Invoke-AzJson @('resource', 'show', '--ids', $Manifest.vnetId, '--api-version', '2026-05-01', '--subscription', $subscription, '--output', 'json')
+    $subnets = Invoke-AzJson @('network', 'vnet', 'subnet', 'list', '--resource-group', $resourceGroup, '--vnet-name', 'ghr9-vnet', '--subscription', $subscription, '--output', 'json')
+    $acrEndpoint = @($resources | Where-Object { $_.type -eq 'Microsoft.Network/privateEndpoints' -and $_.name -eq 'ghr9-acr-pe' })
+    $vaultEndpoint = @($resources | Where-Object { $_.type -eq 'Microsoft.Network/privateEndpoints' -and $_.name -eq 'ghr9-vault-pe' })
+    $acrRoles = @($resources | Where-Object { $_.type -eq 'Microsoft.Authorization/roleAssignments' -and $_.id -match '/registries/ghr9[^/]*?/providers/Microsoft.Authorization/roleAssignments/' })
+    $vaultRoles = @($resources | Where-Object { $_.type -eq 'Microsoft.Authorization/roleAssignments' -and $_.id -match '/vaults/ghr9kv[^/]*?/providers/Microsoft.Authorization/roleAssignments/' })
+    $acaSubnet = @($subnets | Where-Object { $_.name -eq 'aca' })
+    $privateEndpointSubnet = @($subnets | Where-Object { $_.name -eq 'private-endpoints' })
+    if ($acr.name -cne $Manifest.registryName -or $acr.properties.publicNetworkAccess -cne 'Disabled' -or
+        $acr.properties.networkRuleBypassOptions -cne 'None' -or $acr.sku.name -cne 'Premium' -or
+        $vault.id -cne $Manifest.vaultId -or $vault.properties.publicNetworkAccess -cne 'Disabled' -or
+        $identity.id -cne $Manifest.identityId -or $vnet.id -cne $Manifest.vnetId -or
+        $acrEndpoint.Count -ne 1 -or $vaultEndpoint.Count -ne 1 -or $acaSubnet.Count -ne 1 -or
+        $privateEndpointSubnet.Count -ne 1 -or
+        $acaSubnet[0].id -cne $Manifest.acaSubnetId -or
+        $privateEndpointSubnet[0].id -cne $Manifest.privateEndpointSubnetId -or
+        $acaSubnet[0].delegations[0].serviceName -cne 'Microsoft.App/environments' -or
+        $privateEndpointSubnet[0].privateEndpointNetworkPolicies -cne 'Disabled' -or
+        $acrRoles.Count -ne 1 -or $vaultRoles.Count -ne 1) {
+        throw 'Live ACR, Key Vault, identity, or private endpoint settings do not match the prepared manifest.'
+    }
+    $acrRole = Invoke-AzJson @('resource', 'show', '--ids', $acrRoles[0].id, '--api-version', '2022-04-01', '--subscription', $subscription, '--output', 'json')
+    $vaultRole = Invoke-AzJson @('resource', 'show', '--ids', $vaultRoles[0].id, '--api-version', '2022-04-01', '--subscription', $subscription, '--output', 'json')
+    if ($acrRole.properties.principalId -cne $identity.properties.principalId -or
+        $acrRole.properties.roleDefinitionId -notmatch '/7f951dda-4ed3-4680-a7ca-43fe172d538d$' -or
+        $vaultRole.properties.principalId -cne $identity.properties.principalId -or
+        $vaultRole.properties.roleDefinitionId -notmatch '/4633458b-17de-408a-b874-0445c86b69e6$') {
+        throw 'Live identity role assignments do not match the exact ACR pull and Key Vault secrets roles.'
+    }
+    foreach ($endpointResource in @(
+            @{ Resource = $acrEndpoint[0]; ExpectedTarget = $Manifest.registryId },
+            @{ Resource = $vaultEndpoint[0]; ExpectedTarget = $Manifest.vaultId }
+        )) {
+        $endpoint = Invoke-AzJson @('resource', 'show', '--ids', $endpointResource.Resource.id, '--api-version', '2026-05-01', '--subscription', $subscription, '--output', 'json')
+        $connection = $endpoint.properties.privateLinkServiceConnections[0].properties.privateLinkServiceConnectionState
+        if ($connection.status -cne 'Approved' -or
+            $endpoint.properties.privateLinkServiceConnections[0].properties.privateLinkServiceId -cne $endpointResource.ExpectedTarget -or
+            $endpoint.properties.subnet.id -cne $Manifest.privateEndpointSubnetId) {
+            throw 'A prepared private endpoint is not approved for its expected private resource.'
+        }
+    }
+}
+
+function Invoke-Prepare {
+    $expiry = New-SpikeResourceGroup
     $canary = New-SyntheticValue
-    $canaryBytes = [Text.Encoding]::UTF8.GetBytes($canary)
-    $canaryHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($canaryBytes)).ToLowerInvariant()
-    $scaleCanary = New-SyntheticValue
-    $jitConfig = 'synthetic-jit-config'
-    $jitHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($jitConfig))).ToLowerInvariant()
-    $group = Invoke-AzJson @('group', 'show', '--name', $resourceGroup, '--subscription', $subscription, '--output', 'json')
-    $expiry = $group.tags.expiresOn
-
-    $infraParametersFile = New-RestrictedParametersFile @{
+    $parametersFile = New-RestrictedParametersFile @{
         syntheticAppKey = $canary
         expiry = $expiry
     }
     try {
-        $infraOutputs = Invoke-BoundedDeployment -Name 'spike9-infra' -TemplatePath (Join-Path $PSScriptRoot 'main.bicep') -ParametersFile $infraParametersFile
+        $outputs = Invoke-BoundedDeployment -Name 'spike9-infra' -TemplatePath (Join-Path $PSScriptRoot 'main.bicep') -ParametersFile $parametersFile -TimeoutMinutes 20
     } finally {
-        if (Test-Path -LiteralPath $infraParametersFile) {
-            Remove-Item -LiteralPath $infraParametersFile -Force
+        if (Test-Path -LiteralPath $parametersFile) {
+            Remove-Item -LiteralPath $parametersFile -Force
         }
     }
-    $acrName = $infraOutputs.acrName.value
-    $acrLoginServer = $infraOutputs.acrLoginServer.value
-    $identityId = $infraOutputs.identityId.value
-    $environmentId = "/subscriptions/$subscription/resourceGroups/$resourceGroup/providers/Microsoft.App/managedEnvironments/$($infraOutputs.environmentName.value)"
-    $secretUri = $infraOutputs.syntheticSecretUri.value
-    if ([string]::IsNullOrWhiteSpace($acrName) -or [string]::IsNullOrWhiteSpace($identityId) -or [string]::IsNullOrWhiteSpace($secretUri)) {
+    $manifest = [ordered]@{
+        issue = 9
+        subscriptionId = $subscription
+        resourceGroup = $resourceGroup
+        region = $location
+        expiresOn = $expiry
+        registryName = $outputs.acrName.value
+        registryLoginServer = $outputs.acrLoginServer.value
+        registryId = $outputs.acrId.value
+        vaultId = $outputs.vaultId.value
+        identityId = $outputs.identityId.value
+        vnetId = $outputs.vnetId.value
+        acaSubnetId = $outputs.acaSubnetId.value
+        privateEndpointSubnetId = $outputs.privateEndpointSubnetId.value
+        syntheticSecretUri = $outputs.syntheticSecretUri.value
+        preparedAtUtc = [DateTime]::UtcNow.ToString('o')
+    }
+    if ([string]::IsNullOrWhiteSpace($manifest.registryId) -or
+        [string]::IsNullOrWhiteSpace($manifest.identityId) -or
+        [string]::IsNullOrWhiteSpace($manifest.syntheticSecretUri)) {
         throw 'Infrastructure deployment omitted a required non-secret output.'
     }
+    $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $preparedManifest -Encoding utf8
+    $script:preservePreparedGroup = $true
+    Write-Output "Prepared issue-9 resources in $resourceGroup."
+    Write-Output "ASSERT_aca_environment_not_created=true"
+    Write-Output 'Next: use only the approved issue-6 private transfer path to preload this exact ACR, then run Test with its readback receipt.'
+}
 
-    $image = "$acrLoginServer/probe@$ProbeImageDigest"
+function Invoke-Test {
+    Assert-CapacityRecovered -Confirmed ([bool]$ConfirmCapacityRecovered)
+    $script:cleanupOnExit = $true
+    if (-not (Test-Path -LiteralPath $preparedManifest)) {
+        throw 'Prepared manifest is missing. Run Prepare, then complete private image transfer before Test.'
+    }
+    if ([string]::IsNullOrWhiteSpace($ImageTransferReceipt) -or -not (Test-Path -LiteralPath $ImageTransferReceipt)) {
+        throw 'Test requires the receipt produced after private transfer and digest readback in the issue-9 ACR.'
+    }
+    Assert-ProbeImageDigest -Digest $ProbeImageDigest
+    $manifest = Get-Content -LiteralPath $preparedManifest -Raw | ConvertFrom-Json
+    $receipt = Get-Content -LiteralPath $ImageTransferReceipt -Raw | ConvertFrom-Json
+    Assert-PreparedResources -Manifest $manifest
+    Assert-ImageTransferReceipt -Receipt $receipt -SubscriptionId $subscription -ResourceGroup $resourceGroup -RegistryName $manifest.registryName -Digest $ProbeImageDigest
+    if (Test-Path -LiteralPath $artifactPath) {
+        Remove-Item -LiteralPath $artifactPath -Force
+    }
+
+    $expiry = $manifest.expiresOn
+    $environmentParametersFile = New-RestrictedParametersFile @{
+        expiry = $expiry
+        subnetId = $manifest.acaSubnetId
+    }
+    try {
+        $environmentOutputs = Invoke-BoundedDeployment -Name 'spike9-environment' -TemplatePath (Join-Path $PSScriptRoot 'environment.bicep') -ParametersFile $environmentParametersFile -TimeoutMinutes 12
+    } finally {
+        if (Test-Path -LiteralPath $environmentParametersFile) {
+            Remove-Item -LiteralPath $environmentParametersFile -Force
+        }
+    }
+
+    $canary = New-SyntheticValue
+    $canaryHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($canary))).ToLowerInvariant()
+    $scaleCanary = New-SyntheticValue
     $scaleCanaryHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($scaleCanary))).ToLowerInvariant()
+    $jitConfig = 'synthetic-jit-config'
+    $jitHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($jitConfig))).ToLowerInvariant()
+    $image = "$($manifest.registryLoginServer)/probe@$ProbeImageDigest"
     $jobParametersFile = New-RestrictedParametersFile @{
+        syntheticAppKey = $canary
         syntheticScaleAuth = $scaleCanary
         syntheticScaleAuthSha256 = $scaleCanaryHash
-        environmentId = $environmentId
-        identityId = $identityId
-        registryServer = $acrLoginServer
+        environmentId = $environmentOutputs.environmentId.value
+        identityId = $manifest.identityId
+        registryServer = $manifest.registryLoginServer
         image = $image
-        syntheticSecretUri = $secretUri
+        syntheticSecretUri = $manifest.syntheticSecretUri
         syntheticAppKeySha256 = $canaryHash
         jitConfigSha256 = $jitHash
         expiry = $expiry
@@ -366,11 +496,24 @@ try {
     Write-Output 'ASSERT_job_configuration_secret_separation=true'
     Write-Output 'ASSERT_probe_results_sanitized=true'
 }
-finally {
+
+try {
+    switch ($Mode) {
+        'Prepare' {
+            Invoke-Prepare
+        }
+        'Test' {
+            Invoke-Test
+        }
+        'Cleanup' {
+            Remove-SpikeResourceGroup
+        }
+    }
+} finally {
     try {
         Remove-SecureParameterFiles
     } finally {
-        if ($groupCreatedHere -or $Resume) {
+        if (($groupCreatedHere -and -not $preservePreparedGroup) -or $cleanupOnExit) {
             Remove-SpikeResourceGroup
         }
     }

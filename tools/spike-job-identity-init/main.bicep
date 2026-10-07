@@ -9,7 +9,6 @@ param expiry string
 var suffix = uniqueString(resourceGroup().id)
 var acrName = 'ghr9${suffix}'
 var vaultName = 'ghr9kv${suffix}'
-var environmentName = 'ghr9-env'
 var identityName = 'ghr9-job-identity'
 var tags = {
   application: 'ghrunners'
@@ -396,30 +395,15 @@ resource vaultSecretsUserAssignment 'Microsoft.Authorization/roleAssignments@202
   }
 }
 
-resource acaEnvironment 'Microsoft.App/managedEnvironments@2026-07-01' = {
-  name: environmentName
-  location: location
-  tags: tags
-  properties: {
-    vnetConfiguration: {
-      infrastructureSubnetId: acaSubnet.id
-      internal: true
-    }
-    publicNetworkAccess: 'Disabled'
-    workloadProfiles: [
-      {
-        name: 'Consumption'
-        workloadProfileType: 'Consumption'
-      }
-    ]
-  }
-}
-
 output acrName string = acr.name
 output acrLoginServer string = acr.properties.loginServer
-output environmentName string = acaEnvironment.name
 output identityId string = jobIdentity.id
 output vaultName string = vault.name
+output vnetId string = vnet.id
+output acaSubnetId string = acaSubnet.id
+output privateEndpointSubnetId string = privateEndpointSubnet.id
+output acrId string = acr.id
+output vaultId string = vault.id
 output syntheticSecretUri string = format(
   'https://{0}.{1}/secrets/{2}',
   vault.name,
