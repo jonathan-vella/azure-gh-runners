@@ -1,0 +1,37 @@
+{
+  "issue": 9,
+  "attemptDateUtc": "2026-10-07",
+  "subscriptionId": "b47d2942-f5ad-4d3c-b28e-c23e4f83d97e",
+  "resourceGroup": "rg-ghrunners-spike9-swc",
+  "region": "swedencentral",
+  "status": "blocked",
+  "deployment": {
+    "jobStarted": false,
+    "blocker": "ManagedEnvironmentCapacityHeavyUsageError",
+    "errorCode": "AKSCapacityHeavyUsage",
+    "initialAcrApiVersionRejected": "2026-05-01",
+    "correctedAcrApiVersion": "2025-11-01",
+    "correctionDeployed": false
+  },
+  "acceptanceCriteria": {
+    "initSecretRefAndMainSecretIsolation": "not_tested",
+    "identityLifecycleNoneWithPrivateAcrAndKeyVault": "not_tested",
+    "scaleOnlySecretIsolation": "not_tested",
+    "adrDecisionRecorded": "documented_proposed_blocked"
+  },
+  "cleanup": {
+    "status": "verified_complete",
+    "harnessWaitTimedOut": true,
+    "spikeResourceGroupExists": false,
+    "acaManagedResourceGroupExists": false,
+    "resourcesRemainingAtLastCheck": [],
+    "keyVaultPurgeRequested": false,
+    "keyVaultTombstoneStatus": "not_independently_verified"
+  },
+  "notes": [
+    "No runtime acceptance criterion is claimed as demonstrated.",
+    "Only a synthetic canary was prepared; no real GitHub App credential was read or used.",
+    "Do not retry the full deployment while the swedencentral capacity blocker persists or switch regions.",
+    "Cleanup targets only the issue-9 resource group and its failed ACA environment."
+  ]
+}
