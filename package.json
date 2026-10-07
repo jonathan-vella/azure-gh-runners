@@ -2,7 +2,7 @@
   "name": "azure-gh-runners",
   "private": true,
   "scripts": {
-    "validate": "npm run validate:consumers && npm run validate:generator && npm run validate:bicep && npm run validate:spike && npm run validate:spike6 && npm run validate:spike7 && npm run validate:network && npm run validate:observability && npm run validate:spike9 && npm run validate:image && npm run validate:markdown",
+    "validate": "npm run validate:consumers && npm run validate:generator && npm run validate:bicep && npm run validate:spike && npm run validate:spike6 && npm run validate:spike7 && npm run validate:network && npm run validate:observability && npm run validate:spike9 && npm run validate:image && npm run validate:spike-keda-egress && npm run validate:markdown",
     "validate:consumers": "node --test tests/consumer-schema.test.cjs tests/consumer-registry.test.cjs tests/consumer-generator.test.cjs && node tools/validate-consumers.js",
     "generate:consumers": "node tools/generate-consumers.js",
     "validate:generator": "node tools/generate-consumers.js --check",
@@ -10,8 +10,9 @@
     "validate:spike": "node --test spikes/jit-labels/tests/*.test.mjs && pwsh -NoProfile -File spikes/jit-labels/tests/Observe-JitLabelScale.Tests.ps1 && pwsh -NoProfile -File spikes/jit-labels/tests/SpikeIdentity-Cleanup.Tests.ps1",
     "validate:spike7": "node tools/validate-spike7.mjs && pwsh -NoProfile -File tools/test-spike7.ps1",
     "validate:spike6": "pwsh -NoProfile -File tools/test-spike-acr-agentpool.ps1",
-    "validate:network": "node --test tools/network.test.js && node tools/validate-network.js",
     "validate:spike9": "pwsh -NoProfile -File tools/spike-job-identity-init/test.ps1",
+    "validate:network": "node --test tools/network.test.js && node tools/validate-network.js",
+    "validate:spike-keda-egress": "node tools/spikes/keda-egress/validate-contract.mjs && pwsh -NoProfile -File tools/spikes/keda-egress/test-harness.ps1 && az bicep build --file tools/spikes/keda-egress/secret.bicep --stdout",
     "validate:observability": "node tools/validate-diagnostics.mjs && az bicep build --file infra/modules/observability.bicep --stdout && az bicep lint --file infra/modules/observability.bicep && az bicep build --file infra/tests/observability.bicep --stdout && az bicep lint --file infra/modules/diagnostic-settings.bicep && node --test tools/diagnostics-contract.test.mjs",
     "validate:image": "node --test tools/image.test.js",
     "validate:markdown": "markdownlint-cli2 \"**/*.md\""
