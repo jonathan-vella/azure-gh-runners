@@ -10,10 +10,6 @@
     "repo",
     "visibility",
     "labels",
-    "cpu",
-    "memory",
-    "maxExecutions",
-    "replicaTimeoutSeconds",
     "allowedEvents",
     "allowedRefs",
     "allowedWorkflows"
@@ -378,6 +374,16 @@
             "cpu",
             "memory"
           ]
+        },
+        {
+          "properties": {
+            "backend": {
+              "const": "vmss"
+            }
+          },
+          "required": [
+            "backend"
+          ]
         }
       ]
     },
@@ -427,9 +433,39 @@
           "vmSku",
           "maxRunners",
           "jobTimeoutMinutes"
-        ]
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "cpu"
+              ]
+            },
+            {
+              "required": [
+                "memory"
+              ]
+            },
+            {
+              "required": [
+                "maxExecutions"
+              ]
+            },
+            {
+              "required": [
+                "replicaTimeoutSeconds"
+              ]
+            }
+          ]
+        }
       },
       "else": {
+        "required": [
+          "cpu",
+          "memory",
+          "maxExecutions",
+          "replicaTimeoutSeconds"
+        ],
         "not": {
           "anyOf": [
             {

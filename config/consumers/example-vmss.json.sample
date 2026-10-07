@@ -9,10 +9,6 @@
   "labels": [
     "ghr-example-vmss"
   ],
-  "cpu": 0.5,
-  "memory": "1Gi",
-  "maxExecutions": 1,
-  "replicaTimeoutSeconds": 3600,
   "allowedEvents": [
     "workflow_dispatch",
     "schedule",
