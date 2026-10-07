@@ -2,11 +2,13 @@
   "name": "azure-gh-runners",
   "private": true,
   "scripts": {
-    "validate": "npm run validate:bicep && npm run validate:markdown",
+    "validate": "npm run validate:consumers && npm run validate:bicep && npm run validate:markdown",
+    "validate:consumers": "node --test tests/consumer-schema.test.cjs",
     "validate:bicep": "az bicep build --file infra/main.bicep --stdout && az bicep build-params --file infra/main.bicepparam --stdout && az bicep lint --file infra/main.bicep",
     "validate:markdown": "markdownlint-cli2 \"**/*.md\""
   },
   "devDependencies": {
+    "ajv": "8.20.0",
     "markdownlint-cli2": "0.23.3"
   },
   "overrides": {
