@@ -106,6 +106,29 @@ if ((Get-SanitizedAzureErrorCode -Diagnostics 'Error: AKSCapacityHeavyUsage; cre
     (Get-SanitizedAzureErrorCode -Diagnostics 'credential=must-not-appear') -cne 'unclassified') {
     throw 'Unit test failed: Azure CLI error sanitization did not use the allowlist.'
 }
+$sleeper = [Diagnostics.Process]::new()
+$sleeper.StartInfo = [Diagnostics.ProcessStartInfo]::new()
+$sleeper.StartInfo.FileName = Join-Path $PSHOME 'pwsh.exe'
+$sleeper.StartInfo.ArgumentList.Add('-NoProfile')
+$sleeper.StartInfo.ArgumentList.Add('-Command')
+$sleeper.StartInfo.ArgumentList.Add('Start-Sleep -Seconds 30')
+$null = $sleeper.Start()
+$timedOutProcessRejected = $false
+try {
+    if (Wait-ProcessBounded -Process $sleeper -TimeoutSeconds 1) {
+        throw 'Unit test failed: a sleeping process was reported as completed.'
+    }
+    $timedOutProcessRejected = $sleeper.HasExited
+} finally {
+    if (-not $sleeper.HasExited) {
+        $sleeper.Kill($true)
+        $sleeper.WaitForExit(5000) | Out-Null
+    }
+    $sleeper.Dispose()
+}
+if (-not $timedOutProcessRejected) {
+    throw 'Unit test failed: timed-out process was not terminated.'
+}
 
 $receipt = [pscustomobject]@{
     issue = 9

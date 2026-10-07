@@ -38,7 +38,11 @@ $ownershipTags = @{
 }
 
 function Invoke-AzText {
-    param([string[]]$Arguments)
+    param(
+        [string[]]$Arguments,
+        [ValidateRange(1, 3600)]
+        [int]$TimeoutSeconds = 120
+    )
 
     $az = (Get-Command az -ErrorAction Stop).Source
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
@@ -56,7 +60,9 @@ function Invoke-AzText {
     $null = $process.Start()
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
+    if (-not (Wait-ProcessBounded -Process $process -TimeoutSeconds $TimeoutSeconds)) {
+        throw "Azure CLI command timed out after $TimeoutSeconds seconds."
+    }
     $stdout = $stdoutTask.GetAwaiter().GetResult()
     $stderr = $stderrTask.GetAwaiter().GetResult()
     if ($process.ExitCode -ne 0) {
@@ -136,7 +142,7 @@ function Invoke-BoundedDeployment {
         $state = Invoke-AzText @(
             'deployment', 'group', 'show', '--name', $Name, '--resource-group', $resourceGroup, '--subscription', $subscription,
             '--query', 'properties.provisioningState', '--output', 'tsv'
-        )
+        ) -TimeoutSeconds ([Math]::Min(120, [Math]::Max(1, [int]($deadline - [DateTime]::UtcNow).TotalSeconds)))
         if ($state.Trim() -in @('Succeeded', 'Failed', 'Canceled')) {
             Assert-DeploymentSucceeded -State $state.Trim()
             return Invoke-AzJson @(

@@ -124,6 +124,25 @@ function Get-SanitizedAzureErrorCode {
     return 'unclassified'
 }
 
+function Wait-ProcessBounded {
+    param(
+        [Diagnostics.Process]$Process,
+        [ValidateRange(1, 3600)]
+        [int]$TimeoutSeconds
+    )
+
+    if ($Process.WaitForExit($TimeoutSeconds * 1000)) {
+        return $true
+    }
+    try {
+        $Process.Kill($true)
+        $null = $Process.WaitForExit(5000)
+    } catch {
+        throw 'Timed-out local process could not be terminated.'
+    }
+    return $false
+}
+
 function Assert-ImageTransferReceipt {
     param(
         [object]$Receipt,
@@ -145,4 +164,4 @@ function Assert-ImageTransferReceipt {
     }
 }
 
-Export-ModuleMember -Function Test-SpikeResourceGroupTags, Test-SpikeResourceInventory, Test-SpikeExpiryTag, Test-CanaryHashLeak, Assert-DeploymentSucceeded, Assert-ProbeImageDigest, Assert-CapacityRecovered, Get-SanitizedAzureErrorCode, Assert-ImageTransferReceipt
+Export-ModuleMember -Function Test-SpikeResourceGroupTags, Test-SpikeResourceInventory, Test-SpikeExpiryTag, Test-CanaryHashLeak, Assert-DeploymentSucceeded, Assert-ProbeImageDigest, Assert-CapacityRecovered, Get-SanitizedAzureErrorCode, Wait-ProcessBounded, Assert-ImageTransferReceipt
