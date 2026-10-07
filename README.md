@@ -21,6 +21,19 @@ Background research: [runner options on Azure](docs/research-azure-runner-option
 [public repo + private-endpoint-only constraints](docs/research-public-repo-private-endpoints.md).
 Both were written while evaluating `apex-vnext` as the first consumer.
 
+## Local validation
+
+Install Node.js/npm and the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli). Then run:
+
+```powershell
+npm ci
+npm run validate
+```
+
+`npm run validate` builds and lints the Bicep scaffold and checks all Markdown with the repository's
+`.markdownlint-cli2.jsonc` configuration. The Bicep entrypoints are intentionally empty until their infrastructure
+issues are implemented.
+
 ## At a glance
 
 - One shared VNet, internal ACA environment, private ACR Premium and Key Vault, NAT Gateway egress in `swedencentral`.
