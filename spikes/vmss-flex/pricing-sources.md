@@ -21,6 +21,13 @@ Issue #84 replaces placeholder category allocations with a deterministic public-
 | `privateDnsQueriesPerMillion` | Private DNS queries, per million | $0.40 |
 | `keyVaultOperationsPer10k` | Standard Key Vault operations, per 10,000 | $0.03 |
 
+The rate values are pinned in `temporary-identity.mjs` to this reviewed table; matching source metadata alone is
+not accepted. Any price change fails closed until the rate table, formula fixtures, and source record are reviewed
+and updated together. The code does not fetch Azure Retail Prices at runtime: the approving operator must verify
+the source values and provide the retrieval timestamp, which the code checks for format and age. That timestamp is
+operator-entered metadata, not a fetched or authenticated quote; the age check cannot prove that a current API query
+occurred. CI fixtures use synthetic timestamps and are not live pricing evidence.
+
 Sources:
 
 - [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices)
@@ -50,11 +57,15 @@ Sources:
 The quantity contract is intentionally conservative: one B2s, two D2ls v5, three P4 disks, one NAT Gateway, one
 public IP, and two Private Endpoints are charged for all four hours even though the full runs are sequential.
 Traffic caps in `guest-bootstrap.sh` apply before archive/package downloads: each of two guests per run is limited
-to 2 GiB in each direction, and UDP DNS is limited to 2 queries/second with a 20-query burst. On a later boot,
-the root-owned guard is an explicit `Requires`/`After` dependency of the available systemd network managers and
-blocks all IPv4/IPv6 traffic before they start; a guard failure powers the VM off rather than allowing uncapped
-networking. If neither supported network-manager unit exists, bootstrap drops all traffic and powers off before
-installing tools or starting the controller. Thus iptables quota counters cannot reset into an unmetered session.
+to 2 GiB in each direction, and UDP DNS is limited to 2 queries/second with a 20-query burst. These chains do not
+measure traffic before `guest-bootstrap.sh` starts (including earlier OS/cloud-init networking), which is excluded
+from the projection and has not been bounded by an Azure guest boot test. On a later boot, the root-owned guard is
+an explicit `Requires`/`After` dependency of each installed supported systemd network manager; bootstrap requires
+at least one of those services to be active before publishing the initial boot marker. A guard failure prevents
+those dependent units from starting and requests VM poweroff. If neither supported unit is installed and active,
+bootstrap drops all traffic and requests poweroff before installing tools or starting the controller. This protects
+the quotas against resets through those manager units, but is not evidence about earlier OS traffic or other
+networking paths.
 Across two runs this reserves 17.179869184 decimal GB NAT-processed, 8.589934592 GB Internet egress, 8.589934592 GB Private Endpoint
 ingress, 8.589934592 GB Private Endpoint egress, and 115,280 DNS queries. Each separately billed traffic meter is
 charged against its whole applicable quota, even where that conservatively prices the same packet in more than

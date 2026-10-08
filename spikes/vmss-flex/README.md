@@ -124,9 +124,11 @@ Fixed subscription `b47d2942-f5ad-4d3c-b28e-c23e4f83d97e` (`shared`), tenant
 The code-only retail projection prices the maximum B2s/D2ls/P4/NAT/public-IP/private-endpoint counts and both
 full-run DNS zones over the original four hours, including planned cleanup. It prices both directions of the
 enforced byte quotas, worst-case DNS bursts, and the maximum four Standard Key Vault secret operations. The
-current sourced example is about **$4.31**, strictly below $10; this is a public-retail planning projection,
+reviewed pinned-rate example is about **$4.31**, below the $10 planned-use cap; this is a public-retail projection,
 not an account quote or billing guarantee. Only categories created by the templates are priced; unsupported
 paid creates are explicitly excluded, not given arbitrary reserves.
+Guest quotas are installed before bootstrap downloads, but do not cover earlier OS/cloud-init networking; the
+projection is not a hard ceiling for that unmeasured traffic or for post-deadline deletion refusal.
 
 Both runs reserve four guests total, 17.179869184 GB NAT-processed traffic, 8.589934592 GB Internet egress,
 17.179869184 GB private-endpoint ingress plus egress and 115,280 DNS queries. Quotas cannot reset on retry or

@@ -188,13 +188,17 @@ failed bootstrap traffic. No guest restart or quota reset is authorized.
 
 `priceOriginalEnvelope` accepts only the closed schema documented in
 [the cost-source record](pricing-sources.md): a retrieval timestamp no more than 24 hours old, Azure Retail Prices
-API source, USD, `swedencentral`, and positive finite rates for the exact VM, disk, NAT, IP, Private Link, bandwidth,
-Private DNS, and Key Vault operation meters. It rejects missing/extra categories, zero fallback, stale evidence,
-or a planned projection at or above $10. Premium P4 uses its monthly retail price divided by 672 hours (the shortest
+API source, USD, `swedencentral`, and exact pinned rates for the VM, disk, NAT, IP, Private Link, bandwidth,
+Private DNS, and Key Vault operation meters. A caller-supplied source timestamp is checked for format and age, but
+the code does not fetch the pricing API; the approver must verify the source values. Changed prices fail closed
+until the reviewed rate table is updated. It rejects missing/extra categories, stale evidence, or a planned
+projection at or above $10. Premium P4 uses its monthly retail price divided by 672 hours (the shortest
 calendar month); each of the three disks is priced through all four planned hours, including cleanup. Two zone
 hosting charges are conservatively billed at a full monthly rate. The two-run traffic calculation includes both
 directions of guest quota bytes, all allowed DNS bursts, and four secret-only Key Vault operations. No arbitrary
 log, image, cleanup, or miscellaneous amount is added: those paid resource creates are forbidden by this contract.
+The guest quota does not include networking before `guest-bootstrap.sh` installs its rules (for example, earlier
+OS/cloud-init traffic); that exposure is not bounded by this projection or validated on an Azure guest boot.
 
 The example is approximately $4.31 using public retail rates. It is a planning projection, not an account-specific
 quote, actual invoice, or absolute Azure billing limit. Resource-hour charges cover the original four hours, with

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 marker=/var/lib/ghr-spike60/initial-boot-id
-[[ -s $marker ]] || exit 0
+[[ -s $marker ]] || exit 1
 initial_boot_id=$(<"$marker")
 current_boot_id=$(</proc/sys/kernel/random/boot_id)
 [[ $initial_boot_id =~ ^[a-f0-9-]{36}$ && $current_boot_id =~ ^[a-f0-9-]{36}$ ]] || exit 1

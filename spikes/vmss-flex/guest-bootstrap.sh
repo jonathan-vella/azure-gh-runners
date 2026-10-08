@@ -6,6 +6,18 @@ if [[ ${1:-} != --bounded ]]; then
   exec timeout --signal=TERM --kill-after=10s 1200s /bin/bash "$0" --bounded "$@"
 fi
 shift
+fail_closed() {
+  trap - ERR
+  printf '%s\n' "$1" >&2
+  iptables -w 5 -P OUTPUT DROP || printf 'Failed to drop IPv4 output.\n' >&2
+  iptables -w 5 -P INPUT DROP || printf 'Failed to drop IPv4 input.\n' >&2
+  ip6tables -w 5 -P OUTPUT DROP || printf 'Failed to drop IPv6 output.\n' >&2
+  ip6tables -w 5 -P INPUT DROP || printf 'Failed to drop IPv6 input.\n' >&2
+  systemctl poweroff --no-block || printf 'Failed to request guest poweroff.\n' >&2
+  exit 1
+}
+trap 'fail_closed "Guest bootstrap failed; dropping traffic and requesting poweroff."' ERR
+
 [[ $# == 4 && $(id -u) == 0 ]]
 mode=$1 head=$2 archive_sha=$3 config=$4
 [[ $mode == worker || $mode == controller ]]
@@ -13,6 +25,7 @@ mode=$1 head=$2 archive_sha=$3 config=$4
 source /etc/os-release
 [[ $ID == ubuntu && $VERSION_ID == 24.04 && $(dpkg --print-architecture) == amd64 ]]
 [[ $(dpkg-query -W -f='${Version}' iptables) == 1.8.10-3ubuntu2 ]]
+
 systemctl mask apt-daily.service apt-daily-upgrade.service unattended-upgrades.service
 
 # Separate ingress/egress quotas bound total transfer to 4 GiB per guest.
@@ -56,15 +69,17 @@ Type=oneshot
 ExecStart=/usr/local/sbin/ghr-spike60-reboot-guard
 RemainAfterExit=yes
 FailureAction=poweroff
-
 UNIT
 install -d -o root -g root -m 0700 /var/lib/ghr-spike60
-cat /proc/sys/kernel/random/boot_id > /var/lib/ghr-spike60/initial-boot-id
-chmod 0444 /var/lib/ghr-spike60/initial-boot-id
 network_units=0
+active_network_units=0
 for unit in systemd-networkd.service NetworkManager.service; do
   if systemctl cat "$unit" >/dev/null 2>&1; then
-    dropin="/etc/systemd/system/$unit.d/ghr-spike60-reboot-guard.conf"
+    unit_id=$(systemctl show --property=Id --value "$unit") ||
+      fail_closed "Could not resolve systemd unit $unit."
+    [[ $unit_id == *.service && $unit_id != */* ]] ||
+      fail_closed "Unsupported systemd unit identity for $unit."
+    dropin="/etc/systemd/system/$unit_id.d/ghr-spike60-reboot-guard.conf"
     install -d -o root -g root -m 0755 "${dropin%/*}"
     cat > "$dropin" <<'UNIT'
 [Unit]
@@ -72,17 +87,21 @@ Requires=ghr-spike60-reboot-guard.service
 After=ghr-spike60-reboot-guard.service
 UNIT
     network_units=$((network_units + 1))
+    if systemctl is-active --quiet "$unit"; then
+      active_network_units=$((active_network_units + 1))
+    fi
   fi
 done
-if [[ $network_units -eq 0 ]]; then
-  iptables -w 5 -P OUTPUT DROP
-  iptables -w 5 -P INPUT DROP
-  ip6tables -w 5 -P OUTPUT DROP
-  ip6tables -w 5 -P INPUT DROP
-  systemctl poweroff --no-block
-  exit 1
+if [[ $network_units -eq 0 || $active_network_units -eq 0 ]]; then
+  fail_closed 'No supported active systemd network manager; refusing to continue.'
 fi
 systemctl daemon-reload
+marker=/var/lib/ghr-spike60/initial-boot-id
+[[ ! -e $marker && ! -L $marker ]]
+marker_tmp=$(mktemp /var/lib/ghr-spike60/.initial-boot-id.XXXXXX)
+cat /proc/sys/kernel/random/boot_id > "$marker_tmp"
+chmod 0444 "$marker_tmp"
+mv -T -- "$marker_tmp" "$marker"
 # The regional image's patch baseline is not the local rootfs baseline. Install
 # the exact inherited minimum on both guests, inside existing byte/DNS quotas.
 manifest=/opt/ghr-source/image/versions.json

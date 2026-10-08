@@ -350,8 +350,9 @@ test('sourced meter quote covers both runs and planned cleanup without invented 
   const total = priceOriginalEnvelope(pricing, now);
   assert.ok(total > 4.3 && total < 10);
   assert.equal(Math.round(total * 1e9) / 1e9, 4.306308956);
-  assert.throws(() => priceOriginalEnvelope({ ...pricing, b2sHourly: 3 }, now), /fit/);
-  assert.throws(() => priceOriginalEnvelope({ ...pricing, natProcessedGb: 0 }, now), /fallback/);
+  assert.throws(() => priceOriginalEnvelope({ ...pricing, b2sHourly: 1e-12 }, now), /reviewed/);
+  assert.throws(() => priceOriginalEnvelope({ ...pricing, b2sHourly: 3 }, now), /reviewed/);
+  assert.throws(() => priceOriginalEnvelope({ ...pricing, natProcessedGb: 0 }, now), /reviewed/);
   const missing = { ...pricing };
   delete missing.keyVaultOperationsPer10k;
   assert.throws(() => priceOriginalEnvelope(missing, now), /Complete/);
@@ -387,11 +388,11 @@ test('unpriced paid resource creates remain excluded from the VMSS templates', (
     /Microsoft\.(?:OperationalInsights\/workspaces|ContainerRegistry\/registries|Storage\/storageAccounts|Compute\/galleries|Compute\/snapshots|Network\/privateDnsResolvers)/);
 });
 
-test('cheaper second-run quote cannot refund original cost reservation', () => {
+test('second-run pricing cannot change the original cost reservation', () => {
   let state = clean(begin(newIdentityEnvelope(head)));
   const reserved = state.reservedCostUsd;
   state = transitionIdentityEnvelope(state, 'begin', {
-    now: '2026-10-08T06:00:00.000Z', pricing: { ...pricing, b2sHourly: 0.001 },
+    now: '2026-10-08T06:00:00.000Z', pricing,
   });
   assert.equal(state.reservedCostUsd, reserved);
   state.reservedCostUsd = 1;

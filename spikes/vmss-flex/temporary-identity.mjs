@@ -24,6 +24,13 @@ const perRunTraffic = {
   guests: 2, natBytes: 8589934592, egressBytes: 4294967296,
   peIngressBytes: 4294967296, peEgressBytes: 4294967296, dnsQueries: 57640,
 };
+const reviewedRates = Object.freeze({
+  b2sHourly: 0.0432, d2lsHourly: 0.091, p4MonthlyUsd: 5.8072,
+  natHourly: 0.045, natProcessedGb: 0.045, standardIpv4Hourly: 0.005,
+  privateEndpointHourly: 0.01, privateEndpointIngressGb: 0.01, privateEndpointEgressGb: 0.01,
+  internetEgressGb: 0.12, privateDnsZoneMonthly: 0.5, privateDnsQueriesPerMillion: 0.4,
+  keyVaultOperationsPer10k: 0.03,
+});
 
 function check(condition, message) {
   if (!condition) throw new Error(message);
@@ -58,7 +65,8 @@ export function priceOriginalEnvelope(pricing, now) {
   'Only the reviewed Azure USD retail-price source and platform region are accepted.');
   const age = timestamp(now) - timestamp(pricing.retrievedUtc);
   check(age >= 0 && age <= 24 * hour, 'Price evidence is stale or future dated.');
-  for (const key of rateKeys) check(Number.isFinite(pricing[key]) && pricing[key] > 0, 'Positive finite sourced USD meter rates required; no zero fallback.');
+  for (const key of rateKeys) check(Number.isFinite(pricing[key]) && pricing[key] === reviewedRates[key],
+    'Meter rates must exactly match the reviewed USD source values.');
   const hourly = pricing.b2sHourly + 2 * pricing.d2lsHourly + 3 * (pricing.p4MonthlyUsd / 672) +
     pricing.natHourly + pricing.standardIpv4Hourly + 2 * pricing.privateEndpointHourly;
   const traffic = 2 * (perRunTraffic.natBytes / 1e9 * pricing.natProcessedGb +
