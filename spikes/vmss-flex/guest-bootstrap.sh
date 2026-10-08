@@ -3,11 +3,11 @@ set -euo pipefail
 umask 077
 
 if [[ ${1:-} != --bounded ]]; then
-  exec timeout --signal=TERM --kill-after=10s 1200s /bin/bash "$0" --bounded "$@"
+  exec timeout --signal=TERM --kill-after=30s 1200s /bin/bash "$0" --bounded "$@"
 fi
 shift
 fail_closed() {
-  trap - ERR
+  trap - ERR TERM INT HUP
   printf '%s\n' "$1" >&2
   iptables -w 5 -P OUTPUT DROP || printf 'Failed to drop IPv4 output.\n' >&2
   iptables -w 5 -P INPUT DROP || printf 'Failed to drop IPv4 input.\n' >&2
@@ -16,7 +16,16 @@ fail_closed() {
   systemctl poweroff --no-block || printf 'Failed to request guest poweroff.\n' >&2
   exit 1
 }
-trap 'fail_closed "Guest bootstrap failed; dropping traffic and requesting poweroff."' ERR
+install_fail_closed_traps() {
+  trap 'fail_closed "Guest bootstrap failed; dropping traffic and requesting poweroff."' ERR
+  trap 'fail_closed "Guest bootstrap received a termination signal; dropping traffic and requesting poweroff."' TERM INT HUP
+}
+require_free_controller_uid() {
+  if getent passwd 1002 >/dev/null; then
+    fail_closed 'Controller UID 1002 is already in use; refusing to continue.'
+  fi
+}
+install_fail_closed_traps
 
 [[ $# == 4 && $(id -u) == 0 ]]
 mode=$1 head=$2 archive_sha=$3 config=$4
@@ -114,7 +123,7 @@ if [[ $mode == worker ]]; then
   exit 0
 fi
 [[ $config =~ ^[A-Za-z0-9+/]+={0,2}$ ]]
-getent passwd 1002 >/dev/null && exit 1
+require_free_controller_uid
 groupadd --gid 1002 controller
 useradd --uid 1002 --gid 1002 --groups users --create-home --shell /bin/bash controller
 passwd --lock controller >/dev/null

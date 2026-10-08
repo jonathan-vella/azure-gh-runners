@@ -37,7 +37,7 @@ test('native bootstrap stays bounded, reuses full verifier and never starts jobs
 test('guest bootstrap bounds traffic, DNS, compiler and service without starting it', () => {
   const script = read('guest-bootstrap.sh');
   assert.ok(!script.includes('\r'));
-  assert.match(script, /--kill-after=10s 1200s/);
+  assert.match(script, /--kill-after=30s 1200s/);
   assert.equal((script.match(/--quota 2147483648/g) ?? []).length, 2);
   assert.match(script, /--limit 2\/second --limit-burst 20/);
   assert.match(script, /ip6tables -w 5 -P OUTPUT DROP/);
@@ -89,7 +89,11 @@ test('both guests adapt exact minimal packages after traffic quotas without assu
   assert.match(script, /After=ghr-spike60-reboot-guard\.service/);
   assert.match(script, /if \[\[ \$network_units -eq 0 \|\| \$active_network_units -eq 0 \]\]; then\s+fail_closed 'No supported active systemd network manager; refusing to continue.'/);
   assert.match(script, /trap 'fail_closed /);
+  assert.match(script, /trap 'fail_closed .*' TERM INT HUP/);
+  assert.match(script, /--kill-after=30s 1200s/);
   assert.match(script, /fail_closed\(\)[\s\S]*?iptables -w 5 -P OUTPUT DROP[\s\S]*?ip6tables -w 5 -P INPUT DROP[\s\S]*?systemctl poweroff --no-block/);
+  assert.match(script, /require_free_controller_uid\(\)[\s\S]*?getent passwd 1002[\s\S]*?fail_closed/);
+  assert.match(script, /\[\[ \$config =~[\s\S]*?require_free_controller_uid/);
   const workerBranch = script.slice(script.indexOf('if [[ $mode == worker ]]'), script.indexOf('[[ $config =~'));
   assert.match(workerBranch, /native-bootstrap\.sh \|\|[\s\S]*?fail_closed 'Native worker bootstrap failed/);
   assert.match(workerBranch, /exit 0/);
