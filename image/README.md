@@ -3,8 +3,8 @@
 Issues [#19](https://github.com/jonathan-vella/azure-gh-runners/issues/19) and
 [#20](https://github.com/jonathan-vella/azure-gh-runners/issues/20) supply the **linux/amd64 toolset and pre-job hook**.
 The image is not yet a deployable platform runner. JIT initialization and the main
-entrypoint belong to issues #21 and #22; identity isolation, labels, and the production build path still require
-their spike decisions. Nothing here publishes an image, onboards a consumer, or deploys Azure resources.
+entrypoint belong to issues #21 and #22; identity isolation, labels, and the build path follow the default ADRs
+(0001, 0004, 0005), pending live smoke. Nothing here publishes an image, onboards a consumer, or deploys Azure resources.
 
 ## Pins and provenance
 

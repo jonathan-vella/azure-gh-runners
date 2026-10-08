@@ -8,7 +8,6 @@ const root = path.resolve(__dirname, "..");
 const schema = JSON.parse(fs.readFileSync(path.join(root, "config", "schema", "consumer.v1.json"), "utf8"));
 const sample = JSON.parse(fs.readFileSync(path.join(root, "config", "consumers", "example.json.sample"), "utf8"));
 const acaSample = JSON.parse(fs.readFileSync(path.join(root, "config", "consumers", "example-aca.json.sample"), "utf8"));
-const vmssSample = JSON.parse(fs.readFileSync(path.join(root, "config", "consumers", "example-vmss.json.sample"), "utf8"));
 const validate = new Ajv2020({ allErrors: true }).compile(schema);
 
 function consumer(overrides) {
@@ -25,14 +24,8 @@ const validFixtures = [
   ["documented sample", sample],
   ["legacy sample without a backend", sample],
   ["explicit ACA backend", acaSample],
-  ["explicit VMSS backend", vmssSample],
   ...resourcePairs,
   ["minimum integer values", consumer({ maxExecutions: 1, replicaTimeoutSeconds: 1 })],
-  ["minimum VMSS sizing values", {
-    ...vmssSample,
-    maxRunners: 1,
-    jobTimeoutMinutes: 1
-  }],
   [
     "private pull request opt-in",
     consumer({ visibility: "private", allowedEvents: ["workflow_dispatch", "pull_request"] })
@@ -49,52 +42,13 @@ const invalidFixtures = [
   ["zero concurrent executions", consumer({ maxExecutions: 0 })],
   ["zero replica timeout", consumer({ replicaTimeoutSeconds: 0 })],
   ["unknown backend", consumer({ backend: "container-apps" })],
-  ["VMSS fields without an explicit backend", consumer({ vmSku: "Standard_D2ls_v5" })],
-  ["ACA backend with VMSS fields", consumer({ backend: "aca", vmSku: "Standard_D2ls_v5" })],
-  ["ACA backend with VMSS runner limit", consumer({ backend: "aca", maxRunners: 1 })],
-  ["ACA backend with VMSS job timeout", consumer({ backend: "aca", jobTimeoutMinutes: 60 })],
-  ["VMSS missing SKU", { ...vmssSample, vmSku: undefined }],
-  ["VMSS missing runner limit", { ...vmssSample, maxRunners: undefined }],
-  ["VMSS missing job timeout", { ...vmssSample, jobTimeoutMinutes: undefined }],
-  ["unapproved VMSS SKU", {
-    ...vmssSample,
-    backend: "vmss",
-    vmSku: "Standard_D2s_v5",
-    maxRunners: 1,
-    jobTimeoutMinutes: 60
-  }],
-  ["zero VMSS runners", {
-    ...vmssSample,
-    backend: "vmss",
-    vmSku: "Standard_D2ls_v5",
-    maxRunners: 0,
-    jobTimeoutMinutes: 60
-  }],
-  ["VMSS runner limit above platform cap", {
-    ...vmssSample,
-    backend: "vmss",
-    vmSku: "Standard_D2ls_v5",
-    maxRunners: 3,
-    jobTimeoutMinutes: 60
-  }],
-  ["zero VMSS job timeout", {
-    ...vmssSample,
-    backend: "vmss",
-    vmSku: "Standard_D2ls_v5",
-    maxRunners: 1,
-    jobTimeoutMinutes: 0
-  }],
-  ["VMSS job timeout above platform cap", {
-    ...vmssSample,
-    backend: "vmss",
-    vmSku: "Standard_D2ls_v5",
-    maxRunners: 1,
-    jobTimeoutMinutes: 361
-  }],
-  ["VMSS with CPU field", { ...vmssSample, cpu: 0.5 }],
-  ["VMSS with memory field", { ...vmssSample, memory: "1Gi" }],
-  ["VMSS with max executions field", { ...vmssSample, maxExecutions: 1 }],
-  ["VMSS with ACA replica timeout field", { ...vmssSample, replicaTimeoutSeconds: 3600 }],
+  ["VMSS backend", consumer({ backend: "vmss" })],
+  ["VMSS SKU field", consumer({ vmSku: "Standard_D2ls_v5" })],
+  ["VMSS runner limit field", consumer({ maxRunners: 1 })],
+  ["VMSS job timeout field", consumer({ jobTimeoutMinutes: 60 })],
+  ["missing ACA sizing", consumer({ cpu: undefined, memory: undefined })],
+  ["missing max executions", consumer({ maxExecutions: undefined })],
+  ["missing replica timeout", consumer({ replicaTimeoutSeconds: undefined })],
   ["public pull request", consumer({ allowedEvents: ["workflow_dispatch", "pull_request"] })],
   ["forbidden pull_request_target", consumer({ allowedEvents: ["pull_request_target"] })],
   ["forbidden workflow_run", consumer({ allowedEvents: ["workflow_run"] })],

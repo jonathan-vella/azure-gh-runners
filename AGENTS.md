@@ -9,15 +9,14 @@ below applies to consumer jobs that target this platform's self-hosted runners.
 
 1. Read the [PRD](docs/prd.md), [plan](docs/plan.md), [roadmap](docs/roadmap.md), and [backlog](docs/backlog.md).
 2. Work on an issue only after its dependencies are closed. Keep each branch and pull request scoped to one issue.
-3. For M1 spikes, record the result as an accepted ADR in `docs/adr/` before implementing work that depends on it.
-   Later changes must follow accepted ADRs.
+3. v1 is Azure Container Apps (ACA) jobs only; VMSS Flex is rejected for v1. No further spikes are planned. Follow
+   the default decisions in `docs/adr/`; the real `platform-prod` deployment and the `ghr-smoke` smoke test prove them.
 4. Check the relevant runbook before touching identity or GitHub App setup. These describe existing production resources;
    do not recreate them or change Azure/GitHub settings as part of ordinary repository work.
 5. Run `npm run validate` after repository changes. Do not deploy the platform from a local checkout.
-6. Agents may merge only after repository validation passes and agent code review reports no blocking findings.
-   Production deployment remains exclusive to the `platform-prod` workflow on `main`; the environment is main-only
-   and does not require a human reviewer. This merge gate does not authorize local deployment or bypass spike-specific
-   approval, scope, or time limits.
+6. Lean merge bar: CI build plus `npm run validate` pass and one agent code review reports no blocking findings; the
+   agent may then merge. Production deployment remains exclusive to the `platform-prod` workflow on `main`; the
+   environment is main-only and does not require a human reviewer. The merge bar does not authorize local deployment.
 
 ## Repository map
 
@@ -27,11 +26,12 @@ below applies to consumer jobs that target this platform's self-hosted runners.
 | `config/consumers/` | The sole source of consumer onboarding declarations, one `<name>.json` per repository. |
 | `config/schema/` | Schema for validating consumer declarations. |
 | `docs/` | Product requirements, implementation plan, roadmap, backlog, research, architecture and operational guidance. |
-| `docs/adr/` | Accepted architecture decisions, including outcomes of M1 spikes. |
+| `docs/adr/` | Architecture decisions for v1 (ACA-only defaults; ADR-0006 VMSS rejected). |
 | `docs/runbooks/` | Carefully scoped bootstrap procedures for Azure OIDC identities and the GitHub App. |
 | `image/` | Runner image definition, initialization/entrypoint scripts, and pre-job policy hook. |
 | `infra/` | Resource-group Bicep entrypoint and parameter file; reusable Bicep modules belong in `infra/modules/`. |
 | `tools/` | Registry validation and generation tooling. |
+| `spikes/`, `infra/spike7/`, `tools/spike*`, `tools/spikes/`, spike workflows | Archival spike harnesses only; not part of `npm run validate` and not to be run or extended. |
 | Root config and manifests | `package.json` defines validation commands; `package-lock.json` pins Node dependencies; `bicepconfig.json`, `.markdownlint-cli2.jsonc`, `.editorconfig`, and `.gitignore` define repository tooling and conventions. |
 
 Some directories currently contain only placeholders. Implement functionality in its assigned area as the related
@@ -47,11 +47,12 @@ npm ci
 npm run validate
 ```
 
-`npm run validate` runs consumer schema, policy, and generator tests; validates active consumer entries against
-GitHub visibility/default-branch metadata; checks generated consumer parameters for drift; builds the Bicep template,
-parameter file, network and observability modules; runs Bicep lint, diagnostic-category, offline image contract and
-executable Bats hook tests; and checks
-Markdown with the repository's Markdown configuration. Use `npm run generate:consumers` to update
+`npm run validate` runs consumer schema, registry, and generator tests; validates active consumer entries against
+GitHub visibility/default-branch metadata; checks generated consumer parameters for drift; builds and lints
+`infra/main.bicep`, `infra/main.bicepparam`, and `infra/modules/network.bicep`; runs network tests, observability and
+diagnostic-category checks, offline image contract tests, and pre-job hook tests; and lints Markdown with the
+repository configuration. The PR workflow `.github/workflows/validate.yml` runs the same command on GitHub-hosted
+runners. Use `npm run generate:consumers` to update
 `infra/generated/consumers.json` after changing the registry. An empty registry passes without GitHub access; active
 entries require GitHub CLI access to every registered repository. The command does not deploy resources or require an
 Azure login. The live diagnostic-category check is a separate required preflight before setting
@@ -75,22 +76,21 @@ local check.
 - **Keep runner job code unprivileged.** The main runner container must receive no secret environment variables and no
   usable managed identity. GitHub App credentials are for the init/scaling path, not job steps.
 - **Never commit or print secrets, keys, or tokens.** Do not put credentials in source, generated artifacts, logs, or
-  command output.
+  command output. The lab owner accepts sharing secrets in chat, but that never permits committing them or printing
+  them in logs.
 - **Pin dependencies.** Pin GitHub Actions by full commit SHA and container images by digest. Bicep must use
   Azure Verified Modules at exact versions.
 - **Preserve platform conventions.** Deploy to the approved `shared` subscription, in `swedencentral`, using CAF
   naming and governance tags. Do not change approved scopes or conventions without an explicit decision.
 - **Keep deployment gated.** Production deployment belongs only to the protected `platform-prod` workflow. Do not
   deploy from a local checkout or another workflow. The workflow is restricted to `main`; its environment does not
-  require a human reviewer. The sole exception is an explicitly approved, time-boxed spike in a separate spike
-  resource group, which must be deleted afterward.
-- **Keep RBAC changes exact.** Only after the controller-RBAC runbook PR in issue #69 is merged may the one-time
-  condition update authorized by this decision for `sp-ghrunners-platform-prod` at `rg-ghrunners-prod-swc` add
-  [Virtual Machine Contributor](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/compute#virtual-machine-contributor)
-  (`9980e02c-c2be-4d73-94e8-173b1dc7cf3c`) and `Network Contributor`
-  (`4d97b98b-1d4f-4787-a291-c67834d212e7`). Preserve the existing `AcrPull`, `AcrPush`, and Key Vault Secrets User
-  allowlist; stop on any unexpected state. This does not authorize other scopes, roles, identities, or condition
-  changes.
+  require a human reviewer. It deploys directly into the existing `rg-ghrunners-prod-swc` in stages: GitHub-hosted
+  image build to private GHCR, foundation with `deployJobs=false`, `az acr import` by digest into ACR, then jobs with
+  `deployJobs=true`. There is no spike-resource-group exception.
+- **Keep RBAC changes exact.** Preserve the existing `AcrPull`, `AcrPush`, and Key Vault Secrets User role-assignment
+  allowlist for `sp-ghrunners-platform-prod` at `rg-ghrunners-prod-swc`; stop on any unexpected state. The VMSS
+  controller-RBAC authorization (issue #69) is withdrawn with ADR-0006. Do not change scopes, roles, identities, or
+  conditions without an explicit decision.
 - **Protect job-start permissions.** Never grant `Microsoft.App/jobs/start/action` broadly; it can expose job secrets.
 
 ## Documentation and runbooks
@@ -102,7 +102,7 @@ local check.
 - [Research: Azure runner options](docs/research-azure-runner-options.md) and
   [research: public repositories with private endpoints](docs/research-public-repo-private-endpoints.md) — design
   background.
-- [ADR index](docs/adr/README.md) — decision record format and planned spike outcomes.
+- [ADR index](docs/adr/README.md) — decision record format and v1 decisions.
 - [OIDC identity bootstrap](docs/runbooks/bootstrap-identity.md) — exact existing identity scope, verification, and
   GitHub bindings. Stop on unexpected state; do not recreate or expand permissions.
 - [GitHub App runbook](docs/runbooks/github-app.md) — App permissions, installation scope, key handling, and rotation.

@@ -60,8 +60,8 @@ consumer registry in this repo; nothing is project-specific.
 | FR-4 | Each execution registers a single-use JIT runner, runs exactly one job, and terminates. |
 | FR-5 | A pre-job hook rejects any job outside the platform floor and the consumer's allowlist before user steps run. |
 | FR-6 | Consumers reach their private resources through private endpoints they create in the shared `snet-consumer-pe` subnet, resolved through platform-owned private DNS zones. |
-| FR-7 | One generic runner image (git, jq, curl, az CLI, Bicep, Terraform, Node LTS, Python 3, pwsh), built inside Azure and stored in private ACR. |
-| FR-8 | Platform deployed from this repo by GitHub-hosted workflows using OIDC: what-if on PR, deploy on `workflow_dispatch` through a protected environment. |
+| FR-7 | One generic runner image (git, jq, curl, az CLI, Bicep, Terraform, Node LTS, Python 3, pwsh), built on a GitHub-hosted runner, pushed to private GHCR, and imported by digest into private ACR (ADR-0001). |
+| FR-8 | Platform deployed from this repo by GitHub-hosted workflows using OIDC: validation on PR, staged deploy (foundation with `deployJobs=false`, image import, then jobs with `deployJobs=true`) only through the main-only `platform-prod` workflow into the existing `rg-ghrunners-prod-swc`. |
 | FR-9 | Weekly image rebuild and scheduled GitHub App key rotation reminders. |
 | FR-10 | Platform outputs (subnet IDs, DNS zone IDs, labels) published for consumers. |
 
@@ -95,16 +95,19 @@ runner/workload endpoints; this explicit exception is part of the architecture.
 
 ## 9. Constraints and assumptions
 
-- ACR Tasks dedicated agent pools are in preview; a GA fallback (GitHub-hosted build → private GHCR → `az acr import`) is
-  defined in case the spike fails.
-- Key Vault secret references over private endpoints, KEDA polling egress path, and JIT label semantics are unverified
-  and are proven by M1 spikes before dependent work starts.
+- v1 uses ACA jobs only; VMSS Flex is rejected for v1 ([ADR-0006](adr/0006-vmss-flex-spike.md)). No further spikes are
+  planned.
+- ADR-0001 to ADR-0005 record default decisions (GHCR → `az acr import` image path, Key Vault references, NAT egress,
+  init-container isolation, custom-label routing). They are proven by the real deployment and the smoke test, not by
+  separate spikes; each ADR names its fallback.
 - Consumer jobs share the runner subnet and the consumer PE subnet; isolation between consumers relies on RBAC and
   data-plane authentication (accepted residual risk for v1).
 
 ## 10. Success metrics
 
-- Smoke-test consumer passes every acceptance check (see backlog item `smoke-consumer`).
+- Definition of done: a smoke workflow in public repo `jonathan-vella/ghr-smoke` runs on the real ACA runner and lists an
+  anonymous-read, empty blob container in a storage account with public network access disabled, reached only through a
+  private endpoint in `snet-consumer-pe` (backlog item `smoke-consumer`).
 - Zero PaaS resources with public network access enabled (automated post-deploy check).
 - An agent onboards a new repo using only `docs/onboarding-consumer.md`.
 - No runner registration persists after its job completes.
@@ -115,9 +118,9 @@ runner/workload endpoints; this explicit exception is part of the architecture.
 | --- | --- |
 | Fork PR runs code on a runner | Policy floor (validator + hook), custom labels only, fork-approval setting, environment branch rules, exact OIDC subjects. |
 | App key compromise grants repo admin on all installed repos | Key only in KV + init container, selected-repo installation, rotation cadence. |
-| Preview ACR agent pool unavailable or broken | ADR-0001 fallback path. |
+| Image import into private ACR fails | ADR-0001: GHCR digest import with ACR trusted-services bypass; failures stop the staged deploy before jobs. |
 | Cross-consumer lateral movement | NSG lateral deny, RBAC; escalation path to per-consumer subnet/environment. |
-| Undocumented platform behaviour | M1 spikes recorded as ADRs before build-out. |
+| Undocumented platform behaviour | Default ADRs with recorded fallbacks, proven by the real deploy and `ghr-smoke` smoke test. |
 
 ## 12. Release criteria (v1.0)
 

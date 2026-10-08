@@ -12,7 +12,11 @@
     "labels",
     "allowedEvents",
     "allowedRefs",
-    "allowedWorkflows"
+    "allowedWorkflows",
+    "cpu",
+    "memory",
+    "maxExecutions",
+    "replicaTimeoutSeconds"
   ],
   "properties": {
     "name": {
@@ -36,29 +40,9 @@
     "backend": {
       "type": "string",
       "enum": [
-        "aca",
-        "vmss"
+        "aca"
       ],
-      "description": "Optional explicit runner backend. Omission remains a legacy declaration and does not select a runtime backend."
-    },
-    "vmSku": {
-      "type": "string",
-      "enum": [
-        "Standard_D2ls_v5"
-      ],
-      "description": "Allowlisted Linux VM size for the VMSS backend."
-    },
-    "maxRunners": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 2,
-      "description": "Maximum concurrent VMSS worker runners per consumer."
-    },
-    "jobTimeoutMinutes": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 360,
-      "description": "VMSS job timeout in minutes, bounded to at most six hours."
+      "description": "Optional explicit runner backend. v1 supports only Azure Container Apps jobs; omission is equivalent to aca."
     },
     "labels": {
       "type": "array",
@@ -374,16 +358,6 @@
             "cpu",
             "memory"
           ]
-        },
-        {
-          "properties": {
-            "backend": {
-              "const": "vmss"
-            }
-          },
-          "required": [
-            "backend"
-          ]
         }
       ]
     },
@@ -414,76 +388,6 @@
             "type": "array",
             "maxItems": 1
           }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "backend": {
-            "const": "vmss"
-          }
-        },
-        "required": [
-          "backend"
-        ]
-      },
-      "then": {
-        "required": [
-          "vmSku",
-          "maxRunners",
-          "jobTimeoutMinutes"
-        ],
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "cpu"
-              ]
-            },
-            {
-              "required": [
-                "memory"
-              ]
-            },
-            {
-              "required": [
-                "maxExecutions"
-              ]
-            },
-            {
-              "required": [
-                "replicaTimeoutSeconds"
-              ]
-            }
-          ]
-        }
-      },
-      "else": {
-        "required": [
-          "cpu",
-          "memory",
-          "maxExecutions",
-          "replicaTimeoutSeconds"
-        ],
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "vmSku"
-              ]
-            },
-            {
-              "required": [
-                "maxRunners"
-              ]
-            },
-            {
-              "required": [
-                "jobTimeoutMinutes"
-              ]
-            }
-          ]
         }
       }
     }

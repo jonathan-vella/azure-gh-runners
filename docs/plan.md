@@ -10,9 +10,11 @@ The GitHub repos are public, are owned by a personal account, and need jobs that
 - **One shared Azure platform**: VNet, internal ACA workload-profiles environment, ACR Premium, Key Vault, Log Analytics, NAT Gateway. Plus **one ACA event-driven runner job per onboarded repo**, generated from a typed consumer registry.
 - **Location**: approved subscription `shared` (`b47d2942-f5ad-4d3c-b28e-c23e4f83d97e`, replacing the planned `apex-shared` name), region `swedencentral`, RG `rg-ghrunners-prod-swc`.
 - **IaC**: Bicep with AVM modules (exact version pins), following apex conventions (CAF naming, governance tags, a single `uniqueSuffix`).
-- **Image**: one generic image built **in Azure** on an **ACR Tasks dedicated agent pool** (preview) inside the VNet, pushed to private ACR Premium.
+- **Backend**: Azure Container Apps (ACA) jobs only for v1. VMSS Flex is rejected/deferred ([ADR-0006](adr/0006-vmss-flex-spike.md)); no further spikes are planned.
+- **Image**: one generic image built on a GitHub-hosted runner, pushed to private GHCR, then imported by digest into private ACR Premium with `az acr import` (ACR trusted-services bypass on). No ACR agent pool in v1 ([ADR-0001](adr/0001-image-build-path.md)).
 - **Auth to GitHub**: one GitHub App owned by the personal account and installed on selected repos. Its key is deployed to Key Vault through ARM (a Bicep secure param).
-- **Platform CI**: GitHub-hosted runners with OIDC. What-if runs on PR; deploy runs on `workflow_dispatch` through the protected, main-only `platform-prod` environment, which has no required human reviewer. This is all ARM, so no VNet is needed.
+- **Platform CI**: GitHub-hosted runners. `.github/workflows/validate.yml` runs `npm run validate` on PRs. `.github/workflows/deploy.yml` deploys with OIDC on `workflow_dispatch` through the protected, main-only `platform-prod` environment (no required human reviewer) directly into the existing empty `rg-ghrunners-prod-swc`, in stages: image build → private GHCR → foundation with `deployJobs=false` → `az acr import` by digest → jobs with `deployJobs=true`. This is all ARM, so no VNet is needed.
+- **Definition of done**: a smoke workflow in public repo `jonathan-vella/ghr-smoke` runs on the real ACA runner and lists an anonymous-read, empty blob container in a storage account whose public network access is disabled, reached only through a private endpoint in `snet-consumer-pe`.
 - **Consumer network path**: a shared `snet-consumer-pe` subnet plus platform-owned privatelink DNS zones. Consumers create their own private endpoints in that subnet. This is documented precisely enough for an agent to execute.
 - **Public exposure**: no inbound workload endpoints. The NAT Gateway egress IP is the only public IP resource. Log Analytics is a documented exception: standard Azure Monitor ingestion and query endpoints stay enabled without AMPLS, while workspace local authentication is disabled and Azure RBAC governs data access.
 - **Scope**: the platform, a generic onboarding contract, docs, and a throwaway smoke-test consumer repo. **vnext onboarding is a separate follow-up.**
@@ -22,10 +24,10 @@ The GitHub repos are public, are owned by a personal account, and need jobs that
 ```text
 VNet vnet-ghrunners-prod-swc (e.g. 10.60.0.0/22)
 ├─ snet-aca            /27+  delegated Microsoft.App/environments  → ACA env (internal, workload profiles)
-├─ snet-acr-agents     /27   ACR Tasks agent pool
+├─ snet-acr-agents     /27   reserved; unused in v1 (ACR agent pool dropped)
 ├─ snet-pe             /27   platform PEs: ACR (registry + data), Key Vault
 └─ snet-consumer-pe    /26   consumer-owned PEs (blob/file/queue/table/vault/sql/...)
-NAT Gateway + static PIP on snet-aca and snet-acr-agents (egress to GitHub, MCR, ghcr.io, Entra)
+NAT Gateway + static PIP on snet-aca (outbound 443 to GitHub, MCR, ghcr.io, Entra)
 Private DNS zones (platform-owned, linked to the VNet): privatelink.{blob,file,queue,table}.core.windows.net,
   privatelink.vaultcore.azure.net, privatelink.azurecr.io, + extensible list in config
 NSG on snet-aca: allow 443 to snet-pe/snet-consumer-pe + Internet; deny other RFC1918 (no lateral movement)
@@ -48,13 +50,9 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 
 ## Workstreams & todos
 
-### 0. Spikes (de-risk preview/undocumented behaviour first)
+### 0. Decisions (spikes closed)
 
-- **spike-acr-agentpool**: ACR Premium with public access disabled, an agent pool in a VNet subnet, and `az acr build --agent-pool` triggered from a GitHub-hosted runner. Check whether the source-context upload works, or whether a git-context task or a different approach is needed. Also check egress for the `ghcr.io` base-image pull.
-- **spike-kv-ref-pe**: ACA job secret `keyVaultUrl` against a Key Vault with public access disabled and a private endpoint. Does secret resolution work?
-- **spike-keda-egress**: does `github-runner` scaler polling cross the NAT/NSG path? Confirm the required egress.
-- **spike-job-identity-init**: init container plus EmptyDir plus `identitySettings` on a job. Confirm the main container gets no `IDENTITY_ENDPOINT`, and confirm scale-rule-only secrets aren't injected into containers.
-- **spike-jit-labels**: which labels `generate-jitconfig` registers, and how `runs-on` must be written with `noDefaultLabels`.
+The M1 spikes are closed without further runs. ADR-0001 to ADR-0005 record default decisions that the real deployment and the `ghr-smoke` smoke test prove; see the [ADR index](adr/README.md). Archival spike harnesses remain on disk but are not validated or run.
 
 ### 1. Repo bootstrap
 
@@ -71,7 +69,7 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 - **iac-network**: VNet, the 4 subnets, NSGs (lateral-deny rules), NAT Gateway + PIP, private DNS zones + VNet links (zone list from config).
 - **iac-observability**: Log Analytics workspace and diagnostic settings for supported categories on existing network resources; later resource issues wire their own supported categories. Standard NAT flow logs require StandardV2, and NAT platform metrics are not exportable through diagnostic settings.
 - **iac-identity-kv**: user-assigned MI(s). Key Vault (RBAC, public disabled, purge protection, PE). GitHub App key secret through ARM (`Microsoft.KeyVault/vaults/secrets`).
-- **iac-acr**: ACR Premium (public disabled, admin off, ARM-audience tokens on, trusted services on, PE for registry + data endpoint), agent pool in `snet-acr-agents`, AcrPull for the job MI.
+- **iac-acr**: ACR Premium (public disabled, admin off, ARM-audience tokens on, trusted services on for `az acr import`, PE for registry + data endpoint), AcrPull for the job MI. No agent pool.
 - **iac-aca-env**: workload-profiles environment, internal, `publicNetworkAccess: Disabled`, VNet-integrated, logs to LAW.
 - **iac-runner-job-module**: reusable module for one consumer job (scale rule, init + main containers, EmptyDir, identitySettings, sizing, replica timeout, policy env).
 - **iac-consumers-loop**: main.bicep loops over the generated consumer params, so there is one job per registry entry.
@@ -91,12 +89,12 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 - **image-init-script**: App JWT → installation token → `generate-jitconfig` (name, labels, `work_folder`) → write to `/jit/config` (EmptyDir, mode 0400 for the runner user). Fail closed.
 - **image-entrypoint**: read and delete JIT, unset env, `exec ./run.sh --jitconfig`.
 - **image-prejob-hook**: validate `GITHUB_EVENT_NAME`, `GITHUB_REPOSITORY`, `GITHUB_REF` (default branch), and `GITHUB_WORKFLOW_REF` against the policy env. Exit non-zero to reject before any user step runs. Include unit tests (bats).
-- **image-build-pipeline**: ACR task / `az acr build --agent-pool`, tagged by git SHA, with the digest recorded and fed to the deploy. Weekly rebuild.
+- **image-build-pipeline**: build on a GitHub-hosted runner, push to private GHCR tagged by git SHA, then `az acr import` by digest into ACR; the digest is fed to the jobs deploy. Weekly rebuild.
 
 ### 6. Platform CI/CD (runners repo)
 
-- **ci-validate**: on PR: markdownlint, `bicep build/lint`, registry validator + generator drift, hook tests, Dockerfile lint (hadolint), what-if (Reader OIDC).
-- **ci-deploy**: `workflow_dispatch` from `main` → main-only `platform-prod` environment (no required human reviewer) → image build (if changed) → deploy → post-deploy checks (all resources public-disabled, job count equals registry entries).
+- **ci-validate**: `.github/workflows/validate.yml` runs `npm run validate` on PRs on GitHub-hosted runners.
+- **ci-deploy**: `.github/workflows/deploy.yml`, `workflow_dispatch` from `main` → main-only `platform-prod` environment (no required human reviewer) → image build to GHCR → foundation (`deployJobs=false`) → `az acr import` by digest → jobs (`deployJobs=true`) → post-deploy checks (all resources public-disabled, job count equals registry entries).
 - **ci-maintenance**: weekly image rebuild; prepare changes through PRs and redeploy only via the main-only `platform-prod` workflow. App key rotation reminder issue.
 
 ### 7. Documentation (agent-actionable)
@@ -106,7 +104,7 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
   1. Install the App on the repo.
   2. Add `config/consumers/<name>.json`.
   3. Run the validator and generator, open a PR, and deploy.
-  4. In the consumer repo, set `runs-on: [self-hosted, ghr-<name>]`, put the job on `workflow_dispatch`/`schedule`/default-branch `push` only, use a GitHub Environment restricted to `main`, and set the Entra federated-credential subject `repo:<owner>/<repo>:environment:<env>`.
+  4. In the consumer repo, set `runs-on: ghr-<name>` (single custom label), put the job on `workflow_dispatch`/`schedule`/default-branch `push` only, use a GitHub Environment restricted to `main`, and set the Entra federated-credential subject `repo:<owner>/<repo>:environment:<env>`.
   5. Create PEs in `snet-consumer-pe` with `privateDnsZoneGroup` pointing at the platform zone IDs. Exact resource IDs come from deployment outputs and a published `docs/platform-outputs.md`. Include a Bicep snippet.
   6. Set the consumer repo's fork-approval setting to "all external contributors".
   7. Run the smoke workflow and verify.
@@ -116,8 +114,8 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 
 ### 8. Smoke test & acceptance
 
-- **smoke-consumer**: throwaway repo `jonathan-vella/ghr-smoke` (public, to exercise the strict floor) with a test storage account and a PE in `snet-consumer-pe`. The workflows must show:
-  - dispatch on `main` runs and reads a blob over the private endpoint
+- **smoke-consumer**: throwaway repo `jonathan-vella/ghr-smoke` (public, to exercise the strict floor) with a test storage account (public network access disabled) and a PE in `snet-consumer-pe`. The definition of done is the first check; the workflows must show:
+  - dispatch on `main` runs on the real ACA runner and lists an anonymous-read, empty blob container over the private endpoint
   - `push` to a non-default branch is rejected by the hook
   - a `pull_request`-triggered job targeting the label is rejected, or never scheduled
   - no MI token is available inside the job
@@ -128,10 +126,9 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 ## Notes & considerations
 
 - **Cross-consumer isolation**: all jobs share `snet-aca` and `snet-consumer-pe`. Network reachability between one consumer's job and another's PEs exists, and is mitigated only by Azure RBAC and data-plane auth. This is documented as a residual risk. A per-consumer subnet or environment is the future escalation path.
-- **Preview dependency**: ACR Tasks agent pools are preview, and the isolated tier quota defaults to 0, so use the standard S1/S2 tier. If the spike fails, the fallback is to build on a GitHub-hosted runner, push to private GHCR, and run `az acr import` by digest.
 - **App key**: one App key gives Administration RW on every installed repo, which is high value. Keep it only in Key Vault and the init container, and rotate it on a schedule.
 - `Microsoft.App/jobs/start/action` must not be granted broadly, because it exposes job secrets.
 - ACA consumption limits are 4 vCPU / 8 GiB per replica, Linux only, with no Docker-in-Docker. Document these as platform constraints for consumers.
 - npm trusted publishing does not work on self-hosted runners, so consumers must keep publish jobs on GitHub-hosted runners.
-- Fixed cost is roughly $110/month for the network and ACR Premium, plus agent-pool compute while builds run.
+- Fixed cost is roughly $110/month for the network and ACR Premium.
 - vnext follow-up (separate plan): consumer entry, a backend storage PE in `snet-consumer-pe`, workflow/validator changes, retiring the firewall exception, and the maintainer workstation access question.
