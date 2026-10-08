@@ -54,6 +54,7 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.16.
     name: 'cae-ghrunners-prod-swc-${uniqueSuffix}'
     location: location
     internal: true
+    zoneRedundant: false
     publicNetworkAccess: 'Disabled'
     infrastructureSubnetResourceId: network.outputs.acaSubnetResourceId
     workloadProfiles: [
