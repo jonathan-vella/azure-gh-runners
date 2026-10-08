@@ -23,7 +23,7 @@ SH
 done
 
 expect_failure() {
-  if GHR_SPIKE60_FAIL_COMMAND="${1:-}" PATH="$bin:$PATH" "$guard"; then
+  if GHR_SPIKE60_FAIL_COMMAND="${1:-}" PATH="$bin:$PATH" bash "$guard"; then
     echo 'Reboot guard unexpectedly succeeded.' >&2
     exit 1
   fi
@@ -43,7 +43,7 @@ expect_failure
 
 printf '00000000-0000-0000-0000-000000000000\n' > "$marker"
 : > "$log"
-if ! GHR_SPIKE60_FAIL_COMMAND= PATH="$bin:$PATH" "$guard"; then
+if ! GHR_SPIKE60_FAIL_COMMAND= PATH="$bin:$PATH" bash "$guard"; then
   echo 'Stale boot marker did not apply the firewall successfully.' >&2
   exit 1
 fi
@@ -65,5 +65,5 @@ expect_failure 'ip6tables -w 5 -P OUTPUT DROP'
 
 printf '%s\n' "$(< /proc/sys/kernel/random/boot_id)" > "$marker"
 : > "$log"
-GHR_SPIKE60_FAIL_COMMAND= PATH="$bin:$PATH" "$guard"
+GHR_SPIKE60_FAIL_COMMAND= PATH="$bin:$PATH" bash "$guard"
 [[ ! -s $log ]]
