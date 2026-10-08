@@ -185,9 +185,12 @@ jobs:
             if [[ -f "$RUNNER_TEMP/foundation.json" ]]; then
               jq -r '"- NAT egress IP: `\(.natGatewayPublicIpAddress.value)`",
                 "- ACR: `\(.registryLoginServer.value)`",
-                "- Smoke storage account: `\(.smokeStorageAccountName.value)`"' "$RUNNER_TEMP/foundation.json"
+                "- SMOKE_STORAGE_ACCOUNT: `\(.smokeStorageAccountName.value)` (set as a ghr-smoke repository variable)"' "$RUNNER_TEMP/foundation.json"
             fi
             if [[ -f "$RUNNER_TEMP/jobs.json" ]]; then
               jq -r '.runnerJobNames.value[] | "- ACA job: `\(.)`"' "$RUNNER_TEMP/jobs.json"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f "$RUNNER_TEMP/foundation.json" ]]; then
+            echo "SMOKE_STORAGE_ACCOUNT=$(jq -r '.smokeStorageAccountName.value' "$RUNNER_TEMP/foundation.json")"
+          fi

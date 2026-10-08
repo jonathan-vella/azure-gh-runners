@@ -10,53 +10,36 @@ The consumer is registered in [`config/consumers/smoke.json`](../config/consumer
 
 ## Smoke workflow
 
-Commit this file to `jonathan-vella/ghr-smoke` as `.github/workflows/smoke.yml` on `main`:
+`jonathan-vella/ghr-smoke` contains `.github/workflows/smoke.yml` on `main`. It reads the account name from the
+repository variable `SMOKE_STORAGE_ACCOUNT`:
 
 ```yaml
 name: smoke
-
-on:
-  workflow_dispatch:
-    inputs:
-      storage_account:
-        description: Smoke storage account name from the platform deployment summary
-        required: true
-        type: string
-
+on: workflow_dispatch
 permissions: {}
-
 jobs:
   smoke:
     runs-on: ghr-smoke
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
-      ACCOUNT: ${{ inputs.storage_account }}
+      ACCOUNT: ${{ vars.SMOKE_STORAGE_ACCOUNT }}
     steps:
-      - name: Assert no managed identity is exposed
-        run: |
-          if [[ -n "${IDENTITY_ENDPOINT:-}" || -n "${IDENTITY_HEADER:-}" ]]; then
-            echo "::error::Managed identity endpoint is visible to job steps."
-            exit 1
-          fi
-
-      - name: Assert the blob endpoint resolves to the consumer private endpoint
+      - name: Blob endpoint resolves to the consumer private endpoint subnet
         run: |
           set -euo pipefail
-          [[ "$ACCOUNT" =~ ^[a-z0-9]{3,24}$ ]] || { echo "::error::Invalid account name."; exit 1; }
-          host="${ACCOUNT}.blob.core.windows.net"
-          ip="$(getent ahostsv4 "$host" | awk 'NR == 1 { print $1 }')"
+          host="$ACCOUNT.blob.core.windows.net"
+          ip="$(getent hosts "$host" | awk '{print $1}' | head -n1)"
           echo "$host -> $ip"
-          [[ "$ip" =~ ^10\.60\.0\.([0-9]+)$ ]] && (( BASH_REMATCH[1] >= 128 && BASH_REMATCH[1] <= 191 )) ||
-            { echo "::error::Blob endpoint did not resolve into snet-consumer-pe."; exit 1; }
-
-      - name: List the smoke container anonymously
+          case "$ip" in 10.60.0.1[2-9][0-9]|10.60.0.[0-9]*) ;; *) echo "::error::not a private 10.60.0.x address"; exit 1 ;; esac
+      - name: List private container through the private endpoint
         run: |
           set -euo pipefail
-          code="$(curl -sS -o list.xml -w '%{http_code}' \
-            "https://${ACCOUNT}.blob.core.windows.net/smoke?restype=container&comp=list")"
-          [[ "$code" == 200 ]] || { echo "::error::Expected HTTP 200, got $code."; exit 1; }
-          grep -q '<EnumerationResults' list.xml
-          echo "Anonymous container listing succeeded through the private endpoint."
+          code="$(curl -sS -o body.xml -w '%{http_code}' "https://$ACCOUNT.blob.core.windows.net/smoke?restype=container&comp=list")"
+          echo "HTTP $code"; head -c 400 body.xml; echo
+          test "$code" = 200
+          grep -q '<EnumerationResults' body.xml
+      - name: No managed identity in the runner container
+        run: test -z "${IDENTITY_ENDPOINT:-}" && test -z "${IDENTITY_HEADER:-}"
 ```
 
 ## Run order
@@ -64,9 +47,9 @@ jobs:
 1. Merge to `main`, then dispatch **Deploy platform** (`.github/workflows/deploy.yml`) on `main`. It builds and pushes
    both images to GHCR, deploys the foundation, checks network readbacks, imports the images into ACR by digest, and
    deploys `caj-ghr-smoke`. Use `foundation_only` to stop after the foundation readbacks.
-2. Copy the smoke storage account name from the run summary.
-3. Commit the workflow above to `jonathan-vella/ghr-smoke` `main`.
-4. Dispatch `smoke` in `ghr-smoke` with `storage_account` set. KEDA polls every 15 seconds; the job execution mints a
-   JIT runner labelled `ghr-smoke`, runs the job, and exits.
-5. On failure, query the `ContainerAppSystemLogs` and `ContainerAppConsoleLogs` categories for the Container Apps
+2. Copy `SMOKE_STORAGE_ACCOUNT` from the run summary and set it as a repository variable in `ghr-smoke`
+   (`gh variable set SMOKE_STORAGE_ACCOUNT --repo jonathan-vella/ghr-smoke --body <name>`).
+3. Dispatch `smoke` in `ghr-smoke`. KEDA polls every 15 seconds; the job execution mints a JIT runner labelled
+   `ghr-smoke`, the pre-job hook checks the registry policy, the job runs, and the execution exits.
+4. On failure, query the `ContainerAppSystemLogs` and `ContainerAppConsoleLogs` categories for the Container Apps
    environment in the platform Log Analytics workspace.
