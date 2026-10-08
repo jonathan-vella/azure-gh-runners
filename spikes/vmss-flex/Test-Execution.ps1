@@ -28,7 +28,7 @@ $approval = @{
     workflowRef = 'jonathan-vella/ghr-smoke/.github/workflows/vmss-smoke.yml@refs/heads/main'
     smokeCommitSha = ('c' * 40); smokeWorkflowBlobSha = ('d' * 40)
     archiveSha256 = ('b' * 64); adminSshPublicKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefixture'
-    appKeyFingerprint = ('e' * 64)
+    appKeyFingerprint = [Convert]::ToBase64String([byte[]]::new(32))
     pricing = @{
         refreshedUtc = $now.ToString('o'); b2sHourly = 0.0432; d2lsHourly = 0.091; p4Hourly = 0.008
         natHourly = 0.045; pipHourly = 0.005; peHourly = 0.01; dnsZonePerRun = 0.5
@@ -44,7 +44,7 @@ $approval = @{
 Assert-SpikeExecutionApproval $approval $manifest -Now $now
 $approval.appKeyFingerprint = 'invalid'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
-$approval.appKeyFingerprint = 'e' * 64
+$approval.appKeyFingerprint = [Convert]::ToBase64String([byte[]]::new(32))
 $approval.secretReadApproved = $false
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.secretReadApproved = $true
@@ -61,6 +61,30 @@ $approval.unexpected = 'fake-input'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.Remove('unexpected')
 $module = Get-Module Execution
+& $module {
+    $fixture = [Security.Cryptography.RSA]::Create(2048)
+    $other = [Security.Cryptography.RSA]::Create(2048)
+    try {
+        $fingerprint = [Convert]::ToBase64String([Security.Cryptography.SHA256]::HashData($fixture.ExportSubjectPublicKeyInfo()))
+        $manifest = @{ appKeyFingerprint = $fingerprint }
+        $approval = @{ appKeyFingerprint = $fingerprint }
+        Assert-SpikeAppKeyBinding $fixture.ExportRSAPrivateKeyPem() $manifest $approval
+        Assert-SpikeAppKeyBinding $fixture.ExportPkcs8PrivateKeyPem() $manifest $approval
+        foreach ($invalid in @(
+            @{ pem = $fixture.ExportRSAPrivateKeyPem(); ledger = [Convert]::ToBase64String([byte[]]::new(32)); approval = $fingerprint },
+            @{ pem = $fixture.ExportRSAPrivateKeyPem(); ledger = $fingerprint; approval = [Convert]::ToBase64String([byte[]]::new(32)) },
+            @{ pem = $other.ExportRSAPrivateKeyPem(); ledger = $fingerprint; approval = $fingerprint },
+            @{ pem = '-----BEGIN PRIVATE KEY-----sensitive-fixture-----END PRIVATE KEY-----'; ledger = $fingerprint; approval = $fingerprint }
+        )) {
+            $message = $null
+            try { Assert-SpikeAppKeyBinding $invalid.pem @{ appKeyFingerprint = $invalid.ledger } @{ appKeyFingerprint = $invalid.approval } }
+            catch { $message = $_.Exception.Message }
+            if (-not $message -or $message -match 'BEGIN|sensitive-fixture' -or $message.Contains($fingerprint)) {
+                throw 'Key-binding fixture accepted mismatch or exposed credential details.'
+            }
+        }
+    } finally { $fixture.Dispose(); $other.Dispose() }
+}
 & $module {
     param($manifest, $approval)
     function script:New-SpikeCustomData { return 'Y2xvdWQtY29uZmln' }
@@ -188,7 +212,12 @@ try {
     $env:GHR_SPIKE_ENVIRONMENT = 'spike-vmss'
     $dispatchManifest.temporaryIdentityClientId = '11111111-1111-1111-1111-111111111111'
     $env:GHR_SPIKE_AZURE_CLIENT_ID = $dispatchManifest.temporaryIdentityClientId
-    $env:GHR_SPIKE60_APP_PRIVATE_KEY = 'fixture PRIVATE KEY-----'
+    $dispatchFixture = [Security.Cryptography.RSA]::Create(2048)
+    $env:GHR_SPIKE60_APP_PRIVATE_KEY = $dispatchFixture.ExportRSAPrivateKeyPem()
+    $dispatchManifest.appKeyFingerprint = [Convert]::ToBase64String(
+        [Security.Cryptography.SHA256]::HashData($dispatchFixture.ExportSubjectPublicKeyInfo()))
+    $approval.appKeyFingerprint = $dispatchManifest.appKeyFingerprint
+    $dispatchFixture.Dispose()
     & $module {
         param($manifest, $approval, $directory)
         function script:Assert-SpikeExecutionApproval {}

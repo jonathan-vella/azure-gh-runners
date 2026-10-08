@@ -42,7 +42,7 @@ function Assert-SpikeExecutionApproval {
         $Approval.canonicalUbuntuVersion -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or
         ($Approval.installationId -isnot [long] -and $Approval.installationId -isnot [int]) -or
         $Approval.installationId -le 0 -or $Approval.archiveSha256 -cnotmatch '^[a-f0-9]{64}$' -or
-        $Approval.appKeyFingerprint -cnotmatch '^[a-f0-9]{64}$' -or
+        $Approval.appKeyFingerprint -cnotmatch '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$' -or
         $Approval.smokeCommitSha -cnotmatch '^[a-f0-9]{40}$' -or $Approval.smokeWorkflowBlobSha -cnotmatch '^[a-f0-9]{40}$' -or
         $Approval.adminSshPublicKey -cnotmatch '^(ssh-ed25519|ssh-rsa) [A-Za-z0-9+/]+={0,2}$' -or
         $Approval.adminSshPublicKey.Length -gt 4096 -or
@@ -50,6 +50,9 @@ function Assert-SpikeExecutionApproval {
         throw 'Exact execution/secret authorization and immutable nonsecret inputs required.'
     }
     $null = Get-SpikeCombinedPrice -Pricing $Approval.pricing -Now $Now
+    if ($Manifest.appKeyFingerprint -and $Approval.appKeyFingerprint -cne $Manifest.appKeyFingerprint) {
+        throw 'Approval fingerprint differs from the original identity ledger.'
+    }
     $quota = $Approval.quota
     $headroom = @{ networkInterfaces = 3; premiumDisks = 2; natGateways = 1; publicIps = 1; privateEndpoints = 1; privateDnsZones = 1 }
     if ($quota -isnot [hashtable] -or $quota.Count -ne ($headroom.Count + 3) -or
@@ -307,6 +310,36 @@ jq --arg result "$result" '{runId,runOrdinal,head,startedUtc,attempts:(.attempts
     [IO.File]::WriteAllText($Path, ($evidence | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
 }
 
+function Assert-SpikeAppKeyBinding {
+    param([string]$Pem, [hashtable]$Manifest, [hashtable]$Approval)
+    if ($Manifest.appKeyFingerprint -cnotmatch '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$' -or
+        $Approval.appKeyFingerprint -cne $Manifest.appKeyFingerprint) {
+        throw 'Approval fingerprint differs from the original identity ledger.'
+    }
+    if (-not $Pem -or $Pem.Length -gt 16384 -or
+        $Pem -cnotmatch '(?s)^\s*-----BEGIN (RSA PRIVATE KEY|PRIVATE KEY)-----[A-Za-z0-9+/=\r\n]+-----END \1-----\s*$') {
+        throw 'Scoped spike App key unavailable or invalid; credential details suppressed.'
+    }
+    $rsa = [Security.Cryptography.RSA]::Create()
+    $publicDer = $null
+    $digest = $null
+    try {
+        try {
+            $rsa.ImportFromPem($Pem)
+            $publicDer = $rsa.ExportSubjectPublicKeyInfo()
+            $digest = [Security.Cryptography.SHA256]::HashData($publicDer)
+        } catch { throw 'Scoped spike App key cannot be verified; credential details suppressed.' }
+        if ([Convert]::ToBase64String($digest) -cne $Manifest.appKeyFingerprint) {
+            throw 'Supplied spike App key differs from the approved ledger fingerprint; credential details suppressed.'
+        }
+    } finally {
+        $rsa.Dispose()
+        if ($publicDer) { [Array]::Clear($publicDer) }
+        if ($digest) { [Array]::Clear($digest) }
+        $Pem = $null
+    }
+}
+
 function Assert-SpikeSourceDisabled {
     if (-not $script:executionSourceEnabled) {
         throw 'Deployment disabled: issue 81 requires reviewed identity handoff and independent operator recovery direction.'
@@ -330,10 +363,7 @@ function Invoke-SpikeExecution {
         throw 'No resumed deployments or insufficient original work window.'
     }
     $key = [Environment]::GetEnvironmentVariable('GHR_SPIKE60_APP_PRIVATE_KEY')
-    if (-not $key -or $key.Length -gt 16384 -or -not $key.Contains('PRIVATE KEY-----')) {
-        throw 'Owner-supplied spike-only App key unavailable; never use the production key or retrieve it locally.'
-    }
-    $Manifest.appKeyFingerprint = $Approval.appKeyFingerprint
+    Assert-SpikeAppKeyBinding $key $Manifest $Approval
     Write-SpikeManifest -Manifest $Manifest -Path $Path
     Assert-SpikePreflight $Manifest $Approval
     $foundationDeploymentName = Get-SpikeFoundationDeploymentName $Manifest

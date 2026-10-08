@@ -50,7 +50,7 @@ for (const step of Object.keys(state.runs[0].steps)) {
   if (Object.hasOwn(ids,step)) state = m.transitionIdentityEnvelope(state,'capture',
     { step, id:ids[step], clientId:ids.client });
   if (step === 'seedConfirmation') state = m.transitionIdentityEnvelope(state,'record-key-fingerprint',
-    { fingerprint:'f'.repeat(64) });
+    { fingerprint:Buffer.alloc(32, 1).toString('base64') });
   state = m.transitionIdentityEnvelope(state, 'verify', { step, claims, seedConfirmed:true });
 }
 state = m.transitionIdentityEnvelope(state, 'reserve', { step:'foundation', now });
@@ -69,7 +69,7 @@ try {
         [DateTimeOffset]::Parse($manifest.startedUtc) -ne $now -or
         [DateTimeOffset]::Parse($manifest.hardDeadlineUtc) -ne $now.AddHours(4) -or
         $manifest.temporaryIdentityClientId -cne $state.runs[0].ids.client -or
-        $manifest.appKeyFingerprint -cne ('f' * 64)) {
+        $manifest.appKeyFingerprint -cne [Convert]::ToBase64String([byte[]](1..32 | ForEach-Object { 1 }))) {
         throw 'Runtime bridge reset original envelope or lost exact temporary identity.'
     }
     $state.runs[0].steps.seedConfirmation = 'reserved'

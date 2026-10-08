@@ -169,7 +169,7 @@ export function validateIdentityEnvelope(state) {
       exact(Object.keys(run.additionalKeyEvidence ?? {}).sort(), ['separatelyApproved', 'keyReady', 'fingerprint'].sort(),
         'A second seeded run needs separately approved fresh-key-ready evidence.');
       check(run.additionalKeyEvidence.separatelyApproved === true && run.additionalKeyEvidence.keyReady === true &&
-        /^[a-f0-9]{64}$/.test(run.additionalKeyEvidence.fingerprint) &&
+        /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/.test(run.additionalKeyEvidence.fingerprint) &&
         run.additionalKeyEvidence.fingerprint !== state.runs[0].credential.fingerprint,
       'ONE scoped key does not authorize key two or reuse of the revoked first key.');
     } else {
@@ -177,7 +177,7 @@ export function validateIdentityEnvelope(state) {
     }
     exact(Object.keys(run.credential).sort(), ['fingerprint', 'revocation'].sort(), 'Invalid nonsecret credential evidence.');
     check(['not-requested', 'pending', 'confirmed'].includes(run.credential.revocation) &&
-      (run.credential.fingerprint === null || /^[a-f0-9]{64}$/.test(run.credential.fingerprint)),
+      (run.credential.fingerprint === null || /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/.test(run.credential.fingerprint)),
     'Invalid owner-supplied public-key SHA256 fingerprint.');
     if (run.steps.seedConfirmation === 'pending') {
       check(run.credential.revocation === 'not-requested' && run.credential.fingerprint === null, 'Unrequested key evidence.');
@@ -255,7 +255,7 @@ export function transitionIdentityEnvelope(state, action, input = {}) {
     } else if (action === 'record-key-fingerprint') {
       check(run.steps.seedConfirmation === 'reserved' &&
         (run.credential.fingerprint === null || run.credential.fingerprint === input.fingerprint) &&
-        typeof input.fingerprint === 'string' && /^[a-f0-9]{64}$/.test(input.fingerprint),
+        typeof input.fingerprint === 'string' && /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/.test(input.fingerprint),
       'Capture exactly one owner-supplied nonsecret SHA256 public-key fingerprint.');
       run.credential.fingerprint = input.fingerprint;
     } else if (action === 'confirm-key-revocation') {

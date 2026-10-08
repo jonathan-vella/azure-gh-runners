@@ -69,8 +69,14 @@ and temporary-copy deletion. This supersedes the earlier mandatory owner-only UI
 Production keys/`platform-prod` remain untouched. The coordinator exclusively verifies and executes that safe
 tool path; this child/adapter implements **no** key generation, private-key read/transfer, duplicate creation
 or revocation API. A tool-availability blocker is not missing owner authorization and never permits substitution.
-Record the approved coordinator's nonsecret SHA256 public-key fingerprint (64 lowercase hex) and actual seed
+Record the approved coordinator's canonical GitHub App fingerprint (SHA256 over DER SubjectPublicKeyInfo,
+standard padded base64: 44 characters representing 32 bytes) and actual seed
 confirmation, and wait only inside the original clock. Secret metadata existence is not confirmation.
+The executor requires approval fingerprint equality with the original ledger and derives the supplied PEM's
+SPKI fingerprint in memory before any ARM work. PKCS1/PKCS8 encodings normalize to the same public identity;
+no fingerprint overwrite, private-key file/subprocess argument or sensitive crypto-error output is permitted.
+This follows [GitHub's fingerprint verification](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps#verifying-private-keys);
+hex and SSH-style fingerprints are not accepted.
 Missing actual key-ready evidence/secret fails closed;
 the intended workflow consumes it only through an owner-only temporary ARM secure parameter file, never argv,
 logs, uploaded artifacts or a local checkout. Nonbillable environment pre-staging is not implemented or authorized

@@ -98,7 +98,7 @@ test('bounded adapter creates exact reserved objects, waits owner, then pays cle
     const state = JSON.parse(readFileSync(f.path, 'utf8'));
     assert.equal(state.startedUtc, now);
     assert.equal(state.runs[0].steps.seedConfirmation, 'reserved');
-    updateIdentityEnvelope(f.path, 'record-key-fingerprint', { fingerprint: 'f'.repeat(64) });
+    updateIdentityEnvelope(f.path, 'record-key-fingerprint', { fingerprint: Buffer.alloc(32, 1).toString('base64') });
     const cleaned = await cleanupTemporaryIdentity(f.path, mock.invoke);
     assert.deepEqual(cleaned, { status: 'credential-revocation', credentialRevocationPending: true });
     assert.equal(mock.cloud.group, null);

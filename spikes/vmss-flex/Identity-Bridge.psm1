@@ -19,7 +19,7 @@ function ConvertTo-SpikeRuntimeManifest {
     $run = $state.runs[-1]
     if ($run.phase -cne 'active' -or $run.steps.seedConfirmation -cne 'verified' -or
         $run.steps.foundation -cne 'reserved' -or $run.credential.revocation -cne 'pending' -or
-        $run.credential.fingerprint -cnotmatch '^[a-f0-9]{64}$' -or
+        $run.credential.fingerprint -cnotmatch '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$' -or
         $run.ids.client -cnotmatch '^[a-f0-9-]{36}$' -or $run.ids.servicePrincipal -cnotmatch '^[a-f0-9-]{36}$') {
         throw 'Actual scoped coordinator seed evidence and durably reserved original foundation handoff required.'
     }

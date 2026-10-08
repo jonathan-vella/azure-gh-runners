@@ -12,7 +12,7 @@ import {
 
 const now = '2026-10-08T05:00:00.000Z';
 const head = 'a'.repeat(40);
-const fingerprint = 'f'.repeat(64);
+const fingerprint = Buffer.alloc(32, 1).toString('base64');
 const pricing = {
   refreshedUtc: now, b2sHourly: 0.0432, d2lsHourly: 0.091, p4Hourly: 5.8072 / 672,
   natHourly: 0.045, pipHourly: 0.005, peHourly: 0.01, dnsZonePerRun: 0.5,
@@ -171,13 +171,16 @@ test('reserved RG create timeout still enters exact-owned cleanup, never another
   assert.throws(() => cleanupPlan(state, { ...empty, resourceGroup: { ...own, id: scope.replace('spike-vmss', 'prod') } }), /Unowned/);
 });
 
-test('environment subject readback and explicit manual-seed confirmation are gates', () => {
+test('environment subject, canonical GitHub fingerprint and coordinator seed evidence are gates', () => {
   let state = bootstrap();
   state = transitionIdentityEnvelope(state, 'reserve', { step: 'seedConfirmation', now });
   for (const seedConfirmed of [undefined, false, 'true']) {
     assert.throws(() => transitionIdentityEnvelope(state, 'verify', { step: 'seedConfirmation', seedConfirmed }), /seed evidence/);
   }
   assert.throws(() => transitionIdentityEnvelope(state, 'verify', { step: 'seedConfirmation', seedConfirmed: true }), /fingerprint/);
+  for (const invalid of ['f'.repeat(64), `SHA256:${fingerprint}`, fingerprint.replace(/=$/, ''), 'f'.repeat(43) + '=']) {
+    assert.throws(() => transitionIdentityEnvelope(state, 'record-key-fingerprint', { fingerprint: invalid }), /fingerprint/);
+  }
   state = transitionIdentityEnvelope(state, 'record-key-fingerprint', { fingerprint });
   state = transitionIdentityEnvelope(state, 'verify', { step: 'seedConfirmation', seedConfirmed: true });
   state = completeStep(state, 'foundation');
@@ -216,12 +219,12 @@ test('paid cleanup never waits for owner revocation, but complete cleanup and se
   assert.equal(Object.values(state.runs[0].cleanup).every(value => value === 'absent'), true);
   assert.throws(() => begin(state), /cleanup/);
   assert.throws(() => transitionIdentityEnvelope(state, 'confirm-key-revocation', { fingerprint, revocationConfirmed: false }), /coordinator/);
-  assert.throws(() => transitionIdentityEnvelope(state, 'confirm-key-revocation', { fingerprint: 'e'.repeat(64), revocationConfirmed: true }), /exact/);
+  assert.throws(() => transitionIdentityEnvelope(state, 'confirm-key-revocation', { fingerprint: Buffer.alloc(32, 2).toString('base64'), revocationConfirmed: true }), /exact/);
   state = transitionIdentityEnvelope(state, 'confirm-key-revocation', { fingerprint, revocationConfirmed: true });
   assert.equal(state.runs[0].phase, 'closed');
   assert.throws(() => begin(state), /second seeded run/);
   const second = transitionIdentityEnvelope(state, 'begin', { now, pricing,
-    additionalKeyEvidence: { separatelyApproved: true, keyReady: true, fingerprint: 'e'.repeat(64) } });
+    additionalKeyEvidence: { separatelyApproved: true, keyReady: true, fingerprint: Buffer.alloc(32, 2).toString('base64') } });
   assert.equal(second.runOrdinal, 2);
 });
 

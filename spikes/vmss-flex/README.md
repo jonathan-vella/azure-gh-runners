@@ -43,6 +43,9 @@ no key has been created. Production keys and `platform-prod` remain untouched.
 The workflow maps only this dedicated environment secret to `GHR_SPIKE60_APP_PRIVATE_KEY` for the ARM secure
 parameter-file step. Missing actual seed evidence, fingerprint or secret fails closed. The legacy runtime field
 `ownerRevocationConfirmed` records actual approved delegated coordinator evidence, not an owner-only UI mandate.
+App fingerprints use GitHub's SHA256 over DER SubjectPublicKeyInfo, standard padded base64 (44 characters).
+Before ARM, the supplied PEM is imported in memory and its public fingerprint must match BOTH immutable ledger
+and approval. PKCS1/PKCS8 normalize identically; no private-key subprocess/file is used for verification.
 
 Paid cleanup is RG first, then exact Owner assignment, FIC, app, SP and environment. Credential revocation never
 delays it, but pending revocation prevents full cleanup or another seeded run.

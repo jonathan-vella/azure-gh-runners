@@ -57,7 +57,7 @@ function Assert-SpikeManifest {
     $expected.runOrdinal = $Manifest.runOrdinal
     $expected.keyVaultName = Get-SpikeKeyVaultName -RunId $Manifest.runId -RunOrdinal $Manifest.runOrdinal
     $expected.keyVaultSecretScope = Get-SpikeSecretScope $expected
-    if ($null -ne $Manifest.appKeyFingerprint -and $Manifest.appKeyFingerprint -cnotmatch '^[a-f0-9]{64}$') {
+    if ($null -ne $Manifest.appKeyFingerprint -and $Manifest.appKeyFingerprint -cnotmatch '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$') {
         throw 'Invalid nonsecret spike App-key fingerprint.'
     }
     if ($Manifest.ownerRevocationConfirmed -isnot [bool] -or
