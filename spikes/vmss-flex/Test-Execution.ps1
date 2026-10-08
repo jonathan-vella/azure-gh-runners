@@ -28,11 +28,13 @@ $approval = @{
     workflowRef = 'jonathan-vella/ghr-smoke/.github/workflows/vmss-smoke.yml@refs/heads/main'
     smokeCommitSha = ('c' * 40); smokeWorkflowBlobSha = ('d' * 40)
     archiveSha256 = ('b' * 64); adminSshPublicKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefixture'
-    appKeyFingerprint = ('e' * 64)
+    appKeyFingerprint = [Convert]::ToBase64String([byte[]]::new(32))
     pricing = @{
         refreshedUtc = $now.ToString('o'); b2sHourly = 0.0432; d2lsHourly = 0.091; p4Hourly = 0.008
-        natHourly = 0.06; pipHourly = 0.01; peHourly = 0.02; dnsZoneHourly = 0.001
-        natGb = 0.02; egressGb = 0.05; peGb = 0.01; dnsMillionQueries = 0.2
+        natHourly = 0.045; pipHourly = 0.005; peHourly = 0.01; dnsZonePerRun = 0.5
+        natGb = 0.02; egressGb = 0.05; peIngressGb = 0.01; peEgressGb = 0.01; dnsMillionQueries = 0.2
+        kvPerRunCeilingUsd = 0.1; logsCombinedCeilingUsd = 0.5; imageCombinedCeilingUsd = 1
+        cleanupReserveUsd = 2; miscCombinedCeilingUsd = 0.5
     }
     quota = @{
         subscription = $manifest.subscription; location = 'swedencentral'; refreshedUtc = $now.ToString('o')
@@ -42,7 +44,7 @@ $approval = @{
 Assert-SpikeExecutionApproval $approval $manifest -Now $now
 $approval.appKeyFingerprint = 'invalid'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
-$approval.appKeyFingerprint = 'e' * 64
+$approval.appKeyFingerprint = [Convert]::ToBase64String([byte[]]::new(32))
 $approval.secretReadApproved = $false
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.secretReadApproved = $true
@@ -59,6 +61,30 @@ $approval.unexpected = 'fake-input'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.Remove('unexpected')
 $module = Get-Module Execution
+& $module {
+    $fixture = [Security.Cryptography.RSA]::Create(2048)
+    $other = [Security.Cryptography.RSA]::Create(2048)
+    try {
+        $fingerprint = [Convert]::ToBase64String([Security.Cryptography.SHA256]::HashData($fixture.ExportSubjectPublicKeyInfo()))
+        $manifest = @{ appKeyFingerprint = $fingerprint }
+        $approval = @{ appKeyFingerprint = $fingerprint }
+        Assert-SpikeAppKeyBinding $fixture.ExportRSAPrivateKeyPem() $manifest $approval
+        Assert-SpikeAppKeyBinding $fixture.ExportPkcs8PrivateKeyPem() $manifest $approval
+        foreach ($invalid in @(
+            @{ pem = $fixture.ExportRSAPrivateKeyPem(); ledger = [Convert]::ToBase64String([byte[]]::new(32)); approval = $fingerprint },
+            @{ pem = $fixture.ExportRSAPrivateKeyPem(); ledger = $fingerprint; approval = [Convert]::ToBase64String([byte[]]::new(32)) },
+            @{ pem = $other.ExportRSAPrivateKeyPem(); ledger = $fingerprint; approval = $fingerprint },
+            @{ pem = '-----BEGIN PRIVATE KEY-----sensitive-fixture-----END PRIVATE KEY-----'; ledger = $fingerprint; approval = $fingerprint }
+        )) {
+            $message = $null
+            try { Assert-SpikeAppKeyBinding $invalid.pem @{ appKeyFingerprint = $invalid.ledger } @{ appKeyFingerprint = $invalid.approval } }
+            catch { $message = $_.Exception.Message }
+            if (-not $message -or $message -match 'BEGIN|sensitive-fixture' -or $message.Contains($fingerprint)) {
+                throw 'Key-binding fixture accepted mismatch or exposed credential details.'
+            }
+        }
+    } finally { $fixture.Dispose(); $other.Dispose() }
+}
 & $module {
     param($manifest, $approval)
     function script:New-SpikeCustomData { return 'Y2xvdWQtY29uZmln' }
@@ -163,7 +189,7 @@ Reject { Assert-SpikeCleanupPermission $manifest }
 $executionEnvironment = @(
     'GHR_SPIKE60_EXECUTION_ENABLED', 'GITHUB_ACTIONS', 'GITHUB_RUN_ATTEMPT',
     'GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_SHA', 'GHR_SPIKE_ENVIRONMENT',
-    'GHR_SPIKE60_APP_PRIVATE_KEY'
+    'GHR_SPIKE60_APP_PRIVATE_KEY', 'GHR_SPIKE_AZURE_CLIENT_ID'
 )
 $executionSaved = @{}
 foreach ($name in $executionEnvironment) { $executionSaved[$name] = [Environment]::GetEnvironmentVariable($name) }
@@ -183,8 +209,15 @@ try {
     $env:GITHUB_REPOSITORY = 'jonathan-vella/azure-gh-runners'
     $env:GITHUB_REF = 'refs/heads/main'
     $env:GITHUB_SHA = $dispatchManifest.head
-    $env:GHR_SPIKE_ENVIRONMENT = 'platform-prod'
-    $env:GHR_SPIKE60_APP_PRIVATE_KEY = 'fixture PRIVATE KEY-----'
+    $env:GHR_SPIKE_ENVIRONMENT = 'spike-vmss'
+    $dispatchManifest.temporaryIdentityClientId = '11111111-1111-1111-1111-111111111111'
+    $env:GHR_SPIKE_AZURE_CLIENT_ID = $dispatchManifest.temporaryIdentityClientId
+    $dispatchFixture = [Security.Cryptography.RSA]::Create(2048)
+    $env:GHR_SPIKE60_APP_PRIVATE_KEY = $dispatchFixture.ExportRSAPrivateKeyPem()
+    $dispatchManifest.appKeyFingerprint = [Convert]::ToBase64String(
+        [Security.Cryptography.SHA256]::HashData($dispatchFixture.ExportSubjectPublicKeyInfo()))
+    $approval.appKeyFingerprint = $dispatchManifest.appKeyFingerprint
+    $dispatchFixture.Dispose()
     & $module {
         param($manifest, $approval, $directory)
         function script:Assert-SpikeExecutionApproval {}
@@ -198,10 +231,11 @@ try {
             throw 'execution-dispatch-captured'
         }
         $path = Join-Path $directory 'manifest.json'
+        $script:executionSourceEnabled = $true
         try { Invoke-SpikeExecution $manifest $path $approval }
         catch {
             if ($_.Exception.Message -cne 'execution-dispatch-captured') { throw }
-        }
+        } finally { $script:executionSourceEnabled = $false }
         $expected = Get-SpikeFoundationDeploymentName $manifest
         if ($script:dispatchedFoundationName -cne $expected) {
             throw 'Execution dispatch did not use the deterministic ordinal deployment name.'
@@ -271,4 +305,27 @@ try {
         }
     } finally { Remove-Item -LiteralPath $directory -Recurse -Force }
 } finally { $env:GHR_SPIKE60_EXECUTION_ENABLED = $saved }
+& {
+    $tokens = $null
+    $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $PSScriptRoot 'Supervisor.ps1'), [ref]$tokens, [ref]$errors)
+    if ($errors.Count -ne 0) { throw 'Supervisor failed to parse.' }
+    $cleanupTry = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.TryStatementAst] -and
+        $node.Finally.Extent.Text -like '*Remove-OwnedSpike*'
+    }, $true)
+    if (-not $cleanupTry) { throw 'Supervisor cleanup finally missing.' }
+    $cleanupReceipt = @{ called = $false }
+    function Invoke-SpikeCommand { throw 'synthetic-supervisor-observation-failed' }
+    function Remove-OwnedSpike { param($Manifest, $Path) $cleanupReceipt.called = $true }
+    $stop = [DateTimeOffset]::UtcNow.AddMinutes(1)
+    $manifest = @{ subscription = 'fixture'; resourceGroup = 'fixture' }
+    $ManifestPath = 'fixture'
+    try { & ([scriptblock]::Create($cleanupTry.Extent.Text)) }
+    catch {
+        if ($_.Exception.Message -cne 'synthetic-supervisor-observation-failed') { throw }
+    }
+    if (-not $cleanupReceipt.called) { throw 'Supervisor observation failure skipped independent cleanup.' }
+}
 Write-Output 'Execution/secret/cost gates, permission exclusions and disabled entrypoint passed offline.'

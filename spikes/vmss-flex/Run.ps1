@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory)][ValidateSet('Prepare', 'Inspect', 'Execute', 'Cleanup')][string]$Action,
     [Parameter(Mandatory)][string]$ManifestPath,
     [string]$Head,
+    [string]$IdentityEnvelopePath,
     [switch]$ConfirmCoordinatorCleanupDirection,
     [string]$ApprovalPath,
     [switch]$ConfirmCoordinatorExecutionDirection
@@ -17,7 +18,11 @@ $lock = [IO.File]::Open("$path.lock", [IO.FileMode]::OpenOrCreate, [IO.FileAcces
 try {
     if ($Action -eq 'Prepare') {
         if (Test-Path -LiteralPath $path) { throw 'Manifest already exists; do not reset run history.' }
-        Write-SpikeManifest -Manifest (New-SpikeManifest -Head $Head) -Path $path
+        if (-not $IdentityEnvelopePath) { throw 'Original reserved identity envelope required; never create a hosted clock or nonce.' }
+        Import-Module (Join-Path $PSScriptRoot 'Identity-Bridge.psm1')
+        $state = Read-SpikeIdentityEnvelope $IdentityEnvelopePath
+        if ($Head -and $state.head -cne $Head) { throw 'Identity envelope differs from exact reviewed head.' }
+        Write-SpikeManifest -Manifest (ConvertTo-SpikeRuntimeManifest $state) -Path $path
         Write-Output 'Offline preparation complete. No cloud calls; deployment remains disabled.'
         return
     }
@@ -49,6 +54,8 @@ try {
         }
     } elseif ($Action -eq 'Cleanup') {
         if (-not $ConfirmCoordinatorCleanupDirection) { throw 'Exact coordinator cleanup direction required.' }
+        Import-Module (Join-Path $PSScriptRoot 'Execution.psm1')
+        Assert-SpikeSourceDisabled
         Remove-OwnedSpike -Manifest $manifest -Path $path
         Write-Output 'Exact spike resource group absence verified.'
     } else {

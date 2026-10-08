@@ -18,7 +18,7 @@ try {
     $manifest.runId = 'invalid'
     Reject { Assert-SpikeManifest $manifest } 'Invalid run nonce accepted with an integer attempt counter.'
     $manifest.runId = $id
-    Assert ($manifest.envelopeUsd -eq ($manifest.hourlyCeilingUsd * 4 + $manifest.fixedReserveUsd)) 'Budget envelope math failed.'
+    Assert ($manifest.capUsd -eq 10 -and -not $manifest.ContainsKey('envelopeUsd')) 'Obsolete partial budget bypass retained.'
     $manifest.extraSecret = 'not-a-real-secret'
     Reject { Assert-SpikeManifest $manifest } 'Unexpected fields accepted.'
     $manifest.Remove('extraSecret')
@@ -28,6 +28,7 @@ try {
     Reject { Remove-OwnedSpike -Manifest $manifest -Path $path } 'Prepared run reached cloud cleanup.'
     $start = [DateTimeOffset]::Parse('2026-10-07T20:00:00Z')
     Start-SpikeClock -Manifest $manifest -Path $path -Now $start
+    Reject { Remove-OwnedSpike -Manifest $manifest -Path $path } 'Source-disabled cleanup reached Azure.'
     Reject { Start-SpikeClock -Manifest $manifest -Path $path -Now $start } 'Run clock reset accepted.'
     Write-SpikeManifest -Manifest $manifest -Path $path
     Reserve-SpikeAttempt -Manifest $manifest -Path $path -Seconds 60 -Workers 2 -Now $start
@@ -45,7 +46,8 @@ try {
     $manifest.capUsd = 10
     $owned = [pscustomobject]@{
         id = $manifest.scope; name = $manifest.resourceGroup; location = 'swedencentral'
-        tags = @{ 'spike-id' = '60'; 'spike-run-id' = $manifest.runId; 'spike-head' = $manifest.head }
+        tags = @{ 'spike-id' = '60'; 'spike-run-id' = $manifest.runId; 'spike-head' = $manifest.head
+            'spike-run-ordinal' = [string]$manifest.runOrdinal }
     }
     Assert-OwnedSpikeGroup -Manifest $manifest -Group $owned
     $owned.tags.'spike-run-id' = 'foreign'
@@ -53,6 +55,7 @@ try {
 
     $module = Get-Module Safety
     & $module {
+        $script:cleanupSourceEnabled = $true
         function script:Invoke-SpikeAz {
             param([string[]]$Arguments, [int]$Seconds = 30)
             if ($Arguments[0] -eq 'account') {
@@ -88,7 +91,8 @@ try {
         function script:Invoke-BoundedProcess {
             param($FileName, $Arguments, $TimeoutSeconds)
             if ($Arguments[0] -ne 'group' -or $Arguments[1] -ne 'delete' -or
-                $Arguments[4] -ne '--name' -or $Arguments[5] -ne $script:group -or $TimeoutSeconds -ne 30) {
+                $Arguments[4] -ne '--name' -or $Arguments[5] -ne $script:group -or $TimeoutSeconds -ne 900 -or
+                $Arguments -contains '--no-wait') {
                 throw 'Cleanup command was not exact or bounded.'
             }
             return @{ exitCode = 0 }
@@ -101,6 +105,8 @@ try {
     Assert ($manifest.cleanup -eq 'absent-verified') 'Owned partial RG deletion not verified.'
     $manifest.phase = 'active'
     $manifest.cleanup = 'not-started'
+    $manifest.cleanupDeleteReserved = $false
+    $manifest.cleanupDeleteAcknowledged = $false
     & $module {
         $script:existsCalls = 0
         function script:Invoke-BoundedProcess { param($FileName, $Arguments, $TimeoutSeconds) return @{ exitCode = 1 } }

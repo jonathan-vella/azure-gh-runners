@@ -1,14 +1,18 @@
-name: Spike 60 - VMSS Flex (disabled pending exact authorization)
+name: Spike 60 - VMSS Flex (source-disabled)
 
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type run-spike60-reviewed only after coordinator execution direction
+        description: Type run-spike60-reviewed only after exact coordinator execution direction
         required: true
         type: string
       approval_json:
-        description: Nonsecret reviewed approval/pricing/image/tool inputs from the spike runbook
+        description: Nonsecret reviewed pricing, image, key fingerprint and recovery evidence
+        required: true
+        type: string
+      identity_envelope_json:
+        description: Original external identity ledger with foundation handoff already reserved
         required: true
         type: string
 
@@ -23,23 +27,25 @@ concurrency:
 jobs:
   prepare:
     if: >-
+      false &&
       github.ref == 'refs/heads/main' &&
       github.run_attempt == 1 &&
       github.actor == 'jonathan-vella' &&
       vars.GHR_SPIKE60_EXECUTION_ENABLED == 'true' &&
       inputs.confirmation == 'run-spike60-reviewed'
-    environment: platform-prod
+    environment: spike-vmss
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     outputs:
       manifest: ${{ steps.envelope.outputs.manifest }}
+      client: ${{ steps.envelope.outputs.client }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 24.21.0
           cache: npm
-      - name: Preserve the complete offline validation chain
+      - name: Preserve complete offline validation
         shell: pwsh
         run: |
           npm ci
@@ -47,50 +53,63 @@ jobs:
           az bicep install --version v0.48.1
           if ($LASTEXITCODE -ne 0) { throw 'Pinned compiler unavailable.' }
           npm run validate
-          if ($LASTEXITCODE -ne 0) { throw 'Validation failed; no clock or resources started.' }
-      - name: Start the immutable original envelope before any create
+          if ($LASTEXITCODE -ne 0) { throw 'Validation failed; operator cleanup remains mandatory.' }
+      - name: Import original clock, nonce, ordinal and captured temporary client
         id: envelope
         shell: pwsh
         env:
           APPROVAL_JSON: ${{ inputs.approval_json }}
+          IDENTITY_ENVELOPE_JSON: ${{ inputs.identity_envelope_json }}
         run: |
-          Import-Module ./spikes/vmss-flex/Safety.psm1
+          Import-Module ./spikes/vmss-flex/Identity-Bridge.psm1
           Import-Module ./spikes/vmss-flex/Execution.psm1
-          $manifest = New-SpikeManifest -Head $env:GITHUB_SHA
+          $identityPath = Join-Path $env:RUNNER_TEMP 'identity-envelope.json'
+          [IO.File]::WriteAllText($identityPath, $env:IDENTITY_ENVELOPE_JSON)
+          $state = Read-SpikeIdentityEnvelope $identityPath
+          if ($state.head -cne $env:GITHUB_SHA) { throw 'Exact reviewed main head differs from original ledger.' }
+          $manifest = ConvertTo-SpikeRuntimeManifest $state
           $approval = $env:APPROVAL_JSON | ConvertFrom-Json -AsHashtable -DateKind String
           Assert-SpikeExecutionApproval $approval $manifest
           $path = Join-Path $env:RUNNER_TEMP 'vmss60-manifest.json'
-          Start-SpikeClock $manifest $path
-          $json = $manifest | ConvertTo-Json -Compress
-          $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+          Write-SpikeManifest $manifest $path
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($manifest | ConvertTo-Json -Compress)))
           "manifest=$encoded" >> $env:GITHUB_OUTPUT
-          Write-Output $json
+          "client=$($manifest.temporaryIdentityClientId)" >> $env:GITHUB_OUTPUT
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: spike60-original-envelope
-          path: ${{ runner.temp }}/vmss60-manifest.json
+          path: |
+            ${{ runner.temp }}/vmss60-manifest.json
+            ${{ runner.temp }}/identity-envelope.json
           if-no-files-found: error
           retention-days: 7
 
   executor:
     needs: prepare
-    environment: platform-prod
+    environment: spike-vmss
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
-      GHR_SPIKE_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      GHR_SPIKE_AZURE_CLIENT_ID: ${{ needs.prepare.outputs.client }}
+      GHR_SPIKE_ENVIRONMENT: spike-vmss
     permissions:
       contents: read
       id-token: write
       actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.21.0
+      - name: Verify only sanitized actual GA environment claims
+        shell: pwsh
+        run: ./spikes/vmss-flex/Verify-Identity-Claims.ps1
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Require the independently authorized supervisor to be running
+          client-id: ${{ needs.prepare.outputs.client }}
+          tenant-id: 30bac921-1547-4b1e-8445-72455da783f1
+          subscription-id: b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
+      - name: Require independent hosted cleanup readiness
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,26 +119,26 @@ jobs:
           $gh = (Get-Command gh -CommandType Application).Source
           do {
             $response = Invoke-BoundedProcess -FileName $gh -Arguments @('api', "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/jobs?filter=latest") -TimeoutSeconds 20
-            if ($response.exitCode -ne 0) { throw 'Supervisor readiness read failed; no provisioning.' }
-            try { $jobs = ($response.stdout | ConvertFrom-Json).jobs } catch { throw 'Supervisor readiness metadata invalid.' }
+            if ($response.exitCode -ne 0) { throw 'Supervisor readiness read failed; no foundation.' }
+            try { $jobs = ($response.stdout | ConvertFrom-Json).jobs } catch { throw 'Invalid supervisor metadata.' }
             $job = @($jobs | Where-Object name -CEQ 'deadline-cleanup')
             if ($job.Count -eq 1) {
               $verified = @($job[0].steps | Where-Object { $_.name -ceq 'Verify exact cleanup authorization' -and $_.conclusion -ceq 'success' })
               $waiting = @($job[0].steps | Where-Object { $_.name -ceq 'Independent original-deadline cleanup on a separate hosted runner' -and $_.status -ceq 'in_progress' })
               if ($verified.Count -eq 1 -and $waiting.Count -eq 1) { break }
-              if ($job[0].status -ceq 'completed') { throw 'Supervisor stopped; no provisioning.' }
+              if ($job[0].status -ceq 'completed') { throw 'Supervisor stopped; no foundation.' }
             }
-            if ([DateTimeOffset]::UtcNow.AddSeconds(30) -ge $stop) { throw 'Supervisor readiness timed out; no provisioning.' }
+            if ([DateTimeOffset]::UtcNow.AddSeconds(30) -ge $stop) { throw 'Supervisor readiness timed out.' }
             Start-Sleep -Seconds 10
           } while ($true)
-      - name: Run the bounded foundation and one-worker protocol
+      - name: Run the bounded RG foundation and one-worker protocol
         shell: pwsh
         env:
           ENVELOPE: ${{ needs.prepare.outputs.manifest }}
           APPROVAL_JSON: ${{ inputs.approval_json }}
           GH_TOKEN: ${{ github.token }}
           GHR_SPIKE60_EXECUTION_ENABLED: ${{ vars.GHR_SPIKE60_EXECUTION_ENABLED }}
-          GHR_SPIKE_ENVIRONMENT: platform-prod
+          GHR_SPIKE60_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
         run: |
           $directory = Join-Path $env:RUNNER_TEMP 'vmss60'
           New-Item -ItemType Directory -Path $directory | Out-Null
@@ -141,18 +160,22 @@ jobs:
 
   deadline-cleanup:
     needs: prepare
-    environment: platform-prod
+    environment: spike-vmss
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
-      GHR_SPIKE_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      GHR_SPIKE_AZURE_CLIENT_ID: ${{ needs.prepare.outputs.client }}
+      GHR_SPIKE_ENVIRONMENT: spike-vmss
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify only sanitized actual GA environment claims
+        shell: pwsh
+        run: ./spikes/vmss-flex/Verify-Identity-Claims.ps1
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ needs.prepare.outputs.client }}
+          tenant-id: 30bac921-1547-4b1e-8445-72455da783f1
+          subscription-id: b47d2942-f5ad-4d3c-b28e-c23e4f83d97e
       - name: Verify exact cleanup authorization
         shell: pwsh
         env:

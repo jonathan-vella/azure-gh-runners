@@ -43,10 +43,10 @@ install -d -o root -g root -m 0755 /opt/ghr-source
 tar --extract --gzip --file "$work/source.tar.gz" --directory /opt/ghr-source \
   --strip-components=1 --no-same-owner
 chmod -R go-w /opt/ghr-source
-while IFS=$'\t' read -r package version; do
-  [[ $(dpkg-query -W -f='${Version}' "$package") == "$version" ]]
-done < <(jq -r '.inherited | [.jq, .curl, .python][] | [.package, .packageVersion] | @tsv' \
-  /opt/ghr-source/image/versions.json)
+# The regional image's patch baseline is not the local rootfs baseline. Install
+# the exact inherited minimum on both guests, inside existing byte/DNS quotas.
+manifest=/opt/ghr-source/image/versions.json
+/bin/bash /opt/ghr-source/spikes/vmss-flex/install-minimal-tools.sh "$manifest"
 
 if [[ $mode == worker ]]; then
   [[ $config == none ]]

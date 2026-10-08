@@ -37,12 +37,17 @@ type controllerConfig struct {
 
 type controllerJournal struct {
 	RunID             string       `json:"runId"`
+	RunOrdinal        int          `json:"runOrdinal"`
 	Head              string       `json:"head"`
 	StartedUTC        time.Time    `json:"startedUtc"`
 	Attempts          int          `json:"attempts"`
 	ScaleSetID        int          `json:"scaleSetId"`
 	ScaleSetAttempted bool         `json:"scaleSetAttempted"`
 	Worker            *ownedWorker `json:"worker"`
+}
+
+func spikeScaleSetName(runID string, ordinal int) string {
+	return "ghr-smoke-vmss-spike-" + runID + "-" + strconv.Itoa(ordinal)
 }
 
 func (c controllerConfig) validate(now time.Time) error {
@@ -65,7 +70,7 @@ func (c controllerConfig) validate(now time.Time) error {
 func controllerCleanup(ctx context.Context, config controllerConfig, api controllerAPI, arm *armClient) error {
 	var state controllerJournal
 	if readStrictJSON("/var/lib/ghr-vmss/journal.json", &state) != nil ||
-		state.RunID != config.RunID || state.Head != config.Head ||
+		state.RunID != config.RunID || state.RunOrdinal != config.RunOrdinal || state.Head != config.Head ||
 		!state.StartedUTC.Equal(config.StartedUTC) || state.Attempts < 1 || state.Attempts > 2 ||
 		state.Attempts == 2 && state.Worker == nil {
 		return errors.New("controller_cleanup_state_invalid")
@@ -352,7 +357,7 @@ func (s *spikeScaler) cleanup(ctx context.Context) error {
 			cleanupErr = writeJournal(s.path, s.state)
 		}
 	}
-	name := "ghr-smoke-vmss-spike-" + s.config.RunID
+	name := spikeScaleSetName(s.config.RunID, s.config.RunOrdinal)
 	set, err := s.api.GetRunnerScaleSet(ctx, 1, name)
 	if err != nil {
 		return errors.Join(cleanupErr, errors.New("scale_set_cleanup_lookup_failed"))
@@ -382,9 +387,10 @@ func runController(ctx context.Context, config controllerConfig, api *scaleset.C
 	}
 	s := &spikeScaler{api: api, arm: arm, config: config, template: template, path: journalPath,
 		workCtx: ctx, finished: make(chan error, 1)}
-	s.state = controllerJournal{RunID: config.RunID, Head: config.Head, StartedUTC: config.StartedUTC, Attempts: 1}
+	s.state = controllerJournal{RunID: config.RunID, RunOrdinal: config.RunOrdinal, Head: config.Head, StartedUTC: config.StartedUTC, Attempts: 1}
 	if _, err := os.Lstat(journalPath); !os.IsNotExist(err) {
 		if readStrictJSON(journalPath, &s.state) != nil || s.state.RunID != config.RunID ||
+			s.state.RunOrdinal != config.RunOrdinal ||
 			s.state.Head != config.Head || !s.state.StartedUTC.Equal(config.StartedUTC) ||
 			s.state.Attempts < 1 || s.state.Attempts > 2 ||
 			s.state.Attempts == 2 && s.state.Worker == nil {
@@ -400,7 +406,7 @@ func runController(ctx context.Context, config controllerConfig, api *scaleset.C
 	if err := writeJournal(journalPath, s.state); err != nil {
 		return err
 	}
-	name := "ghr-smoke-vmss-spike-" + config.RunID
+	name := spikeScaleSetName(config.RunID, config.RunOrdinal)
 	existing, err := api.GetRunnerScaleSet(ctx, 1, name)
 	if err != nil || existing != nil {
 		return errors.New("scale_set_lookup_or_ownership_failed")

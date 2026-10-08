@@ -11,9 +11,14 @@ test('spike workflow is disabled, owner/main-only, non-replayable and SHA-pinned
   assert.match(workflow, /github\.actor == 'jonathan-vella'/);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /vars\.GHR_SPIKE60_EXECUTION_ENABLED == 'true'/);
-  assert.doesNotMatch(workflow, /secrets\.GH_APP_PRIVATE_KEY/);
-  assert.doesNotMatch(workflow, /GH_APP_PRIVATE_KEY:/);
-  assert.equal((workflow.match(/environment: platform-prod/g) ?? []).length, 3);
+  assert.match(workflow, /false &&/);
+  assert.match(execution, /\$script:executionSourceEnabled = \$false/);
+  assert.match(workflow, /GHR_SPIKE60_APP_PRIVATE_KEY: \$\{\{ secrets\.GH_APP_PRIVATE_KEY \}\}/);
+  assert.equal((workflow.match(/environment: spike-vmss/g) ?? []).length, 3);
+  assert.doesNotMatch(workflow, /platform-prod|secrets\.AZURE_CLIENT_ID|Start-SpikeClock|New-SpikeManifest/);
+  assert.match(workflow, /Read-SpikeIdentityEnvelope/);
+  assert.match(workflow, /Verify-Identity-Claims\.ps1/);
+  assert.match(workflow, /client-id: \$\{\{ needs\.prepare\.outputs\.client \}\}/);
   for (const action of workflow.matchAll(/uses: ([^\s]+)/g)) {
     assert.match(action[1], /@[a-f0-9]{40}$/);
   }
@@ -30,7 +35,9 @@ test('independent supervisor authority and active cleanup step precede execution
 });
 
 test('executor has no role writes, includes inherited roles and checks retained dispatch history', () => {
-  assert.doesNotMatch(execution, /'role', 'assignment', 'create'|'group', 'create'|'deployment', 'group', 'create'/);
+  assert.doesNotMatch(execution, /'role', 'assignment', 'create'|@\('group', 'create'|'deployment', 'sub', 'create'/);
+  assert.match(execution, /'deployment', 'group', 'create'/);
+  assert.match(execution, /'infra\/main\.bicep'/);
   assert.equal((execution.match(/--include-inherited/g) ?? []).length, 2);
   assert.match(execution, /9980e02c-c2be-4d73-94e8-173b1dc7cf3c/);
   assert.match(execution, /4d97b98b-1d4f-4787-a291-c67834d212e7/);

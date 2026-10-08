@@ -26,6 +26,7 @@ func run() (result probeEvidence) {
 	flags.SetOutput(os.Stderr)
 	execute := flags.Bool("execute-on-private-controller", false, "requires separate coordinator execution direction")
 	runID := flags.String("run-id", "", "32 lowercase hexadecimal characters from the durable run manifest")
+	runOrdinal := flags.Int("run-ordinal", 0, "1 or 2 from the original full-run envelope")
 	installationID := flags.Int64("installation-id", 0, "existing selected-repository installation ID")
 	deadline := flags.String("work-deadline", "", "UTC work deadline from the durable run manifest")
 	controllerConfigPath := flags.String("controller-config", "", "fixed private-controller configuration path")
@@ -101,7 +102,8 @@ func run() (result probeEvidence) {
 		return probeEvidence{Result: "one_job_lifecycle_completed_acceptance_unverified"}
 	}
 	if !*execute || runtime.GOOS != "linux" || os.Geteuid() == 0 ||
-		!regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(*runID) || *installationID <= 0 {
+		!regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(*runID) || *installationID <= 0 ||
+		(*runOrdinal != 1 && *runOrdinal != 2) {
 		return probeEvidence{Result: "controller_execution_gate_failed"}
 	}
 	stop, err := time.Parse(time.RFC3339, *deadline)
@@ -129,7 +131,7 @@ func run() (result probeEvidence) {
 	defer stopSignals()
 	ctx, cancel := context.WithDeadline(signalCtx, experimentStop)
 	defer cancel()
-	id, err := probe(ctx, client, "ghr-smoke-vmss-spike-"+*runID)
+	id, err := probe(ctx, client, spikeScaleSetName(*runID, *runOrdinal))
 	if err != nil {
 		return probeEvidence{ScaleSetID: id, Result: err.Error()}
 	}

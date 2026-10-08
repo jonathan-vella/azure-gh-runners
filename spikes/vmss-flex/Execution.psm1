@@ -1,7 +1,9 @@
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Safety.psm1')
 Import-Module (Join-Path $PSScriptRoot '../../tools/spikes/keda-egress/Process.psm1')
+Import-Module (Join-Path $PSScriptRoot 'Identity-Bridge.psm1')
 $script:oidcRefreshAfter = [DateTimeOffset]::UtcNow.AddMinutes(20)
+$script:executionSourceEnabled = $false
 
 function Update-SpikeOidcLogin {
     if ($env:GITHUB_ACTIONS -cne 'true' -or [DateTimeOffset]::UtcNow -lt $script:oidcRefreshAfter) { return }
@@ -40,36 +42,16 @@ function Assert-SpikeExecutionApproval {
         $Approval.canonicalUbuntuVersion -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or
         ($Approval.installationId -isnot [long] -and $Approval.installationId -isnot [int]) -or
         $Approval.installationId -le 0 -or $Approval.archiveSha256 -cnotmatch '^[a-f0-9]{64}$' -or
-        $Approval.appKeyFingerprint -cnotmatch '^[a-f0-9]{64}$' -or
+        $Approval.appKeyFingerprint -cnotmatch '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$' -or
         $Approval.smokeCommitSha -cnotmatch '^[a-f0-9]{40}$' -or $Approval.smokeWorkflowBlobSha -cnotmatch '^[a-f0-9]{40}$' -or
         $Approval.adminSshPublicKey -cnotmatch '^(ssh-ed25519|ssh-rsa) [A-Za-z0-9+/]+={0,2}$' -or
         $Approval.adminSshPublicKey.Length -gt 4096 -or
         $Approval.workflowRef -cnotmatch '^jonathan-vella/ghr-smoke/\.github/workflows/[A-Za-z0-9_-]+\.ya?ml@refs/heads/main$') {
         throw 'Exact execution/secret authorization and immutable nonsecret inputs required.'
     }
-    $pricing = $Approval.pricing
-    $rates = @('b2sHourly', 'd2lsHourly', 'p4Hourly', 'natHourly', 'pipHourly', 'peHourly',
-        'dnsZoneHourly', 'natGb', 'egressGb', 'peGb', 'dnsMillionQueries')
-    if ($pricing -isnot [hashtable] -or $pricing.Count -ne ($rates.Count + 1) -or
-        @($rates | Where-Object { -not $pricing.ContainsKey($_) }).Count -ne 0) {
-        throw 'Complete refreshed USD pricing evidence is required.'
-    }
-    $stamp = [DateTimeOffset]::ParseExact($pricing.refreshedUtc, 'o', [cultureinfo]::InvariantCulture)
-    if ($stamp -gt $Now -or $stamp -lt $Now.AddHours(-24)) { throw 'Pricing evidence is stale or in the future.' }
-    foreach ($key in $rates) {
-        if ($pricing[$key] -is [string] -or $pricing[$key] -is [bool] -or
-            -not [double]::IsFinite([double]$pricing[$key]) -or [double]$pricing[$key] -le 0) {
-            throw 'Every priced meter requires a finite positive USD rate.'
-        }
-    }
-    $hourly = $pricing.b2sHourly + 2 * $pricing.d2lsHourly + 3 * $pricing.p4Hourly +
-        $pricing.natHourly + $pricing.pipHourly + 2 * $pricing.peHourly + 2 * $pricing.dnsZoneHourly
-    # Two sequential full runs each have a controller and one worker; guest byte/DNS quotas reset per VM.
-    $variable = 2 * (8.589934592 * $pricing.natGb + 4.294967296 * ($pricing.egressGb + $pricing.peGb)) +
-        ((4 * 14400 * 2 + 80) / 1000000) * $pricing.dnsMillionQueries
-    if ($hourly -gt $Manifest.hourlyCeilingUsd -or $variable -gt 1.5 -or
-        4 * $hourly + $Manifest.fixedReserveUsd -gt $Manifest.envelopeUsd) {
-        throw 'Refreshed conservative pricing exceeds the original envelope; no deployment.'
+    $null = Get-SpikeCombinedPrice -Pricing $Approval.pricing -Now $Now
+    if ($Manifest.appKeyFingerprint -and $Approval.appKeyFingerprint -cne $Manifest.appKeyFingerprint) {
+        throw 'Approval fingerprint differs from the original identity ledger.'
     }
     $quota = $Approval.quota
     $headroom = @{ networkInterfaces = 3; premiumDisks = 2; natGateways = 1; publicIps = 1; privateEndpoints = 1; privateDnsZones = 1 }
@@ -90,10 +72,9 @@ function Assert-SpikeExecutionApproval {
 function Assert-SpikeCleanupPermission {
     param([hashtable]$Manifest)
     $permissions = Invoke-SpikeCommand @('rest', '--method', 'get', '--url',
-        "https://management.azure.com/subscriptions/$($Manifest.subscription)/providers/Microsoft.Authorization/permissions?api-version=2022-04-01",
+        "https://management.azure.com$($Manifest.scope)/providers/Microsoft.Authorization/permissions?api-version=2022-04-01",
         '--subscription', $Manifest.subscription, '-o', 'json', '--only-show-errors')
-    foreach ($action in @('Microsoft.Resources/subscriptions/resourceGroups/write',
-        'Microsoft.Resources/subscriptions/resourceGroups/delete', 'Microsoft.Resources/deployments/write')) {
+    foreach ($action in @('Microsoft.Resources/subscriptions/resourceGroups/delete', 'Microsoft.Resources/deployments/write')) {
         $allowed = $false
         foreach ($permission in $permissions.value) {
             if ($permission.ContainsKey('condition') -and $permission.condition) { continue }
@@ -183,11 +164,10 @@ function Assert-SpikePreflight {
     if ($account.id -cne $sub -or $account.tenantId -cne $Manifest.tenant -or $account.name -cne 'shared') {
         throw 'Exact shared subscription and tenant required.'
     }
-    if (Invoke-SpikeCommand @('group', 'exists', '--subscription', $sub, '-n', $Manifest.resourceGroup, '-o', 'json')) {
-        throw 'Spike RG already exists; recover its original manifest, never overwrite it.'
-    }
+    $group = Invoke-SpikeCommand @('group', 'show', '--subscription', $sub, '-n', $Manifest.resourceGroup, '-o', 'json')
+    Assert-OwnedSpikeGroup $Manifest $group
     $foundationDeploymentName = Get-SpikeFoundationDeploymentName $Manifest
-    $prior = @(Invoke-SpikeCommand @('deployment', 'sub', 'list', '--subscription', $sub,
+    $prior = @(Invoke-SpikeCommand @('deployment', 'group', 'list', '--subscription', $sub, '--resource-group', $Manifest.resourceGroup,
         '--query', "[?name=='$foundationDeploymentName'].name", '-o', 'json', '--only-show-errors') -Seconds 60)
     if ($prior.Count -ne 0) { throw 'This full-run ordinal already dispatched; retained history forbids replay after RG removal.' }
     $gh = (Get-Command gh -CommandType Application -ErrorAction Stop).Source
@@ -311,11 +291,11 @@ result=controller_never_started
 if [ -f /var/lib/ghr-vmss/outcome.json ]; then
   result=$(jq -er '.result' /var/lib/ghr-vmss/outcome.json)
 fi
-jq --arg result "$result" '{runId,head,startedUtc,attempts:(.attempts // 1),scaleSetId:(.scaleSetId // 0),result:$result,
+jq --arg result "$result" '{runId,runOrdinal,head,startedUtc,attempts:(.attempts // 1),scaleSetId:(.scaleSetId // 0),result:$result,
   worker:(if .worker then .worker | {name,vmId,nicId,osDiskId,runnerId,jobRequestId,jobComplete,phase} else null end)}' "$journal"
 '@
     $evidence = Invoke-SpikeControllerCommand $Manifest $script -Seconds 45
-    if ($evidence.runId -cne $Manifest.runId -or $evidence.head -cne $Manifest.head -or
+    if ($evidence.runId -cne $Manifest.runId -or $evidence.runOrdinal -ne $Manifest.runOrdinal -or $evidence.head -cne $Manifest.head -or
         $evidence.attempts -lt 1 -or $evidence.attempts -gt 2 -or
         [DateTimeOffset]::Parse($evidence.startedUtc) -ne [DateTimeOffset]::Parse($Manifest.startedUtc) -or
         $evidence.result -cnotmatch '^[a-z0-9_\n]+$') {
@@ -330,13 +310,51 @@ jq --arg result "$result" '{runId,head,startedUtc,attempts:(.attempts // 1),scal
     [IO.File]::WriteAllText($Path, ($evidence | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
 }
 
+function Assert-SpikeAppKeyBinding {
+    param([string]$Pem, [hashtable]$Manifest, [hashtable]$Approval)
+    if ($Manifest.appKeyFingerprint -cnotmatch '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$' -or
+        $Approval.appKeyFingerprint -cne $Manifest.appKeyFingerprint) {
+        throw 'Approval fingerprint differs from the original identity ledger.'
+    }
+    if (-not $Pem -or $Pem.Length -gt 16384 -or
+        $Pem -cnotmatch '(?s)^\s*-----BEGIN (RSA PRIVATE KEY|PRIVATE KEY)-----[A-Za-z0-9+/=\r\n]+-----END \1-----\s*$') {
+        throw 'Scoped spike App key unavailable or invalid; credential details suppressed.'
+    }
+    $rsa = [Security.Cryptography.RSA]::Create()
+    $publicDer = $null
+    $digest = $null
+    try {
+        try {
+            $rsa.ImportFromPem($Pem)
+            $publicDer = $rsa.ExportSubjectPublicKeyInfo()
+            $digest = [Security.Cryptography.SHA256]::HashData($publicDer)
+        } catch { throw 'Scoped spike App key cannot be verified; credential details suppressed.' }
+        if ([Convert]::ToBase64String($digest) -cne $Manifest.appKeyFingerprint) {
+            throw 'Supplied spike App key differs from the approved ledger fingerprint; credential details suppressed.'
+        }
+    } finally {
+        $rsa.Dispose()
+        if ($publicDer) { [Array]::Clear($publicDer) }
+        if ($digest) { [Array]::Clear($digest) }
+        $Pem = $null
+    }
+}
+
+function Assert-SpikeSourceDisabled {
+    if (-not $script:executionSourceEnabled) {
+        throw 'Deployment disabled: issue 81 requires reviewed identity handoff and independent operator recovery direction.'
+    }
+}
+
 function Invoke-SpikeExecution {
     param([hashtable]$Manifest, [string]$Path, [hashtable]$Approval)
+    Assert-SpikeSourceDisabled
     if ($env:GHR_SPIKE60_EXECUTION_ENABLED -cne 'true' -or $env:GITHUB_ACTIONS -cne 'true' -or
         $env:GITHUB_RUN_ATTEMPT -cne '1' -or
         $env:GITHUB_REPOSITORY -cne 'jonathan-vella/azure-gh-runners' -or
         $env:GITHUB_REF -cne 'refs/heads/main' -or $env:GITHUB_SHA -cne $Manifest.head -or
-        $env:GHR_SPIKE_ENVIRONMENT -cne 'platform-prod') {
+        $env:GHR_SPIKE_ENVIRONMENT -cne 'spike-vmss' -or
+        $env:GHR_SPIKE_AZURE_CLIENT_ID -cne $Manifest.temporaryIdentityClientId) {
         throw 'Deployment disabled: reviewed main-only protected workflow and exact direction required.'
     }
     Assert-SpikeExecutionApproval $Approval $Manifest
@@ -345,10 +363,7 @@ function Invoke-SpikeExecution {
         throw 'No resumed deployments or insufficient original work window.'
     }
     $key = [Environment]::GetEnvironmentVariable('GHR_SPIKE60_APP_PRIVATE_KEY')
-    if (-not $key -or $key.Length -gt 16384 -or -not $key.Contains('PRIVATE KEY-----')) {
-        throw 'Owner-supplied spike-only App key unavailable; never use the production key or retrieve it locally.'
-    }
-    $Manifest.appKeyFingerprint = $Approval.appKeyFingerprint
+    Assert-SpikeAppKeyBinding $key $Manifest $Approval
     Write-SpikeManifest -Manifest $Manifest -Path $Path
     Assert-SpikePreflight $Manifest $Approval
     $foundationDeploymentName = Get-SpikeFoundationDeploymentName $Manifest
@@ -389,9 +404,9 @@ function Invoke-SpikeExecution {
             [Array]::Clear($bytes)
         } finally { $file.Dispose() }
         $parameters = $null
-        $deployment = Invoke-SpikeCommand @('deployment', 'sub', 'create', '--subscription', $Manifest.subscription,
-            '--location', 'swedencentral', '--name', $foundationDeploymentName,
-            '--template-file', (Join-Path $PSScriptRoot 'infra/subscription.bicep'),
+        $deployment = Invoke-SpikeCommand @('deployment', 'group', 'create', '--subscription', $Manifest.subscription,
+            '--resource-group', $Manifest.resourceGroup, '--name', $foundationDeploymentName,
+            '--template-file', (Join-Path $PSScriptRoot 'infra/main.bicep'),
             '--parameters', "@$parameterPath", '-o', 'json', '--only-show-errors') -Seconds 2700
     } finally {
         $parameters = $null
@@ -461,5 +476,5 @@ esac
     if ($status.state -cne 'inactive') { throw 'Controller lifecycle failed; acceptance remains unverified.' }
 }
 
-Export-ModuleMember -Function Assert-SpikeExecutionApproval, Invoke-SpikeExecution,
+Export-ModuleMember -Function Assert-SpikeSourceDisabled, Assert-SpikeExecutionApproval, Invoke-SpikeExecution,
     Invoke-SpikeControllerCleanup, Invoke-SpikeCommand, Assert-SpikeCleanupPermission, Save-SpikeControllerEvidence

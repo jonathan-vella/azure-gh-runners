@@ -30,6 +30,7 @@ func TestControllerOriginalClock(t *testing.T) {
 	if err := config.validate(now); err != nil {
 		t.Fatal(err)
 	}
+
 	config.FoundationAttempts = 2
 	if config.validate(now) == nil {
 		t.Fatal("worker invocation allowed after two foundation calls")
@@ -51,6 +52,14 @@ func TestControllerOriginalClock(t *testing.T) {
 	config.HardDeadlineUTC = now.Add(5 * time.Hour)
 	if config.validate(now) == nil {
 		t.Fatal("original lifetime increased")
+	}
+}
+
+func TestOrdinalQualifiedSmokeLabel(t *testing.T) {
+	runID := strings.Repeat("a", 32)
+	if spikeScaleSetName(runID, 1) != "ghr-smoke-vmss-spike-"+runID+"-1" ||
+		spikeScaleSetName(runID, 2) != "ghr-smoke-vmss-spike-"+runID+"-2" {
+		t.Fatal("scale-set label lost its original nonce or full-run ordinal")
 	}
 }
 
