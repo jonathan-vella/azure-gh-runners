@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -43,5 +44,29 @@ func TestWorkerParameterBoundary(t *testing.T) {
 				t.Fatal("foreign/additional/slot-two parameters accepted")
 			}
 		})
+	}
+}
+
+func TestGeneratedPowerShellWorkerParameters(t *testing.T) {
+	path := os.Getenv("GHR_SPIKE_TEST_WORKER_PARAMETERS")
+	if path == "" {
+		t.Skip("generated PowerShell fixture is supplied by Test-Client.ps1")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal("generated PowerShell worker parameter fixture unavailable")
+	}
+	var parameters map[string]json.RawMessage
+	if json.Unmarshal(data, &parameters) != nil {
+		t.Fatal("generated PowerShell worker parameter fixture is invalid JSON")
+	}
+	var runID, head string
+	if json.Unmarshal(parameters["runId"], &runID) != nil ||
+		json.Unmarshal(parameters["head"], &head) != nil {
+		t.Fatal("generated PowerShell worker identity is invalid")
+	}
+	config := controllerConfig{RunID: runID, Head: head, WorkerParameters: parameters}
+	if err := config.validateWorkerParameters(); err != nil {
+		t.Fatalf("Go validator rejected generated PowerShell worker parameters: %v", err)
 	}
 }
