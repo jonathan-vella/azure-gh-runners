@@ -67,6 +67,11 @@ function Assert-SpikeExecutionApproval {
             throw 'NIC/disk/NAT/PIP/PE/DNS headroom insufficient; no resource creation.'
         }
     }
+    Assert-SpikePaidExecutionCostCoverage
+}
+
+function Assert-SpikePaidExecutionCostCoverage {
+    throw 'Paid execution blocked: pre-bootstrap OS/cloud-init network traffic is not bounded by the current cost model.'
 }
 
 function Assert-SpikeCleanupPermission {
@@ -348,6 +353,7 @@ function Assert-SpikeSourceDisabled {
 
 function Invoke-SpikeExecution {
     param([hashtable]$Manifest, [string]$Path, [hashtable]$Approval)
+    Assert-SpikePaidExecutionCostCoverage
     Assert-SpikeSourceDisabled
     if ($env:GHR_SPIKE60_EXECUTION_ENABLED -cne 'true' -or $env:GITHUB_ACTIONS -cne 'true' -or
         $env:GITHUB_RUN_ATTEMPT -cne '1' -or
@@ -476,5 +482,6 @@ esac
     if ($status.state -cne 'inactive') { throw 'Controller lifecycle failed; acceptance remains unverified.' }
 }
 
-Export-ModuleMember -Function Assert-SpikeSourceDisabled, Assert-SpikeExecutionApproval, Invoke-SpikeExecution,
+Export-ModuleMember -Function Assert-SpikeSourceDisabled, Assert-SpikePaidExecutionCostCoverage,
+    Assert-SpikeExecutionApproval, Invoke-SpikeExecution,
     Invoke-SpikeControllerCleanup, Invoke-SpikeCommand, Assert-SpikeCleanupPermission, Save-SpikeControllerEvidence

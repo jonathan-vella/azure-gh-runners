@@ -32,7 +32,7 @@ try {
         '--env', 'GHR_SPIKE_TEST_WORKER_PARAMETERS=/tmp/worker-parameters.json',
         '--workdir', '/src/spikes/vmss-flex', '--env', 'GOTOOLCHAIN=local',
         $builder, 'sh', '-ec',
-        'bash -n guest-bootstrap.sh native-bootstrap.sh run-one-job.sh pre-job-spike.sh; mkdir /tmp/client; cp *.go go.mod go.sum /tmp/client/; cd /tmp/client; go test -race -mod=readonly ./...; go vet -mod=readonly ./...; CGO_ENABLED=0 go build -C /tmp/client -mod=readonly -o /tmp/vmss-spike-controller .'
+        'bash -n guest-bootstrap.sh native-bootstrap.sh run-one-job.sh pre-job-spike.sh tests/test-reboot-guard.sh tests/test-bootstrap-failure.sh; bash tests/test-reboot-guard.sh; bash tests/test-bootstrap-failure.sh; mkdir /tmp/client; cp *.go go.mod go.sum /tmp/client/; cd /tmp/client; go test -race -mod=readonly ./...; go vet -mod=readonly ./...; CGO_ENABLED=0 go build -C /tmp/client -mod=readonly -o /tmp/vmss-spike-controller .'
     ) -TimeoutSeconds 600
     if ($result.exitCode -ne 0) {
         $result.stdout -split "`n" | Select-Object -Last 40 | Write-Output

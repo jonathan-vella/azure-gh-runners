@@ -12,11 +12,13 @@ import { bootstrapTemporaryIdentity, cleanupTemporaryIdentity, authenticatedTran
 
 const now = '2026-10-08T05:00:00.000Z';
 const pricing = {
-  refreshedUtc: now, b2sHourly: 0.0432, d2lsHourly: 0.091, p4Hourly: 5.8072 / 672,
-  natHourly: 0.045, pipHourly: 0.005, peHourly: 0.01, dnsZonePerRun: 0.5,
-  natGb: 0.045, egressGb: 0.12, peIngressGb: 0.01, peEgressGb: 0.01, dnsMillionQueries: 0.5,
-  kvPerRunCeilingUsd: 0.1, logsCombinedCeilingUsd: 0.5, imageCombinedCeilingUsd: 1,
-  cleanupReserveUsd: 2, miscCombinedCeilingUsd: 0.5,
+  schemaVersion: 1, source: 'azure-retail-prices-api', sourceUrl: 'https://prices.azure.com/api/retail/prices',
+  retrievedUtc: now, currencyCode: 'USD', region: 'swedencentral',
+  b2sHourly: 0.0432, d2lsHourly: 0.091, p4MonthlyUsd: 5.8072,
+  natHourly: 0.045, natProcessedGb: 0.045, standardIpv4Hourly: 0.005,
+  privateEndpointHourly: 0.01, privateEndpointIngressGb: 0.01, privateEndpointEgressGb: 0.01,
+  internetEgressGb: 0.12, privateDnsZoneMonthly: 0.5, privateDnsQueriesPerMillion: 0.4,
+  keyVaultOperationsPer10k: 0.03,
 };
 const claims = { iss: 'https://token.actions.githubusercontent.com', aud: 'api://AzureADTokenExchange',
   sub: 'repo:jonathan-vella@25802147/azure-gh-runners@1408821667:environment:spike-vmss',

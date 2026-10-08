@@ -6,6 +6,13 @@ function Reject([scriptblock]$Operation) {
     try { & $Operation } catch { $failed = $true }
     if (-not $failed) { throw 'Unsafe execution input accepted.' }
 }
+function RejectNamed([scriptblock]$Operation, [string]$Message) {
+    try { & $Operation } catch {
+        if ($_.Exception.Message -ceq $Message) { return }
+        throw
+    }
+    throw 'Unsafe execution input accepted.'
+}
 $manifest = New-SpikeManifest -Head ('a' * 40)
 if ($manifest.keyVaultName -cne ("kv-ghr60-" + $manifest.runId.Substring(0, 14) + $manifest.runOrdinal) -or
     $manifest.runOrdinal -ne 1 -or $manifest.keyVaultName.Length -ne 24) {
@@ -30,18 +37,22 @@ $approval = @{
     archiveSha256 = ('b' * 64); adminSshPublicKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefixture'
     appKeyFingerprint = [Convert]::ToBase64String([byte[]]::new(32))
     pricing = @{
-        refreshedUtc = $now.ToString('o'); b2sHourly = 0.0432; d2lsHourly = 0.091; p4Hourly = 0.008
-        natHourly = 0.045; pipHourly = 0.005; peHourly = 0.01; dnsZonePerRun = 0.5
-        natGb = 0.02; egressGb = 0.05; peIngressGb = 0.01; peEgressGb = 0.01; dnsMillionQueries = 0.2
-        kvPerRunCeilingUsd = 0.1; logsCombinedCeilingUsd = 0.5; imageCombinedCeilingUsd = 1
-        cleanupReserveUsd = 2; miscCombinedCeilingUsd = 0.5
+        schemaVersion = 1; source = 'azure-retail-prices-api'; sourceUrl = 'https://prices.azure.com/api/retail/prices'
+        retrievedUtc = $now.ToString('o'); currencyCode = 'USD'; region = 'swedencentral'
+        b2sHourly = 0.0432; d2lsHourly = 0.091; p4MonthlyUsd = 5.8072
+        natHourly = 0.045; natProcessedGb = 0.045; standardIpv4Hourly = 0.005
+        privateEndpointHourly = 0.01; privateEndpointIngressGb = 0.01; privateEndpointEgressGb = 0.01
+        internetEgressGb = 0.12; privateDnsZoneMonthly = 0.5; privateDnsQueriesPerMillion = 0.4
+        keyVaultOperationsPer10k = 0.03
     }
     quota = @{
         subscription = $manifest.subscription; location = 'swedencentral'; refreshedUtc = $now.ToString('o')
         networkInterfaces = 3; premiumDisks = 2; natGateways = 1; publicIps = 1; privateEndpoints = 1; privateDnsZones = 1
     }
 }
-Assert-SpikeExecutionApproval $approval $manifest -Now $now
+$costBlock = 'Paid execution blocked: pre-bootstrap OS/cloud-init network traffic is not bounded by the current cost model.'
+RejectNamed { Assert-SpikeExecutionApproval $approval $manifest -Now $now } $costBlock
+RejectNamed { Assert-SpikePaidExecutionCostCoverage } $costBlock
 $approval.appKeyFingerprint = 'invalid'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.appKeyFingerprint = [Convert]::ToBase64String([byte[]]::new(32))
@@ -51,12 +62,12 @@ $approval.secretReadApproved = $true
 $approval.canonicalUbuntuVersion = 'latest'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.canonicalUbuntuVersion = '24.04.202609260'
-$approval.pricing.natGb = 10
+$approval.pricing.natProcessedGb = 10
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
-$approval.pricing.natGb = 0.02
-$approval.pricing.refreshedUtc = $now.AddHours(-25).ToString('o')
+$approval.pricing.natProcessedGb = 0.045
+$approval.pricing.retrievedUtc = $now.AddHours(-25).ToString('o')
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
-$approval.pricing.refreshedUtc = $now.ToString('o')
+$approval.pricing.retrievedUtc = $now.ToString('o')
 $approval.unexpected = 'fake-input'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.Remove('unexpected')
@@ -221,6 +232,7 @@ try {
     & $module {
         param($manifest, $approval, $directory)
         function script:Assert-SpikeExecutionApproval {}
+        function script:Assert-SpikePaidExecutionCostCoverage {}
         function script:Write-SpikeManifest {}
         function script:Assert-SpikePreflight {}
         function script:New-SpikeCustomData { return 'Y2xvdWQtY29uZmln' }
@@ -284,11 +296,14 @@ $saved = $env:GHR_SPIKE60_EXECUTION_ENABLED
 try {
     $env:GHR_SPIKE60_EXECUTION_ENABLED = 'false'
     & $module {
+        function script:Assert-SpikePaidExecutionCostCoverage {
+            throw 'Paid execution blocked: pre-bootstrap OS/cloud-init network traffic is not bounded by the current cost model.'
+        }
         function script:Invoke-SpikeCommand { throw 'Offline test attempted an Azure call.' }
     }
     $message = $null
     try { Invoke-SpikeExecution $manifest 'unused' $approval } catch { $message = $_.Exception.Message }
-    if ($message -notlike 'Deployment disabled:*') { throw 'Disabled gate reached cloud/key processing.' }
+    if ($message -cne $costBlock) { throw 'Paid cost-coverage gate did not precede cloud/key processing.' }
     $directory = Join-Path ([IO.Path]::GetTempPath()) ("vmss60-disabled-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $directory | Out-Null
     try {
@@ -300,7 +315,7 @@ try {
                 -ManifestPath (Join-Path $directory 'manifest.json') -ApprovalPath (Join-Path $directory 'approval.json') `
                 -ConfirmCoordinatorExecutionDirection
         } catch { $runFailure = $_.Exception.Message }
-        if ($runFailure -notlike 'Deployment disabled:*' -or $manifest.attempts -ne 0) {
+        if ($runFailure -cne $costBlock -or $manifest.attempts -ne 0) {
             throw 'Disabled entrypoint reached cleanup/cloud work or reserved an invocation.'
         }
     } finally { Remove-Item -LiteralPath $directory -Recurse -Force }
