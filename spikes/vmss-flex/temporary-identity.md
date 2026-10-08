@@ -1,6 +1,7 @@
 # Temporary spike identity: disabled preparation
 
-Issue [#81](https://github.com/jonathan-vella/azure-gh-runners/issues/81);
+Issues [#81](https://github.com/jonathan-vella/azure-gh-runners/issues/81) and
+[#85](https://github.com/jonathan-vella/azure-gh-runners/issues/85);
 Refs [#60](https://github.com/jonathan-vella/azure-gh-runners/issues/60).
 Draft, **do not merge or execute**. `temporary-identity.mjs` contains exact request plans and a durable state machine.
 `identity-adapter.mjs` orchestrates preflight/bootstrap and cleanup; `Identity-Transport.ps1` uses existing bounded
@@ -24,8 +25,12 @@ deadline; the final hour remains reserved. No third run, replenished clock or ex
 Issue #80 binds its unique seven-day vault name to the same interface; no purge, recovery or reuse is authorized.
 State reservations precede external writes; absent metadata after a timeout means **reconcile**, not retry or success.
 Server-assigned app/client/SP/FIC and GitHub environment/policy IDs are captured atomically before advancing.
-Atomic file updates use an exclusive lock; an orphan lock requires explicit operator reconciliation, not removal
-to force another write. State contains no credential or provider error output.
+Schema v2 adds a monotonically increasing `revision` and sanitized `intents`: each mutation and deletion has a
+unique operation ID, ordinal, reservation revision and optional provider receipt. Cleanup itself has a durable
+intent that fences new bootstrap/foundation/worker reservations. Old v1 snapshots are rejected, not silently
+upgraded into authority. Atomic local updates fsync the temporary file before rename. They are not distributed CAS.
+An orphan lock requires read-only operator reconciliation, not removal to force another write.
+State contains no credential or provider error output.
 
 The owner **rejects flexible FIC preview and SHA-pinned reusable trust**. Use one standard GA FIC at
 `https://graph.microsoft.com/v1.0/applications/<captured-app-object-id>/federatedIdentityCredentials`,
@@ -104,16 +109,32 @@ Never delete production objects or require the now-deleted temporary SP to finis
 
 ## Preparation limits and validation
 
-The disabled transport normally bounds each subprocess to 30 seconds, preserves structured metadata, suppresses provider
-errors and refuses partial Graph pagination. Authenticated requests cannot run until a separately reviewed source
-change removes both source gates. Mock transports exercise the actual orchestration, not external services.
-Exact RG deletion instead uses a 15-minute bounded Azure CLI long-running-operation poller without `--no-wait`;
-success must precede the durable acknowledgement and authoritative absence check.
+The disabled transport bounds authentication and HTTP individually to 30 seconds (70-second outer process bound),
+preserves structured metadata, suppresses provider errors and refuses partial Graph pagination.
+Authenticated requests cannot run until a separately reviewed source change removes both source gates AND an
+authorized canonical coordinator exists. Mock transports exercise the actual orchestration, not external services.
+The prepared HTTP path captures actual ARM response operation headers rather than hiding the handle behind a
+synchronous `az group delete` poller. A 202 without a usable handle stays unresolved. Only exact subscription,
+Sweden Central operation URLs with an API-version-only query are supported; unknown handle shapes are capability
+blockers, never rewritten into guessed endpoints. Graph/GitHub synchronous success records no fabricated handle.
+Receipts contain only operation ID, provider, state and optional operation URL. A caller boolean `accepted:true`
+is rejected; accepted is not terminal. Receipt persistence precedes identity capture and subsequent verification.
+Terminal settling uses read-only GETs of the captured handle, never another mutation. Failed/canceled status,
+404/403, lost response, timeout, unknown status and missing receipt cannot certify deletion. Terminal success plus
+two consecutive authoritative absence reads is required; late visibility resets absence observation.
 The adapter persists server-generated identity IDs before advancing, reconciles ambiguous tagged app/SP/FIC creates,
 and routes bootstrap exceptions into cleanup. GitHub environments cannot carry ownership tags; an interrupted
 create with no captured environment ID requires operator reconciliation, never automatic name-only deletion.
-Cleanup owns an exclusive separate operation lock as well as atomic transition locks. Concurrent callers cannot
-issue another request; crash-stale locks require explicit reconciliation, never force removal.
+The minimal injected `withExclusive(runId, callback)` interface supplies a session with synchronous `read()` and
+`compareAndSwap(expectedEnvelope, nextEnvelope)`. Its authority must serialize the whole callback against both
+hosts, including provider requests, reject stale revisions/content and persist every transition before returning
+true. It is not a TTL lease that another host may take over while the previous request is still in flight.
+CAS is committed before the local mirror rename. A crash in that gap leaves the mirror stale and it is rejected;
+no automatic adoption, reset or retry is provided. The only supplied coordinator is an in-memory fixture.
+Without an authorized durable implementation, bootstrap and cleanup reject before authentication or writes.
+Cleanup also owns a local operation lock; locks record unique owner ID, host, PID, process-start and creation UTC,
+and purpose. Inspection never equates PID existence with identity (PID reuse/remote hosts are ambiguous).
+Crash-stale locks remain untouched even if their process is gone. No TTL unlock, blind unlink or lease takeover.
 A reserved delete with no successful acknowledgement remains unresolved even if an early read says absent.
 Ambiguous app/SP/FIC/environment/RG creation cannot become full cleanup from a missing ID or early empty inventory.
 Cleanup polls reads without reissuing a reserved delete, bounded to 45 minutes; unknown/failed readbacks remain
@@ -121,8 +142,13 @@ unverified. In provider-failure recovery, surviving RG resources can continue ac
 record exact surviving inventory, original deadline and hourly exposure and escalate to the owner. A planned
 conservative ceiling is not an absolute provider billing guarantee or an infinite deletion reserve.
 
-`identity-cli.mjs` supports external-state Prepare/Inspect and disabled Bootstrap/Cleanup, plus recording
-**actual** approved coordinator seed/fingerprint/revocation evidence. Flags are records, not authorization.
+`identity-cli.mjs` supports offline Prepare/Inspect and read-only `inspect-lock`; Bootstrap/Cleanup remain disabled.
+Local CLI seed/revocation/foundation mutation commands now explicitly refuse: canonical evidence writers and
+foundation/worker dispatch integration are unavailable. A runtime manifest records `cleanupScope:
+resource-group-only`; its historical `closed` phase never means full canonical identity/key cleanup.
+`Run.ps1` Execute/Cleanup and `Supervisor.ps1` have explicit unavailable-coordination gates in addition to the
+existing source-disabled gates. Runtime file locks, workflow base64 input and artifacts cannot confer ownership.
+Flags are records, not authorization.
 Do not interpret reducer `absent: true` inputs as evidence; only adapter authoritative readback may supply them.
 The foundation bridge imports the same nonce/ordinal/clock and captured temporary client/SP. The canonical
 `reserve-foundation` handoff must already be consumed before workflow input is accepted; no hosted clock is started.
@@ -133,6 +159,20 @@ The existing hosted authenticated cleanup backstop is retained and source-disabl
 Coordination with the external canonical writer and actual independent recovery capability still require review
 and demonstrated availability before any paid start. Workstation-only recovery is **not approved** for execution.
 A source-disabled local watcher, fixtures or flags cannot certify workstation/whole-workflow loss recovery.
+
+Read-only inspection uses no credentials or provider writes (replace the external state paths):
+
+```powershell
+node spikes\vmss-flex\identity-cli.mjs inspect C:\spike-state\identity.json
+node spikes\vmss-flex\identity-cli.mjs inspect-lock C:\spike-state\identity.json.lock
+node spikes\vmss-flex\identity-cli.mjs inspect-lock C:\spike-state\identity.json.cleanup.lock
+```
+
+Execution blockers remain: an authorized durable CAS channel accessible from both hosts; an independent,
+always-available recovery host/cancellation domain; authentication continuation after workstation AND whole-workflow
+loss; Graph/GitHub authority for exact application/SP/FIC/environment cleanup; and actual ARM operation-handle,
+terminal-readback and authoritative inventory rights. HTTP preparation and mock receipts prove none of these.
+No recovery store, host, grant, identity, environment or key operation is introduced by #85.
 
 ### Original-envelope meter and usage reservations
 

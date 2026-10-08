@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'Safety.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'Execution.psm1') -Force
 Assert-SpikeSourceDisabled
+throw 'Supervisor disabled: independent canonical CAS, authentication continuation and full cleanup capability are unavailable.'
 $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json -AsHashtable -DateKind String
 Assert-SpikeManifest $manifest
 if ($manifest.phase -ne 'active' -or $manifest.attempts -ne 0) {

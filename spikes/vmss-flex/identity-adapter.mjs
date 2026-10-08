@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, openSync, closeSync, unlinkSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleepDefault } from 'node:timers/promises';
 import {
   scope, tenant, identityNames, bootstrapPlan, cleanupPlan, assertOwnedIdentityInventory,
-  validateIdentityEnvelope, updateIdentityEnvelope,
+  validateIdentityEnvelope, updateIdentityEnvelope as persist, operationIntent, acquireIdentityLock,
 } from './temporary-identity.mjs';
 
 function check(condition, message) { if (!condition) throw new Error(message); }
@@ -22,13 +23,25 @@ function pages(value, key) {
   return value.flatMap(page => page[key]);
 }
 
+async function coordinated(path, coordination, work) {
+  check(coordination && typeof coordination.withExclusive === 'function',
+    'Authorized durable cross-host coordination unavailable; no mutation or cleanup.');
+  const snapshot = read(path);
+  return coordination.withExclusive(snapshot.runId, async session => {
+    check(session && typeof session.read === 'function' && typeof session.compareAndSwap === 'function',
+      'Canonical read/CAS session required.');
+    assert.deepEqual(read(path), session.read(), 'Stale canonical snapshot; inspect shared state read-only.');
+    return work(session);
+  });
+}
+
 export function authenticatedTransport(operation, payload = {}) {
   // The PowerShell transport has a second unconditional source gate. No tokens leave the installed CLI.
   const executionEnabled = false;
   check(executionEnabled, 'Authenticated identity adapter is disabled pending exact-head execution direction.');
   const result = spawnSync('pwsh', ['-NoProfile', '-File', fileURLToPath(new URL('Identity-Transport.ps1', import.meta.url))], {
     input: JSON.stringify({ operation, payload }), encoding: 'utf8',
-    timeout: operation === 'request' && payload.step === 'resourceGroup' && payload.method === 'DELETE' ? 910000 : 40000,
+    timeout: 70000,
     maxBuffer: 1024 * 1024, windowsHide: true,
   });
   check(!result.error && result.status === 0, 'Bounded identity transport failed; output suppressed.');
@@ -50,7 +63,8 @@ function ownedApp(state, item) {
     item.requiredResourceAccess?.length === 0, 'Ambiguous or unowned app creation; no adoption/deletion.');
 }
 
-async function reconcile(path, invoke) {
+async function reconcile(path, invoke, session) {
+  const updateIdentityEnvelope = (path, action, input) => persist(path, action, input, session);
   let state = read(path);
   const run = state.runs.at(-1);
   const applications = collection(await invoke('apps', { name: identityNames(state.runId, state.runOrdinal).displayName }));
@@ -115,12 +129,19 @@ function bootstrapPlanForCleanup(state) {
   const copy = structuredClone(state);
   copy.runs.at(-1).phase = 'active';
   copy.runs.at(-1).cleanup = Object.fromEntries(Object.keys(copy.runs.at(-1).cleanup).map(key => [key, 'pending']));
+  copy.intents = copy.intents.filter(item => item.ordinal !== copy.runOrdinal || item.kind === 'mutation');
   return bootstrapPlan(copy);
 }
 
-export async function bootstrapTemporaryIdentity(path, invoke = authenticatedTransport, {
+export async function bootstrapTemporaryIdentity(path, invoke = authenticatedTransport, options = {}) {
+  return coordinated(path, options.coordination, session => bootstrap(path, invoke, { ...options, session }));
+}
+
+async function bootstrap(path, invoke, {
   now = () => new Date().toISOString(), pricing, claims, additionalKeyEvidence, readiness,
+  session, clock = () => Date.now(), sleep = sleepDefault,
 } = {}) {
+  const updateIdentityEnvelope = (path, action, input) => persist(path, action, input, session);
   check(readiness && Object.keys(readiness).length === 4 &&
     ['independentRecoveryReady', 'scopedKeyToolReady', 'sshPublicKeyApproved', 'dependencyResolved']
       .every(key => readiness[key] === true),
@@ -136,10 +157,16 @@ export async function bootstrapTemporaryIdentity(path, invoke = authenticatedTra
   check(collection(await invoke('apps', { name })).length === 0, 'Never reuse an app name.');
   check(!pages(await invoke('environments'), 'environments').some(env => env.name === 'spike-vmss'), 'Never adopt an existing environment.');
   updateIdentityEnvelope(path, 'begin', { now: now(), pricing, additionalKeyEvidence });
-  return provisionReservedBootstrap(path, invoke, { now, claims });
+  return provision(path, invoke, { now, claims, session, clock, sleep });
 }
 
-export async function provisionReservedBootstrap(path, invoke, { now = () => new Date().toISOString(), claims } = {}) {
+export async function provisionReservedBootstrap(path, invoke, options = {}) {
+  return coordinated(path, options.coordination, session => provision(path, invoke, { ...options, session }));
+}
+
+async function provision(path, invoke, { now = () => new Date().toISOString(), claims, session,
+  clock = () => Date.now(), sleep = sleepDefault } = {}) {
+  const updateIdentityEnvelope = (path, action, input) => persist(path, action, input, session);
   // Testable bounded adapter for an already-started original envelope; production transport remains disabled.
   try {
     await account(invoke);
@@ -149,7 +176,12 @@ export async function provisionReservedBootstrap(path, invoke, { now = () => new
       state = read(path);
       const plan = bootstrapPlan(state)[step];
       check(plan, 'Missing captured predecessor ID.');
-      const value = await invoke('request', { ...plan, statePath: path, step });
+      const intent = operationIntent(state, 'mutation', step);
+      const response = await invoke('request', { ...plan, statePath: path, step,
+        operationId: intent.operationId, revision: state.revision });
+      updateIdentityEnvelope(path, 'receipt', { receipt: response.receipt });
+      check(response.receipt.state === 'succeeded', 'Creation unresolved; settle actual provider handle read-only.');
+      const value = response.value;
       if (['application', 'servicePrincipal', 'federation', 'environment', 'environmentPolicy'].includes(step)) {
         updateIdentityEnvelope(path, 'capture', { step, id: value.id, clientId: value.appId });
       }
@@ -158,7 +190,7 @@ export async function provisionReservedBootstrap(path, invoke, { now = () => new
         check(group.id === scope && group.location === 'swedencentral' &&
           Object.entries(plan.body.tags).every(([key, tag]) => group.tags?.[key] === tag), 'RG ownership readback mismatch.');
       }
-      if (step === 'owner') await reconcile(path, invoke);
+      if (step === 'owner') await reconcile(path, invoke, session);
       updateIdentityEnvelope(path, 'verify', { step, claims });
     }
     updateIdentityEnvelope(path, 'reserve', { step: 'seedConfirmation', now: now() });
@@ -166,27 +198,37 @@ export async function provisionReservedBootstrap(path, invoke, { now = () => new
   } catch (error) {
     const state = read(path);
     if (state.runs.at(-1).phase === 'active') updateIdentityEnvelope(path, 'cleanup');
-    try { await cleanupTemporaryIdentity(path, invoke); }
+    try { await performIdentityCleanup(path, invoke, { clock, sleep, session }); }
     catch { throw new Error('Bootstrap failed and cleanup is unverified; durable state requires bounded operator reconciliation.'); }
     throw new Error('Bootstrap failed; exact cloud cleanup completed. Scoped key revocation may still be pending.');
   }
 }
 
-export async function cleanupTemporaryIdentity(path, invoke = authenticatedTransport, {
-  clock = () => Date.now(), sleep = sleepDefault,
-} = {}) {
-  const lockPath = `${path}.cleanup.lock`;
-  const lock = openSync(lockPath, 'wx', 0o600);
-  try { return await performIdentityCleanup(path, invoke, { clock, sleep }); }
-  finally { closeSync(lock); unlinkSync(lockPath); }
+export async function cleanupTemporaryIdentity(path, invoke = authenticatedTransport, options = {}) {
+  return coordinated(path, options.coordination, async session => {
+    const release = acquireIdentityLock(`${path}.cleanup.lock`, 'cleanup');
+    try { return await performIdentityCleanup(path, invoke, {
+      clock: () => Date.now(), sleep: sleepDefault, ...options, session,
+    }); }
+    finally { release(); }
+  });
 }
 
-async function performIdentityCleanup(path, invoke, { clock, sleep }) {
+async function performIdentityCleanup(path, invoke, { clock, sleep, session }) {
+  const updateIdentityEnvelope = (path, action, input) => persist(path, action, input, session);
   await account(invoke);
   const recoveryStop = clock() + 45 * 60 * 1000;
+  const transport = invoke;
+  invoke = (operation, payload) => {
+    check(clock() + 70000 < recoveryStop, 'Bounded cleanup recovery exhausted; no further provider calls.');
+    return transport(operation, payload);
+  };
   async function pollAbsent(query) {
-    while (!await query()) {
-      check(clock() + 40000 < recoveryStop, 'Bounded cleanup recovery exhausted; surviving resources may accrue postdeadline charges.');
+    let absentReads = 0;
+    while (absentReads < 2) {
+      absentReads = await query() ? absentReads + 1 : 0;
+      if (absentReads === 2) break;
+      check(clock() + 70000 < recoveryStop, 'Bounded cleanup recovery exhausted; surviving resources may accrue postdeadline charges.');
       await sleep(10000);
     }
   }
@@ -194,6 +236,51 @@ async function performIdentityCleanup(path, invoke, { clock, sleep }) {
   if (state.runs.at(-1)?.phase === 'active') state = updateIdentityEnvelope(path, 'cleanup');
   check(state.runs.at(-1)?.phase === 'cleanup', 'No pending paid cleanup run.');
   const run = state.runs.at(-1);
+  async function settle(kind, step) {
+    let intent = operationIntent(read(path), kind, step);
+    check(intent?.receipt, 'Interrupted operation has no terminal acknowledgement/receipt; no retry or early-absence success.');
+    while (intent.receipt.state === 'accepted') {
+      check(clock() + 70000 < recoveryStop, 'Bounded provider settling exhausted; unresolved operation.');
+      const result = await invoke('operation-status', { receipt: intent.receipt });
+      check(['running', 'succeeded', 'failed', 'unknown'].includes(result.state), 'Invalid provider terminal readback.');
+      check(result.state !== 'unknown', 'Provider 404/403/timeout or unknown status is not terminal proof.');
+      if (result.state === 'running') await sleep(10000);
+      else updateIdentityEnvelope(path, 'receipt', { receipt: { ...intent.receipt, state: result.state } });
+      intent = operationIntent(read(path), kind, step);
+    }
+    check(intent.receipt.state === 'succeeded' || (kind === 'mutation' && intent.receipt.state === 'failed'),
+      'Provider operation failed; cleanup remains unresolved.');
+  }
+  async function deleteOnce(step, exists, url) {
+    state = read(path);
+    if (state.runs.at(-1).cleanup[step] === 'pending') {
+      const mutation = operationIntent(state, 'mutation', step);
+      // An in-flight create may appear after a delete. No inventory-only terminal proof.
+      if (mutation && !['succeeded', 'failed'].includes(mutation.receipt?.state)) await settle('mutation', step);
+      updateIdentityEnvelope(path, 'reserve-delete', { step });
+      state = read(path);
+      const intent = operationIntent(state, 'delete', step);
+      if (exists) {
+        check(url, 'Exact captured cleanup ID required.');
+        const response = await invoke('request', { method: 'DELETE', url, statePath: path, step,
+          operationId: intent.operationId, revision: state.revision });
+        updateIdentityEnvelope(path, 'receipt', { receipt: response.receipt });
+      } else {
+        // Authoritative inventory is valid only after the create is terminal or was never reserved.
+        updateIdentityEnvelope(path, 'receipt', { receipt: {
+          operationId: intent.operationId, provider: 'inventory', state: 'succeeded', operationUrl: null,
+        } });
+      }
+    }
+    if (read(path).runs.at(-1).cleanup[step] === 'reserved') {
+      await settle('delete', step);
+      updateIdentityEnvelope(path, 'acknowledge-delete', { step });
+    }
+  }
+  for (const step of ['resourceGroup', 'foundation', 'worker']) {
+    const mutation = operationIntent(read(path), 'mutation', step);
+    if (mutation && !['succeeded', 'failed'].includes(mutation.receipt?.state)) await settle('mutation', step);
+  }
   // Paid cleanup is first and does not depend on Graph/GitHub availability or owner key revocation.
   if (run.cleanup.resourceGroup !== 'absent') {
     const exists = await invoke('group-exists');
@@ -207,10 +294,8 @@ async function performIdentityCleanup(path, invoke, { clock, sleep }) {
         check(run.steps.resourceGroup !== 'pending' && group.id === scope && group.location === 'swedencentral' &&
           Object.entries(plan.body.tags).every(([key, value]) => group.tags?.[key] === value), 'Unowned RG; no deletion.');
       }
-      updateIdentityEnvelope(path, 'reserve-delete', { step: 'resourceGroup' });
-      if (exists) await invoke('request', { method: 'DELETE', url: `https://management.azure.com${scope}?api-version=2024-03-01`, statePath: path, step: 'resourceGroup' });
-      updateIdentityEnvelope(path, 'acknowledge-delete', { step: 'resourceGroup', accepted: true });
     }
+    await deleteOnce('resourceGroup', exists, `https://management.azure.com${scope}?api-version=2024-03-01`);
     check(read(path).runs.at(-1).cleanup.resourceGroup === 'accepted',
       'Interrupted RG delete has no terminal acknowledgement; reconcile without reissuing or certifying early absence.');
     await pollAbsent(async () => {
@@ -223,24 +308,21 @@ async function performIdentityCleanup(path, invoke, { clock, sleep }) {
   for (const step of ['owner', 'federation', 'application', 'servicePrincipal', 'environment']) {
     state = read(path);
     if (state.runs.at(-1).cleanup[step] === 'absent') continue;
-    const reconciled = await reconcile(path, invoke);
+    if (step === 'environment') {
+      const policy = operationIntent(state, 'mutation', 'environmentPolicy');
+      if (policy && !['succeeded', 'failed'].includes(policy.receipt?.state)) await settle('mutation', 'environmentPolicy');
+    }
+    const reconciled = await reconcile(path, invoke, session);
     state = reconciled.state;
     let { inventory } = reconciled;
     const plan = cleanupPlan(state, { ...inventory, resourceGroup: null });
     const key = { owner: 'assignments', federation: 'federatedCredentials', application: 'applications', servicePrincipal: 'servicePrincipals' }[step];
     const exists = step === 'environment' ? inventory.environment !== null : inventory[key].length !== 0;
-    if (state.runs.at(-1).cleanup[step] === 'pending') {
-      updateIdentityEnvelope(path, 'reserve-delete', { step });
-      if (exists) {
-        check(plan[step], 'Exact captured cleanup ID required.');
-        await invoke('request', { method: 'DELETE', url: plan[step], statePath: path, step });
-      }
-      updateIdentityEnvelope(path, 'acknowledge-delete', { step, accepted: true });
-    }
+    await deleteOnce(step, exists, plan[step]);
     check(read(path).runs.at(-1).cleanup[step] === 'accepted',
       'Interrupted identity delete has no acknowledgement; reconcile without retry or false full cleanup.');
     await pollAbsent(async () => {
-      ({ inventory } = await reconcile(path, invoke));
+      ({ inventory } = await reconcile(path, invoke, session));
       return step === 'environment' ? inventory.environment === null : inventory[key].length === 0;
     });
     updateIdentityEnvelope(path, 'verify-absent', { step, absent: true });
