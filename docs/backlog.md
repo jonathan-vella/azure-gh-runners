@@ -409,7 +409,7 @@ Create public throwaway repo `jonathan-vella/ghr-smoke` and onboard it using onl
 
 Acceptance criteria:
 
-- Definition of done: `workflow_dispatch` on `main` runs on the real ACA runner and lists an anonymous-read, empty blob container in a storage account with public network access disabled, reached only through a PE in `snet-consumer-pe`
+- Definition of done: `workflow_dispatch` on `main` runs on the real ACA runner and lists an empty blob container (consumer OIDC identity with Storage Blob Data Reader) in a storage account with public network access disabled, reached only through a PE in `snet-consumer-pe`
 - `push` to a non-default branch is rejected by the hook
 - A `pull_request` job targeting the label is rejected or never scheduled
 - No managed-identity token obtainable inside the job

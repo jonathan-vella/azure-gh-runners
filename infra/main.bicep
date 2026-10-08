@@ -60,8 +60,6 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.16.
       {
         name: 'Consumption'
         workloadProfileType: 'Consumption'
-        minimumCount: 0
-        maximumCount: 1
       }
     ]
     appLogsConfiguration: {
@@ -188,7 +186,7 @@ module smokeStorage 'br/public:avm/res/storage/storage-account:0.33.1' = {
     kind: 'StorageV2'
     skuName: 'Standard_LRS'
     publicNetworkAccess: 'Disabled'
-    allowBlobPublicAccess: true
+    allowBlobPublicAccess: false
     networkAcls: {
       bypass: 'None'
       defaultAction: 'Deny'
@@ -197,7 +195,7 @@ module smokeStorage 'br/public:avm/res/storage/storage-account:0.33.1' = {
       containers: [
         {
           name: 'smoke'
-          publicAccess: 'Container'
+          publicAccess: 'None'
         }
       ]
     }

@@ -14,7 +14,7 @@ The GitHub repos are public, are owned by a personal account, and need jobs that
 - **Image**: one generic image built on a GitHub-hosted runner, pushed to private GHCR, then imported by digest into private ACR Premium with `az acr import` (ACR trusted-services bypass on). No ACR agent pool in v1 ([ADR-0001](adr/0001-image-build-path.md)).
 - **Auth to GitHub**: one GitHub App owned by the personal account and installed on selected repos. Its key is deployed to Key Vault through ARM (a Bicep secure param).
 - **Platform CI**: GitHub-hosted runners. `.github/workflows/validate.yml` runs `npm run validate` on PRs. `.github/workflows/deploy.yml` deploys with OIDC on `workflow_dispatch` through the protected, main-only `platform-prod` environment (no required human reviewer) directly into the existing empty `rg-ghrunners-prod-swc`, in stages: image build → private GHCR → foundation with `deployJobs=false` → `az acr import` by digest → jobs with `deployJobs=true`. This is all ARM, so no VNet is needed.
-- **Definition of done**: a smoke workflow in public repo `jonathan-vella/ghr-smoke` runs on the real ACA runner and lists an anonymous-read, empty blob container in a storage account whose public network access is disabled, reached only through a private endpoint in `snet-consumer-pe`.
+- **Definition of done**: a smoke workflow in public repo `jonathan-vella/ghr-smoke` runs on the real ACA runner and lists an empty blob container (consumer OIDC identity with Storage Blob Data Reader) in a storage account whose public network access is disabled, reached only through a private endpoint in `snet-consumer-pe`.
 - **Consumer network path**: a shared `snet-consumer-pe` subnet plus platform-owned privatelink DNS zones. Consumers create their own private endpoints in that subnet. This is documented precisely enough for an agent to execute.
 - **Public exposure**: no inbound workload endpoints. The NAT Gateway egress IP is the only public IP resource. Log Analytics is a documented exception: standard Azure Monitor ingestion and query endpoints stay enabled without AMPLS, while workspace local authentication is disabled and Azure RBAC governs data access.
 - **Scope**: the platform, a generic onboarding contract, docs, and a throwaway smoke-test consumer repo. **vnext onboarding is a separate follow-up.**
@@ -115,7 +115,7 @@ The M1 spikes are closed without further runs. ADR-0001 to ADR-0005 record defau
 ### 8. Smoke test & acceptance
 
 - **smoke-consumer**: throwaway repo `jonathan-vella/ghr-smoke` (public, to exercise the strict floor) with a test storage account (public network access disabled) and a PE in `snet-consumer-pe`. The definition of done is the first check; the workflows must show:
-  - dispatch on `main` runs on the real ACA runner and lists an anonymous-read, empty blob container over the private endpoint
+  - dispatch on `main` runs on the real ACA runner and lists an empty blob container (consumer OIDC identity) over the private endpoint
   - `push` to a non-default branch is rejected by the hook
   - a `pull_request`-triggered job targeting the label is rejected, or never scheduled
   - no MI token is available inside the job

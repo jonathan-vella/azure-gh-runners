@@ -110,7 +110,7 @@ jobs:
           az keyvault show --name "$kv" --output json |
             check "Key Vault network" '.properties.publicNetworkAccess == "Disabled" and .properties.enableRbacAuthorization == true'
           az storage account show --name "$st" --resource-group "$RESOURCE_GROUP" --output json |
-            check "smoke storage network" '.publicNetworkAccess == "Disabled" and .allowBlobPublicAccess == true'
+            check "smoke storage network" '.publicNetworkAccess == "Disabled"'
           az resource show --ids "$cae_id" --output json |
             check "ACA environment" '.properties.publicNetworkAccess == "Disabled" and .properties.vnetConfiguration.internal == true'
           az network private-endpoint list --resource-group "$RESOURCE_GROUP" --output json |
