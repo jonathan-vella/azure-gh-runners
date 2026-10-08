@@ -46,7 +46,7 @@ test('guest bootstrap bounds traffic, DNS, compiler and service without starting
   assert.match(script, /CGO_ENABLED=0/);
   assert.match(script, /Restart=no/);
   assert.match(script, /TimeoutStopSec=180/);
-  assert.doesNotMatch(script, /systemctl (start|enable)|GH_APP_PRIVATE_KEY|latest|generate-ssh-keys/);
+  assert.doesNotMatch(script, /systemctl (?:start|enable (?!ghr-spike60-reboot-guard\.service))|GH_APP_PRIVATE_KEY|latest|generate-ssh-keys/);
 });
 
 test('runtime verifier uses actual spike hook and strict readonly privilege assertions', () => {
@@ -68,6 +68,13 @@ test('both guests adapt exact minimal packages after traffic quotas without assu
   const script = read('guest-bootstrap.sh');
   const install = read('install-minimal-tools.sh');
   assert.ok(script.indexOf('--quota 2147483648') < script.indexOf('install-minimal-tools.sh'));
+  assert.ok(script.indexOf('systemctl enable ghr-spike60-reboot-guard.service') < script.indexOf('install-minimal-tools.sh'));
+  assert.match(script, /cat \/proc\/sys\/kernel\/random\/boot_id > \/var\/lib\/ghr-spike60\/initial-boot-id/);
+  const guard = read('reboot-guard.sh');
+  assert.match(guard, /initial_boot_id == "\$current_boot_id" \]\] && exit 0/);
+  assert.match(guard, /iptables -w 5 -P OUTPUT DROP/);
+  assert.match(guard, /ip6tables -w 5 -P INPUT DROP/);
+  assert.match(script, /Before=network-pre\.target/);
   assert.ok(script.indexOf('install-minimal-tools.sh') < script.indexOf('if [[ $mode == worker ]]'));
   assert.match(install, /install "\$\{minimal_packages\[@\]\}"/);
   assert.match(install, /Acquire::Retries=0/);

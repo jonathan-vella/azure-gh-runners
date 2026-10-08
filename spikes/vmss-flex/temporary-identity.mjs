@@ -45,25 +45,30 @@ function exact(actual, expected, message) {
 }
 
 export function priceOriginalEnvelope(pricing, now) {
-  check(pricing && typeof pricing === 'object' && !Array.isArray(pricing), 'Complete effective USD rate/contingency record required.');
-  const rateKeys = ['b2sHourly', 'd2lsHourly', 'p4Hourly', 'natHourly', 'pipHourly', 'peHourly',
-    'dnsZonePerRun', 'natGb', 'egressGb', 'peIngressGb', 'peEgressGb', 'dnsMillionQueries',
-    'kvPerRunCeilingUsd', 'logsCombinedCeilingUsd', 'imageCombinedCeilingUsd', 'cleanupReserveUsd', 'miscCombinedCeilingUsd'];
-  exact(Object.keys(pricing).sort(), [...rateKeys, 'refreshedUtc'].sort(), 'Complete effective USD rate/contingency record required.');
-  const age = timestamp(now) - timestamp(pricing.refreshedUtc);
+  check(pricing && typeof pricing === 'object' && !Array.isArray(pricing), 'Complete sourced USD meter evidence required.');
+  const rateKeys = ['b2sHourly', 'd2lsHourly', 'p4MonthlyUsd', 'natHourly', 'natProcessedGb',
+    'standardIpv4Hourly', 'privateEndpointHourly', 'privateEndpointIngressGb', 'privateEndpointEgressGb',
+    'internetEgressGb', 'privateDnsZoneMonthly', 'privateDnsQueriesPerMillion', 'keyVaultOperationsPer10k'];
+  const metadataKeys = ['schemaVersion', 'source', 'sourceUrl', 'retrievedUtc', 'currencyCode', 'region'];
+  exact(Object.keys(pricing).sort(), [...rateKeys, ...metadataKeys].sort(), 'Complete sourced USD meter evidence required.');
+  check(pricing.schemaVersion === 1 && pricing.source === 'azure-retail-prices-api' &&
+    pricing.sourceUrl === 'https://prices.azure.com/api/retail/prices' &&
+    pricing.currencyCode === 'USD' && pricing.region === 'swedencentral',
+  'Only the reviewed Azure USD retail-price source and platform region are accepted.');
+  const age = timestamp(now) - timestamp(pricing.retrievedUtc);
   check(age >= 0 && age <= 24 * hour, 'Price evidence is stale or future dated.');
-  for (const key of rateKeys) check(Number.isFinite(pricing[key]) && pricing[key] > 0, 'Positive finite effective USD rates required; no zero fallback.');
-  const hourly = pricing.b2sHourly + 2 * pricing.d2lsHourly + 3 * pricing.p4Hourly +
-    pricing.natHourly + pricing.pipHourly + 2 * pricing.peHourly;
-  const traffic = 2 * (perRunTraffic.natBytes / 1e9 * pricing.natGb +
-    perRunTraffic.egressBytes / 1e9 * pricing.egressGb +
-    perRunTraffic.peIngressBytes / 1e9 * pricing.peIngressGb +
-    perRunTraffic.peEgressBytes / 1e9 * pricing.peEgressGb +
-    perRunTraffic.dnsQueries / 1e6 * pricing.dnsMillionQueries);
-  const total = 4 * hourly + traffic + 2 * (pricing.dnsZonePerRun + pricing.kvPerRunCeilingUsd) +
-    pricing.logsCombinedCeilingUsd + pricing.imageCombinedCeilingUsd +
-    pricing.cleanupReserveUsd + pricing.miscCombinedCeilingUsd;
-  check(Number.isFinite(total) && total < 10, 'Full two-run original envelope including bootstrap/cleanup does not fit $10.');
+  for (const key of rateKeys) check(Number.isFinite(pricing[key]) && pricing[key] > 0, 'Positive finite sourced USD meter rates required; no zero fallback.');
+  const hourly = pricing.b2sHourly + 2 * pricing.d2lsHourly + 3 * (pricing.p4MonthlyUsd / 672) +
+    pricing.natHourly + pricing.standardIpv4Hourly + 2 * pricing.privateEndpointHourly;
+  const traffic = 2 * (perRunTraffic.natBytes / 1e9 * pricing.natProcessedGb +
+    perRunTraffic.egressBytes / 1e9 * pricing.internetEgressGb +
+    perRunTraffic.peIngressBytes / 1e9 * pricing.privateEndpointIngressGb +
+    perRunTraffic.peEgressBytes / 1e9 * pricing.privateEndpointEgressGb +
+    perRunTraffic.dnsQueries / 1e6 * pricing.privateDnsQueriesPerMillion);
+  const secretOperations = 2 * 2;
+  const total = 4 * hourly + traffic + 2 * pricing.privateDnsZoneMonthly +
+    secretOperations / 10000 * pricing.keyVaultOperationsPer10k;
+  check(Number.isFinite(total) && total < 10, 'Planned two-run resource and usage projection does not fit the $10 envelope.');
   return total;
 }
 

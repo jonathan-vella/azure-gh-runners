@@ -14,11 +14,13 @@ const now = '2026-10-08T05:00:00.000Z';
 const head = 'a'.repeat(40);
 const fingerprint = Buffer.alloc(32, 1).toString('base64');
 const pricing = {
-  refreshedUtc: now, b2sHourly: 0.0432, d2lsHourly: 0.091, p4Hourly: 5.8072 / 672,
-  natHourly: 0.045, pipHourly: 0.005, peHourly: 0.01, dnsZonePerRun: 0.5,
-  natGb: 0.045, egressGb: 0.12, peIngressGb: 0.01, peEgressGb: 0.01, dnsMillionQueries: 0.5,
-  kvPerRunCeilingUsd: 0.1, logsCombinedCeilingUsd: 0.5, imageCombinedCeilingUsd: 1,
-  cleanupReserveUsd: 2, miscCombinedCeilingUsd: 0.5,
+  schemaVersion: 1, source: 'azure-retail-prices-api', sourceUrl: 'https://prices.azure.com/api/retail/prices',
+  retrievedUtc: now, currencyCode: 'USD', region: 'swedencentral',
+  b2sHourly: 0.0432, d2lsHourly: 0.091, p4MonthlyUsd: 5.8072,
+  natHourly: 0.045, natProcessedGb: 0.045, standardIpv4Hourly: 0.005,
+  privateEndpointHourly: 0.01, privateEndpointIngressGb: 0.01, privateEndpointEgressGb: 0.01,
+  internetEgressGb: 0.12, privateDnsZoneMonthly: 0.5, privateDnsQueriesPerMillion: 0.4,
+  keyVaultOperationsPer10k: 0.03,
 };
 const claims = {
   iss: 'https://token.actions.githubusercontent.com', aud: 'api://AzureADTokenExchange',
@@ -139,7 +141,7 @@ test('original time and combined cost ceilings fail closed', () => {
   }
   const state = clean(begin(newIdentityEnvelope(head)));
   for (const time of ['2026-10-08T04:00:00.000Z', '2026-10-08T07:15:00.000Z', '2026-10-08T08:00:00.000Z']) {
-    assert.throws(() => transitionIdentityEnvelope(state, 'begin', { now: time, pricing: { ...pricing, refreshedUtc: time } }), /window/);
+    assert.throws(() => transitionIdentityEnvelope(state, 'begin', { now: time, pricing: { ...pricing, retrievedUtc: time } }), /window/);
   }
 });
 
@@ -335,18 +337,45 @@ test('durable lock/atomic transitions preserve reservations on restart and never
   }
 });
 
-test('full effective meter quote covers BOTH run bootstrap quotas and all cleanup contingencies', () => {
+test('sourced meter quote covers both runs and planned cleanup without invented reserve categories', () => {
   const total = priceOriginalEnvelope(pricing, now);
-  assert.ok(total > 8 && total < 10);
-  assert.throws(() => priceOriginalEnvelope({ ...pricing, cleanupReserveUsd: 6 }, now), /fit/);
-  assert.throws(() => priceOriginalEnvelope({ ...pricing, natGb: 0 }, now), /fallback/);
+  assert.ok(total > 4.3 && total < 10);
+  assert.equal(Math.round(total * 1e9) / 1e9, 4.306308956);
+  assert.throws(() => priceOriginalEnvelope({ ...pricing, b2sHourly: 3 }, now), /fit/);
+  assert.throws(() => priceOriginalEnvelope({ ...pricing, natProcessedGb: 0 }, now), /fallback/);
   const missing = { ...pricing };
-  delete missing.kvPerRunCeilingUsd;
+  delete missing.keyVaultOperationsPer10k;
   assert.throws(() => priceOriginalEnvelope(missing, now), /Complete/);
   assert.throws(() => priceOriginalEnvelope(pricing, '2026-10-10T05:00:00.000Z'), /stale/);
+  assert.throws(() => priceOriginalEnvelope({ ...pricing, logsCombinedCeilingUsd: 1 }, now), /Complete/);
+  assert.throws(() => priceOriginalEnvelope({ ...pricing, currencyCode: 'EUR' }, now), /reviewed/);
+  assert.throws(() => priceOriginalEnvelope({ ...pricing, sourceUrl: 'https://example.invalid' }, now), /reviewed/);
   const corrupt = begin(newIdentityEnvelope(head));
   corrupt.reservedUsage.natBytes = 0;
   assert.throws(() => validateIdentityEnvelope(corrupt), /Cumulative/);
+});
+
+test('priced network quantities match the enforced guest quotas before bootstrap downloads', () => {
+  const bootstrap = readFileSync(new URL('../guest-bootstrap.sh', import.meta.url), 'utf8');
+  const byteQuotas = [...bootstrap.matchAll(/iptables -w 5 -A GHR_SPIKE60_(?:BYTES|INPUT) -m quota --quota (\d+) -j RETURN/g)]
+    .map(match => Number(match[1]));
+  const dnsLimit = bootstrap.match(/iptables -w 5 -A GHR_SPIKE60_DNS -m limit --limit (\d+)\/second --limit-burst (\d+) -j RETURN/);
+  assert.deepEqual(byteQuotas, [2 ** 31, 2 ** 31]);
+  assert.deepEqual(dnsLimit?.slice(1).map(Number), [2, 20]);
+  const run = begin(newIdentityEnvelope(head));
+  assert.equal(run.reservedUsage.natBytes, 2 * 2 * 2 ** 31);
+  assert.equal(run.reservedUsage.egressBytes, 2 * 2 ** 31);
+  assert.equal(run.reservedUsage.peIngressBytes, 2 * 2 ** 31);
+  assert.equal(run.reservedUsage.peEgressBytes, 2 * 2 ** 31);
+  assert.equal(run.reservedUsage.dnsQueries, 2 * (2 * 4 * 60 * 60 + 20));
+});
+
+test('unpriced paid resource creates remain excluded from the VMSS templates', () => {
+  const foundation = readFileSync(new URL('../infra/main.bicep', import.meta.url), 'utf8');
+  const worker = readFileSync(new URL('../infra/worker.bicep', import.meta.url), 'utf8');
+  assert.match(foundation, /privateDnsZones: 1[\s\S]*?keyVaultSecrets: 1[\s\S]*?privateEndpoints: 1/);
+  assert.doesNotMatch(`${foundation}\n${worker}`,
+    /Microsoft\.(?:OperationalInsights\/workspaces|ContainerRegistry\/registries|Storage\/storageAccounts|Compute\/galleries|Compute\/snapshots|Network\/privateDnsResolvers)/);
 });
 
 test('cheaper second-run quote cannot refund original cost reservation', () => {

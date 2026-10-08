@@ -117,13 +117,18 @@ plus successful worker GitHub connection/job completion: observational configura
 
 Fixed subscription `b47d2942-f5ad-4d3c-b28e-c23e4f83d97e` (`shared`), tenant
 `30bac921-1547-4b1e-8445-72455da783f1`, region `swedencentral`.
-Peak reserve is one B2s, two D2ls v5, three P4 disks, NAT/PIP and two PEs for the original four hours, including
-cleanup. Two full DNS-zone and per-run KV charges plus combined image/log/miscellaneous/cleanup reserves must
-fit **strictly below $10**. There is no partial $8 envelope or unpriced contingency fallback.
-Both runs reserve four guests total, 17.179869184 GB NAT, 8.589934592 GB outbound,
-17.179869184 GB PE ingress plus egress and 115,280 DNS queries. Quotas cannot reset on retry/reboot.
-See the exact positive, refreshed meter schema in the identity contract. Fixture rates are not an account quote;
-deletion failures can accrue beyond planned time/cost limits.
+The code-only retail projection prices the maximum B2s/D2ls/P4/NAT/public-IP/private-endpoint counts and both
+full-run DNS zones over the original four hours, including planned cleanup. It prices both directions of the
+enforced byte quotas, worst-case DNS bursts, and the maximum four Standard Key Vault secret operations. The
+current sourced example is about **$4.31**, strictly below $10; this is a public-retail planning projection,
+not an account quote or billing guarantee. Only categories created by the templates are priced; unsupported
+paid creates are explicitly excluded, not given arbitrary reserves.
+
+Both runs reserve four guests total, 17.179869184 GB NAT-processed traffic, 8.589934592 GB Internet egress,
+17.179869184 GB private-endpoint ingress plus egress and 115,280 DNS queries. Quotas cannot reset on retry or
+guest restart. Four hours include the planned cleanup window; if a provider refuses or delays deletion, surviving
+resources can continue accruing charges beyond that window and the $10 projection is no longer a bound. See
+[cost sources and assumptions](pricing-sources.md) and the exact evidence contract in the identity document.
 
 Use PowerShell 7.5+, existing Linux Docker, Node/npm and Azure CLI/Bicep:
 

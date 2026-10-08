@@ -143,18 +143,23 @@ Per-run DNS reservation is conservative: two guests, each allowed the entire fou
 plus burst 20, yielding 57,640 queries/run, **115,280 combined**. This over-reserves duration rather than refunding
 failed bootstrap traffic. No guest restart or quota reset is authorized.
 
-`priceOriginalEnvelope` requires refreshed (at most 24 hours) positive finite effective USD values for
-`b2sHourly`, `d2lsHourly`, `p4Hourly`, `natHourly`, `pipHourly`, `peHourly`, `dnsZonePerRun`, `natGb`,
-`egressGb`, `peIngressGb`, `peEgressGb`, `dnsMillionQueries`, `kvPerRunCeilingUsd`,
-`logsCombinedCeilingUsd`, `imageCombinedCeilingUsd`, `cleanupReserveUsd`, `miscCombinedCeilingUsd`
-and exact UTC `refreshedUtc`. Missing/extra categories, zero fallback, stale rates or a combined total >= $10 reject.
-Disk monthly prices require a documented conservative hourly conversion, not an assumed 730-hour denominator.
-The peak hourly reservation is one B2s, two D2ls v5, three P4 disks, NAT, one PIP and two PEs for the original
-four hours, **including cleanup while disks still exist**. Two full DNS-zone charges and two per-run KV ceilings
-are reserved. Traffic includes bootstrap for both runs; all explicit image/log/miscellaneous and cleanup reserves
-are added inside $10, not outside it. Every run rechecks a complete refreshed quote before any creation.
-The highest original quote reservation is retained even when a later quote is cheaper; no cost allowance refund.
-The test rate records are fixtures, not a refreshed account quote. Unknown extras still block live certification.
+`priceOriginalEnvelope` accepts only the closed schema documented in
+[the cost-source record](pricing-sources.md): a retrieval timestamp no more than 24 hours old, Azure Retail Prices
+API source, USD, `swedencentral`, and positive finite rates for the exact VM, disk, NAT, IP, Private Link, bandwidth,
+Private DNS, and Key Vault operation meters. It rejects missing/extra categories, zero fallback, stale evidence,
+or a planned projection at or above $10. Premium P4 uses its monthly retail price divided by 672 hours (the shortest
+calendar month); each of the three disks is priced through all four planned hours, including cleanup. Two zone
+hosting charges are conservatively billed at a full monthly rate. The two-run traffic calculation includes both
+directions of guest quota bytes, all allowed DNS bursts, and four secret-only Key Vault operations. No arbitrary
+log, image, cleanup, or miscellaneous amount is added: those paid resource creates are forbidden by this contract.
+
+The example is approximately $4.31 using public retail rates. It is a planning projection, not an account-specific
+quote, actual invoice, or absolute Azure billing limit. Resource-hour charges cover the original four hours, with
+cleanup beginning by the three-hour work deadline and the final hour reserved. If a provider refuses/delays cleanup,
+surviving resources can continue accruing charges past the deadline; that liability has no finite upper bound in this
+estimate. No source gate, identity/key permission, or execution readiness is changed by this calculation.
+Every full run rechecks fresh evidence before creation. The highest prior projection is retained even if a later
+quote is cheaper; no cost allowance refund.
 
 The offline tests cover exact trust/Owner/env contracts, production-ID rejection, two full runs, cleanup prerequisite
 and order, original clock, combined cost ceiling, each interrupted step, no retry, locks/restart reservations,

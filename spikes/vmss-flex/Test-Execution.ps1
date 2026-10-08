@@ -30,11 +30,13 @@ $approval = @{
     archiveSha256 = ('b' * 64); adminSshPublicKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefixture'
     appKeyFingerprint = [Convert]::ToBase64String([byte[]]::new(32))
     pricing = @{
-        refreshedUtc = $now.ToString('o'); b2sHourly = 0.0432; d2lsHourly = 0.091; p4Hourly = 0.008
-        natHourly = 0.045; pipHourly = 0.005; peHourly = 0.01; dnsZonePerRun = 0.5
-        natGb = 0.02; egressGb = 0.05; peIngressGb = 0.01; peEgressGb = 0.01; dnsMillionQueries = 0.2
-        kvPerRunCeilingUsd = 0.1; logsCombinedCeilingUsd = 0.5; imageCombinedCeilingUsd = 1
-        cleanupReserveUsd = 2; miscCombinedCeilingUsd = 0.5
+        schemaVersion = 1; source = 'azure-retail-prices-api'; sourceUrl = 'https://prices.azure.com/api/retail/prices'
+        retrievedUtc = $now.ToString('o'); currencyCode = 'USD'; region = 'swedencentral'
+        b2sHourly = 0.0432; d2lsHourly = 0.091; p4MonthlyUsd = 5.8072
+        natHourly = 0.045; natProcessedGb = 0.045; standardIpv4Hourly = 0.005
+        privateEndpointHourly = 0.01; privateEndpointIngressGb = 0.01; privateEndpointEgressGb = 0.01
+        internetEgressGb = 0.12; privateDnsZoneMonthly = 0.5; privateDnsQueriesPerMillion = 0.4
+        keyVaultOperationsPer10k = 0.03
     }
     quota = @{
         subscription = $manifest.subscription; location = 'swedencentral'; refreshedUtc = $now.ToString('o')
@@ -51,12 +53,12 @@ $approval.secretReadApproved = $true
 $approval.canonicalUbuntuVersion = 'latest'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.canonicalUbuntuVersion = '24.04.202609260'
-$approval.pricing.natGb = 10
+$approval.pricing.natProcessedGb = 10
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
-$approval.pricing.natGb = 0.02
-$approval.pricing.refreshedUtc = $now.AddHours(-25).ToString('o')
+$approval.pricing.natProcessedGb = 0.045
+$approval.pricing.retrievedUtc = $now.AddHours(-25).ToString('o')
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
-$approval.pricing.refreshedUtc = $now.ToString('o')
+$approval.pricing.retrievedUtc = $now.ToString('o')
 $approval.unexpected = 'fake-input'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.Remove('unexpected')

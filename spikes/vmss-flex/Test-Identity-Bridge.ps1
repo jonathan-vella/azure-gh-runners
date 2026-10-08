@@ -7,18 +7,19 @@ function Reject([scriptblock]$Operation) {
     if (-not $failed) { throw 'Unsafe identity bridge input accepted.' }
 }
 $pricing = @{
-    refreshedUtc = '2026-10-08T05:00:00.000Z'
-    b2sHourly = 0.0432; d2lsHourly = 0.091; p4Hourly = (5.8072 / 672)
-    natHourly = 0.045; pipHourly = 0.005; peHourly = 0.01; dnsZonePerRun = 0.5
-    natGb = 0.045; egressGb = 0.12; peIngressGb = 0.01; peEgressGb = 0.01; dnsMillionQueries = 0.5
-    kvPerRunCeilingUsd = 0.1; logsCombinedCeilingUsd = 0.5; imageCombinedCeilingUsd = 1
-    cleanupReserveUsd = 2; miscCombinedCeilingUsd = 0.5
+    schemaVersion = 1; source = 'azure-retail-prices-api'; sourceUrl = 'https://prices.azure.com/api/retail/prices'
+    retrievedUtc = '2026-10-08T05:00:00.000Z'; currencyCode = 'USD'; region = 'swedencentral'
+    b2sHourly = 0.0432; d2lsHourly = 0.091; p4MonthlyUsd = 5.8072
+    natHourly = 0.045; natProcessedGb = 0.045; standardIpv4Hourly = 0.005
+    privateEndpointHourly = 0.01; privateEndpointIngressGb = 0.01; privateEndpointEgressGb = 0.01
+    internetEgressGb = 0.12; privateDnsZoneMonthly = 0.5; privateDnsQueriesPerMillion = 0.4
+    keyVaultOperationsPer10k = 0.03
 }
 $now = [DateTimeOffset]::Parse('2026-10-08T05:00:00.000Z')
 $price = Get-SpikeCombinedPrice -Pricing $pricing -Now $now
-if ($price -le 8 -or $price -ge 10) { throw 'Conservative combined fixture quote was not preserved.' }
+if ($price -le 4 -or $price -ge 10) { throw 'Sourced two-run retail planning projection was not preserved.' }
 $badPrice = $pricing.Clone()
-$badPrice.cleanupReserveUsd = 6
+$badPrice.b2sHourly = 3
 Reject { Get-SpikeCombinedPrice -Pricing $badPrice -Now $now }
 
 $directory = Join-Path ([IO.Path]::GetTempPath()) "identity-bridge-$([guid]::NewGuid().ToString('N'))"
@@ -29,7 +30,7 @@ $source = @'
 const { pathToFileURL } = await import('node:url');
 const m = await import(pathToFileURL(process.argv[1]));
 const pricing = JSON.parse(process.argv[2]);
-const now = pricing.refreshedUtc;
+const now = pricing.retrievedUtc;
 let state = m.newIdentityEnvelope('a'.repeat(40));
 state = m.transitionIdentityEnvelope(state, 'begin', { now, pricing });
 const claims = {
