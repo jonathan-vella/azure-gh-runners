@@ -129,6 +129,8 @@ not an account quote or billing guarantee. Only categories created by the templa
 paid creates are explicitly excluded, not given arbitrary reserves.
 Guest quotas are installed before bootstrap downloads, but do not cover earlier OS/cloud-init networking; the
 projection is not a hard ceiling for that unmeasured traffic or for post-deadline deletion refusal.
+The paid-execution preflight explicitly blocks on this unresolved coverage gap; the offline subtotal remains usable
+for planning only.
 
 Both runs reserve four guests total, 17.179869184 GB NAT-processed traffic, 8.589934592 GB Internet egress,
 17.179869184 GB private-endpoint ingress plus egress and 115,280 DNS queries. Quotas cannot reset on retry or

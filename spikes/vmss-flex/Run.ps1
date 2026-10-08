@@ -29,11 +29,12 @@ try {
     $manifest = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable -DateKind String
     Assert-SpikeManifest $manifest
     if ($Action -eq 'Execute') {
+        Import-Module (Join-Path $PSScriptRoot 'Execution.psm1') -Force
+        Assert-SpikePaidExecutionCostCoverage
         throw 'Deployment disabled: runtime has no authorized durable canonical CAS adapter; a file/artifact is not ownership.'
         if (-not $ConfirmCoordinatorExecutionDirection -or -not $ApprovalPath) {
             throw 'Exact execution direction and separately approved nonsecret gate record required.'
         }
-        Import-Module (Join-Path $PSScriptRoot 'Execution.psm1') -Force
         $approval = Get-Content -LiteralPath $ApprovalPath -Raw | ConvertFrom-Json -AsHashtable -DateKind String
         try {
             Invoke-SpikeExecution -Manifest $manifest -Path $path -Approval $approval

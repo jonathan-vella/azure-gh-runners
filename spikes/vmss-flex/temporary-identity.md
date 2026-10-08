@@ -199,6 +199,9 @@ directions of guest quota bytes, all allowed DNS bursts, and four secret-only Ke
 log, image, cleanup, or miscellaneous amount is added: those paid resource creates are forbidden by this contract.
 The guest quota does not include networking before `guest-bootstrap.sh` installs its rules (for example, earlier
 OS/cloud-init traffic); that exposure is not bounded by this projection or validated on an Azure guest boot.
+Accordingly, the named `Assert-SpikePaidExecutionCostCoverage` preflight rejects paid execution before source,
+CAS, key, or cloud checks; no caller-supplied completion flag can override it. `priceOriginalEnvelope` remains
+available for offline planning, but passing its subtotal does not certify cost coverage.
 
 The example is approximately $4.31 using public retail rates. It is a planning projection, not an account-specific
 quote, actual invoice, or absolute Azure billing limit. Resource-hour charges cover the original four hours, with

@@ -6,6 +6,13 @@ function Reject([scriptblock]$Operation) {
     try { & $Operation } catch { $failed = $true }
     if (-not $failed) { throw 'Unsafe execution input accepted.' }
 }
+function RejectNamed([scriptblock]$Operation, [string]$Message) {
+    try { & $Operation } catch {
+        if ($_.Exception.Message -ceq $Message) { return }
+        throw
+    }
+    throw 'Unsafe execution input accepted.'
+}
 $manifest = New-SpikeManifest -Head ('a' * 40)
 if ($manifest.keyVaultName -cne ("kv-ghr60-" + $manifest.runId.Substring(0, 14) + $manifest.runOrdinal) -or
     $manifest.runOrdinal -ne 1 -or $manifest.keyVaultName.Length -ne 24) {
@@ -43,7 +50,9 @@ $approval = @{
         networkInterfaces = 3; premiumDisks = 2; natGateways = 1; publicIps = 1; privateEndpoints = 1; privateDnsZones = 1
     }
 }
-Assert-SpikeExecutionApproval $approval $manifest -Now $now
+$costBlock = 'Paid execution blocked: pre-bootstrap OS/cloud-init network traffic is not bounded by the current cost model.'
+RejectNamed { Assert-SpikeExecutionApproval $approval $manifest -Now $now } $costBlock
+RejectNamed { Assert-SpikePaidExecutionCostCoverage } $costBlock
 $approval.appKeyFingerprint = 'invalid'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.appKeyFingerprint = [Convert]::ToBase64String([byte[]]::new(32))
@@ -223,6 +232,7 @@ try {
     & $module {
         param($manifest, $approval, $directory)
         function script:Assert-SpikeExecutionApproval {}
+        function script:Assert-SpikePaidExecutionCostCoverage {}
         function script:Write-SpikeManifest {}
         function script:Assert-SpikePreflight {}
         function script:New-SpikeCustomData { return 'Y2xvdWQtY29uZmln' }
@@ -286,11 +296,14 @@ $saved = $env:GHR_SPIKE60_EXECUTION_ENABLED
 try {
     $env:GHR_SPIKE60_EXECUTION_ENABLED = 'false'
     & $module {
+        function script:Assert-SpikePaidExecutionCostCoverage {
+            throw 'Paid execution blocked: pre-bootstrap OS/cloud-init network traffic is not bounded by the current cost model.'
+        }
         function script:Invoke-SpikeCommand { throw 'Offline test attempted an Azure call.' }
     }
     $message = $null
     try { Invoke-SpikeExecution $manifest 'unused' $approval } catch { $message = $_.Exception.Message }
-    if ($message -notlike 'Deployment disabled:*') { throw 'Disabled gate reached cloud/key processing.' }
+    if ($message -cne $costBlock) { throw 'Paid cost-coverage gate did not precede cloud/key processing.' }
     $directory = Join-Path ([IO.Path]::GetTempPath()) ("vmss60-disabled-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $directory | Out-Null
     try {
@@ -302,7 +315,7 @@ try {
                 -ManifestPath (Join-Path $directory 'manifest.json') -ApprovalPath (Join-Path $directory 'approval.json') `
                 -ConfirmCoordinatorExecutionDirection
         } catch { $runFailure = $_.Exception.Message }
-        if ($runFailure -notlike 'Deployment disabled:*' -or $manifest.attempts -ne 0) {
+        if ($runFailure -cne $costBlock -or $manifest.attempts -ne 0) {
             throw 'Disabled entrypoint reached cleanup/cloud work or reserved an invocation.'
         }
     } finally { Remove-Item -LiteralPath $directory -Recurse -Force }
