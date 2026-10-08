@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const foundation = readFileSync(new URL('../infra/main.bicep', import.meta.url), 'utf8');
-const subscription = readFileSync(new URL('../infra/subscription.bicep', import.meta.url), 'utf8');
 const worker = readFileSync(new URL('../infra/worker.bicep', import.meta.url), 'utf8');
 
 test('foundation pins the approved isolated spike scope and versioned AVMs', () => {
@@ -26,53 +25,10 @@ test('foundation pins the approved isolated spike scope and versioned AVMs', () 
   }
 });
 
-test('subscription wrapper creates the fixed tagged resource group and deploys foundation in one invocation', () => {
-  assert.match(subscription, /targetScope = 'subscription'/);
-  assert.match(subscription, /Microsoft\.Resources\/resourceGroups@2024-03-01/);
-  assert.match(subscription, /var approvedResourceGroupName = 'rg-ghrunners-spike-vmss-swc'/);
-  assert.match(subscription, /var location = 'swedencentral'/);
-  assert.match(subscription, /location: location/);
-  assert.match(subscription, /param runOrdinal int/);
-  assert.match(subscription, /runOrdinal: runOrdinal/);
-  assert.match(subscription, /scope: resourceGroup\(spikeResourceGroup\.name\)/);
-  assert.match(subscription, /module foundation 'main\.bicep'/);
-  assert.match(subscription, /@secure\(\)\s*param githubAppPrivateKey string/);
-  assert.match(subscription, /@minLength\(1\)\s*param adminSshPublicKey string/);
-  assert.match(subscription, /adminSshPublicKey: adminSshPublicKey/);
-  assert.match(subscription, /githubAppPrivateKey: githubAppPrivateKey/);
-  assert.match(subscription, /output keyVaultSecretVersionUri string = foundation\.outputs\.keyVaultSecretVersionUri/);
-  assert.match(subscription, /output keyVaultName string = foundation\.outputs\.keyVaultName/);
-  assert.match(subscription, /output keyVaultSecretScope string = foundation\.outputs\.keyVaultSecretScope/);
-  assert.match(subscription, /output keyVaultSoftDeleteRetentionInDays int = foundation\.outputs\.keyVaultSoftDeleteRetentionInDays/);
-  assert.match(subscription, /output keyVaultPurgeProtectionEnabled bool = foundation\.outputs\.keyVaultPurgeProtectionEnabled/);
-  assert.match(subscription, /output controllerPrincipalId string = foundation\.outputs\.controllerPrincipalId/);
-  assert.match(subscription, /output secretVersionUri string = foundation\.outputs\.secretVersionUri/);
-  assert.match(subscription, /output workerSubnetResourceId string = foundation\.outputs\.workerSubnetResourceId/);
-  assert.match(subscription, /output flexScaleSetResourceId string = foundation\.outputs\.flexScaleSetResourceId/);
-  assert.doesNotMatch(subscription, /Microsoft\.Authorization\/roleAssignments|roleAssignments:|githubAppPrivateKey string =|output .*githubAppPrivateKey/i);
-  for (const outputName of [
-    'resourceGroupId',
-    'virtualNetworkId',
-    'controllerSubnetId',
-    'workerSubnetId',
-    'privateEndpointSubnetId',
-    'controllerVmId',
-    'controllerNicId',
-    'controllerOsDiskId',
-    'controllerManagedIdentityPrincipalId',
-    'controllerPrincipalId',
-    'flexScaleSetId',
-    'flexScaleSetResourceId',
-    'workerSubnetResourceId',
-    'keyVaultId',
-    'keyVaultPrivateEndpointId',
-    'keyVaultSecretVersionUri',
-    'secretVersionUri',
-    'natGatewayId',
-    'natPublicIpId',
-  ]) {
-    assert.match(subscription, new RegExp(`output ${outputName} string =`), `Missing sanitized output ${outputName}`);
-  }
+test('temporary identity deploys only into the precreated exact resource group', () => {
+  assert.equal(existsSync(new URL('../infra/subscription.bicep', import.meta.url)), false);
+  assert.match(foundation, /targetScope = 'resourceGroup'/);
+  assert.doesNotMatch(foundation, /Microsoft\.Resources\/resourceGroups@/);
 });
 
 test('foundation uses the three private subnets, restrictive NSGs, and one NAT public IP', () => {

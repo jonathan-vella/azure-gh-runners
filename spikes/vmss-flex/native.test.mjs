@@ -48,3 +48,30 @@ test('guest bootstrap bounds traffic, DNS, compiler and service without starting
   assert.match(script, /TimeoutStopSec=180/);
   assert.doesNotMatch(script, /systemctl (start|enable)|GH_APP_PRIVATE_KEY|latest|generate-ssh-keys/);
 });
+
+test('runtime verifier uses actual spike hook and strict readonly privilege assertions', () => {
+  const script = read('verify-spike-worker.sh');
+  assert.match(script, /ACTIONS_RUNNER_HOOK_JOB_STARTED:-.*\/opt\/ghr-vmss\/pre-job-spike\.sh/);
+  assert.match(script, /0:0:555/);
+  assert.match(script, /! -L \$file/);
+  assert.match(script, /command -v sudo/);
+  assert.doesNotMatch(script, /sudo -n|sudo true|ACTIONS_RUNNER_HOOK_JOB_STARTED=/);
+  assert.match(script, /IDENTITY_ENDPOINT/);
+  assert.match(script, /-perm -4000/);
+  assert.match(script, /inherited\[\]/);
+  assert.match(read('native-test.Dockerfile'), /ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=\/opt\/ghr-vmss\/pre-job-spike\.sh/);
+  assert.match(read('test-spike-verifier.sh'), /chmod 0777/);
+  assert.match(read('test-spike-verifier.sh'), /mv "\$file" "\$file.disabled"/);
+});
+
+test('both guests adapt exact minimal packages after traffic quotas without assuming image patch parity', () => {
+  const script = read('guest-bootstrap.sh');
+  const install = read('install-minimal-tools.sh');
+  assert.ok(script.indexOf('--quota 2147483648') < script.indexOf('install-minimal-tools.sh'));
+  assert.ok(script.indexOf('install-minimal-tools.sh') < script.indexOf('if [[ $mode == worker ]]'));
+  assert.match(install, /install "\$\{minimal_packages\[@\]\}"/);
+  assert.match(install, /Acquire::Retries=0/);
+  assert.ok(install.indexOf('install "${minimal_packages[@]}"') < install.indexOf('dpkg-query'));
+  assert.match(read('test-minimal-tools.sh'), /older-image-baseline/);
+  assert.match(read('test-minimal-tools.sh'), /SIMULATE_FAILURE=true/);
+});

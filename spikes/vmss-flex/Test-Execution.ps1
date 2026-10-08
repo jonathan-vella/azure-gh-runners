@@ -31,8 +31,10 @@ $approval = @{
     appKeyFingerprint = ('e' * 64)
     pricing = @{
         refreshedUtc = $now.ToString('o'); b2sHourly = 0.0432; d2lsHourly = 0.091; p4Hourly = 0.008
-        natHourly = 0.06; pipHourly = 0.01; peHourly = 0.02; dnsZoneHourly = 0.001
-        natGb = 0.02; egressGb = 0.05; peGb = 0.01; dnsMillionQueries = 0.2
+        natHourly = 0.045; pipHourly = 0.005; peHourly = 0.01; dnsZonePerRun = 0.5
+        natGb = 0.02; egressGb = 0.05; peIngressGb = 0.01; peEgressGb = 0.01; dnsMillionQueries = 0.2
+        kvPerRunCeilingUsd = 0.1; logsCombinedCeilingUsd = 0.5; imageCombinedCeilingUsd = 1
+        cleanupReserveUsd = 2; miscCombinedCeilingUsd = 0.5
     }
     quota = @{
         subscription = $manifest.subscription; location = 'swedencentral'; refreshedUtc = $now.ToString('o')
@@ -163,7 +165,7 @@ Reject { Assert-SpikeCleanupPermission $manifest }
 $executionEnvironment = @(
     'GHR_SPIKE60_EXECUTION_ENABLED', 'GITHUB_ACTIONS', 'GITHUB_RUN_ATTEMPT',
     'GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_SHA', 'GHR_SPIKE_ENVIRONMENT',
-    'GHR_SPIKE60_APP_PRIVATE_KEY'
+    'GHR_SPIKE60_APP_PRIVATE_KEY', 'GHR_SPIKE_AZURE_CLIENT_ID'
 )
 $executionSaved = @{}
 foreach ($name in $executionEnvironment) { $executionSaved[$name] = [Environment]::GetEnvironmentVariable($name) }
@@ -183,7 +185,9 @@ try {
     $env:GITHUB_REPOSITORY = 'jonathan-vella/azure-gh-runners'
     $env:GITHUB_REF = 'refs/heads/main'
     $env:GITHUB_SHA = $dispatchManifest.head
-    $env:GHR_SPIKE_ENVIRONMENT = 'platform-prod'
+    $env:GHR_SPIKE_ENVIRONMENT = 'spike-vmss'
+    $dispatchManifest.temporaryIdentityClientId = '11111111-1111-1111-1111-111111111111'
+    $env:GHR_SPIKE_AZURE_CLIENT_ID = $dispatchManifest.temporaryIdentityClientId
     $env:GHR_SPIKE60_APP_PRIVATE_KEY = 'fixture PRIVATE KEY-----'
     & $module {
         param($manifest, $approval, $directory)
@@ -198,10 +202,11 @@ try {
             throw 'execution-dispatch-captured'
         }
         $path = Join-Path $directory 'manifest.json'
+        $script:executionSourceEnabled = $true
         try { Invoke-SpikeExecution $manifest $path $approval }
         catch {
             if ($_.Exception.Message -cne 'execution-dispatch-captured') { throw }
-        }
+        } finally { $script:executionSourceEnabled = $false }
         $expected = Get-SpikeFoundationDeploymentName $manifest
         if ($script:dispatchedFoundationName -cne $expected) {
             throw 'Execution dispatch did not use the deterministic ordinal deployment name.'

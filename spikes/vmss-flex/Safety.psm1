@@ -5,6 +5,7 @@ $script:subscription = 'b47d2942-f5ad-4d3c-b28e-c23e4f83d97e'
 $script:tenant = '30bac921-1547-4b1e-8445-72455da783f1'
 $script:group = 'rg-ghrunners-spike-vmss-swc'
 $script:scope = "/subscriptions/$script:subscription/resourceGroups/$script:group"
+$script:cleanupSourceEnabled = $false
 
 function Get-SpikeKeyVaultName {
     param(
@@ -37,14 +38,13 @@ function New-SpikeManifest {
         keyVaultSecretScope = $null; keyVaultSoftDeleteRetentionInDays = 7
         keyVaultPurgeProtectionEnabled = $false
         appKeyFingerprint = $null; ownerRevocationConfirmed = $false
+        temporaryIdentityClientId = $null; temporaryIdentitySpId = $null
         controllerSku = 'Standard_B2s'; workerSku = 'Standard_D2ls_v5'
         maxWorkers = 2; maxAttempts = 2; attempts = 0
         maxHours = 4; cleanupReserveMinutes = 60; capUsd = 10
-        # These are ceilings, not quotes: price refresh and measured byte/log limits
-        # are required before this envelope may authorize a deployment.
-        hourlyCeilingUsd = 0.5; fixedReserveUsd = 6; envelopeUsd = 8
         startedUtc = $null; workDeadlineUtc = $null; hardDeadlineUtc = $null
         phase = 'prepared'; cleanup = 'not-started'
+        cleanupDeleteReserved = $false; cleanupDeleteAcknowledged = $false
     }
     $manifest.keyVaultSecretScope = Get-SpikeSecretScope $manifest
     return $manifest
@@ -63,10 +63,24 @@ function Assert-SpikeManifest {
     if ($Manifest.ownerRevocationConfirmed -isnot [bool] -or
         ($Manifest.ownerRevocationConfirmed -and
             ($Manifest.phase -ne 'closed' -or -not $Manifest.appKeyFingerprint))) {
-        throw 'Owner-only App-key revocation confirmation is invalid before verified cleanup.'
+        throw 'Scoped coordinator App-key revocation evidence is invalid before verified cleanup.'
     }
     $expected.appKeyFingerprint = $Manifest.appKeyFingerprint
     $expected.ownerRevocationConfirmed = $Manifest.ownerRevocationConfirmed
+    foreach ($key in @('cleanupDeleteReserved', 'cleanupDeleteAcknowledged')) {
+        if ($Manifest[$key] -isnot [bool]) { throw 'Invalid cleanup mutation receipt.' }
+        $expected[$key] = $Manifest[$key]
+    }
+    if ($Manifest.cleanupDeleteAcknowledged -and -not $Manifest.cleanupDeleteReserved) {
+        throw 'Cleanup acknowledgement lacks durable delete intent.'
+    }
+    foreach ($key in @('temporaryIdentityClientId', 'temporaryIdentitySpId')) {
+        if ($null -ne $Manifest[$key] -and ($Manifest[$key] -cnotmatch '^[a-f0-9-]{36}$' -or
+            $Manifest[$key] -in @('24ebb9cc-0e3b-4956-a333-5665a060f2c7', '5ee406c4-2cac-4c4a-a900-f9bb6f95b6d0'))) {
+            throw 'Only captured temporary spike identity may enter runtime manifest.'
+        }
+        $expected[$key] = $Manifest[$key]
+    }
     if ($Manifest.Count -ne $expected.Count) { throw 'Unexpected manifest fields; refusing unsafe state.' }
     foreach ($key in $expected.Keys) {
         if (-not $Manifest.ContainsKey($key)) { throw 'Missing manifest field.' }
@@ -134,8 +148,7 @@ function Reserve-SpikeAttempt {
     Assert-SpikeManifest $Manifest
     if ($Manifest.phase -ne 'active' -or $Manifest.attempts -ge 2 -or
         $Now -lt [DateTimeOffset]::Parse($Manifest.startedUtc) -or
-        $Now.AddSeconds($Seconds + 15) -ge [DateTimeOffset]::Parse($Manifest.workDeadlineUtc) -or
-        $Manifest.envelopeUsd -ge $Manifest.capUsd) {
+        $Now.AddSeconds($Seconds + 15) -ge [DateTimeOffset]::Parse($Manifest.workDeadlineUtc)) {
         throw 'Attempt, time or cost gate exhausted; enter cleanup without another deployment.'
     }
     # Persist before sending ARM any mutating request, including failed deployments.
@@ -149,7 +162,8 @@ function Assert-OwnedSpikeGroup {
     if ($Group.id -ine $script:scope -or $Group.name -cne $script:group -or
         $Group.location -cne 'swedencentral' -or
         $Group.tags.'spike-id' -cne '60' -or $Group.tags.'spike-run-id' -cne $Manifest.runId -or
-        $Group.tags.'spike-head' -cne $Manifest.head) {
+        $Group.tags.'spike-head' -cne $Manifest.head -or
+        $Group.tags.'spike-run-ordinal' -cne [string]$Manifest.runOrdinal) {
         throw 'Exact owned spike RG verification failed; no deletion was requested.'
     }
 }
@@ -169,6 +183,7 @@ function Remove-OwnedSpike {
     param([Parameter(Mandatory)][hashtable]$Manifest, [Parameter(Mandatory)][string]$Path)
     Assert-SpikeManifest $Manifest
     if ($Manifest.phase -eq 'prepared') { throw 'Prepared run owns no cloud resources; refusing cloud calls.' }
+    if (-not $script:cleanupSourceEnabled) { throw 'Cleanup source-disabled pending reviewed canonical/backstop coordination and available recovery.' }
     # Cleanup has its own bounded recovery window even if an interrupted operator
     # resumes after the hard deadline. It can never start experimental work.
     $cleanupStop = [DateTimeOffset]::UtcNow.AddMinutes(45)
@@ -185,12 +200,19 @@ function Remove-OwnedSpike {
         if ($exists) {
             $group = Invoke-SpikeAz @('group', 'show', '--subscription', $script:subscription, '--name', $script:group, '-o', 'json', '--only-show-errors')
             Assert-OwnedSpikeGroup -Manifest $Manifest -Group $group
-            $cli = Get-BoundedAzureCli
-            $result = Invoke-BoundedProcess -FileName $cli.fileName -Arguments @($cli.prefix + @(
-                'group', 'delete', '--subscription', $script:subscription, '--name', $script:group,
-                '--yes', '--no-wait', '--only-show-errors', '-o', 'none'
-            )) -TimeoutSeconds 30
-            if ($result.exitCode -ne 0) { throw 'Owned RG delete request failed; provider output suppressed.' }
+            if (-not $Manifest.cleanupDeleteReserved) {
+                $Manifest.cleanupDeleteReserved = $true
+                Write-SpikeManifest -Manifest $Manifest -Path $Path
+                $cli = Get-BoundedAzureCli
+                $result = Invoke-BoundedProcess -FileName $cli.fileName -Arguments @($cli.prefix + @(
+                    'group', 'delete', '--subscription', $script:subscription, '--name', $script:group,
+                    '--yes', '--only-show-errors', '-o', 'none'
+                )) -TimeoutSeconds 900
+                if ($result.exitCode -ne 0) { throw 'Owned RG delete outcome unresolved; provider output suppressed; never retry.' }
+                $Manifest.cleanupDeleteAcknowledged = $true
+                Write-SpikeManifest -Manifest $Manifest -Path $Path
+            }
+            if (-not $Manifest.cleanupDeleteAcknowledged) { throw 'Interrupted RG delete needs terminal acknowledgement, not another delete.' }
             do {
                 if ([DateTimeOffset]::UtcNow.AddSeconds(45) -ge $cleanupStop) {
                     throw 'Cleanup recovery window exhausted; RG absence remains unverified.'
@@ -199,6 +221,9 @@ function Remove-OwnedSpike {
                 $exists = Invoke-SpikeAz @('group', 'exists', '--subscription', $script:subscription, '--name', $script:group, '-o', 'json')
                 if ($exists -isnot [bool]) { throw 'RG existence response was not boolean.' }
             } while ($exists)
+        }
+        if ($Manifest.cleanupDeleteReserved -and -not $Manifest.cleanupDeleteAcknowledged) {
+            throw 'Early RG absence cannot settle an interrupted delete; cleanup remains unverified.'
         }
         $Manifest.phase = 'closed'
         $Manifest.cleanup = 'absent-verified'

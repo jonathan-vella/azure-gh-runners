@@ -74,7 +74,8 @@ install -o root -g root -m 0555 "$root/image/install-tools.sh" "$root/image/veri
   "$root/image/pre-job-policy.sh" "$root/image/pre-job-policy.py" /opt/runner-image/
 install -d -o root -g root -m 0755 /opt/ghr-vmss
 install -o root -g root -m 0555 "$root/spikes/vmss-flex/run-one-job.sh" \
-  "$root/spikes/vmss-flex/pre-job-spike.sh" "$root/spikes/vmss-flex/pre-job-spike.py" /opt/ghr-vmss/
+  "$root/spikes/vmss-flex/pre-job-spike.sh" "$root/spikes/vmss-flex/pre-job-spike.py" \
+  "$root/spikes/vmss-flex/verify-spike-worker.sh" /opt/ghr-vmss/
 /bin/bash /opt/runner-image/install-tools.sh
 [[ ! -S /var/run/docker.sock ]]
 if command -v dockerd >/dev/null; then
@@ -87,6 +88,16 @@ runuser --user runner -- env -i HOME=/home/runner \
   AZURE_CORE_COLLECT_TELEMETRY=false AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no \
   AZURE_BICEP_USE_BINARY_FROM_PATH=true POWERSHELL_TELEMETRY_OPTOUT=1 \
   DOTNET_CLI_TELEMETRY_OPTOUT=1 /bin/bash /opt/runner-image/verify-tools.sh
+# Native workers have a stricter posture than the shared container verifier.
+SUDO_FORCE_REMOVE=yes DEBIAN_FRONTEND=noninteractive timeout --signal=TERM --kill-after=10s 60s \
+  apt-get -o Acquire::Retries=0 --yes purge sudo
+find /usr /bin /sbin /opt -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} +
+runuser --user runner -- env -i HOME=/home/runner \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/ghr-vmss/pre-job-spike.sh \
+  AZURE_CORE_COLLECT_TELEMETRY=false AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no \
+  AZURE_BICEP_USE_BINARY_FROM_PATH=true POWERSHELL_TELEMETRY_OPTOUT=1 \
+  DOTNET_CLI_TELEMETRY_OPTOUT=1 /bin/bash /opt/ghr-vmss/verify-spike-worker.sh
 install -d -o root -g root -m 0755 /run/ghr-vmss
 printf '%s\n' 'verified' > /run/ghr-vmss/worker-ready
 chmod 0444 /run/ghr-vmss/worker-ready
