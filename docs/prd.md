@@ -105,7 +105,9 @@ runner/workload endpoints; this explicit exception is part of the architecture.
 
 ## 10. Success metrics
 
-- Definition of done: a smoke workflow in public repo `jonathan-vella/ghr-smoke` runs on the real ACA runner and lists an`r`n  anonymous-read, empty blob container in a storage account with public network access disabled, reached only through a`r`n  private endpoint in `snet-consumer-pe` (backlog item `smoke-consumer`).
+- Definition of done: a smoke workflow in public repo `jonathan-vella/ghr-smoke` runs on the real ACA runner and lists an
+  anonymous-read, empty blob container in a storage account with public network access disabled, reached only through a
+  private endpoint in `snet-consumer-pe` (backlog item `smoke-consumer`).
 - Zero PaaS resources with public network access enabled (automated post-deploy check).
 - An agent onboards a new repo using only `docs/onboarding-consumer.md`.
 - No runner registration persists after its job completes.
