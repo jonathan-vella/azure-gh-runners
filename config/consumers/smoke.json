@@ -19,5 +19,5 @@
   "allowedWorkflows": [
     "jonathan-vella/ghr-smoke/.github/workflows/smoke.yml@refs/heads/main"
   ],
-  "notes": "Platform smoke test: anonymous list of a private-endpoint-only blob container. See docs/smoke.md."
+  "notes": "Platform smoke test: OIDC-authenticated list of a private-endpoint-only blob container. See docs/smoke.md."
 }
