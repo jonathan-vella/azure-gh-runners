@@ -22,9 +22,6 @@ function makeOutputs(overrides = {}) {
     acaNetworkSecurityGroupResourceId: {
       value: `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/networkSecurityGroups/nsg-ghrunners-aca-prod-swc-abc12`,
     },
-    acrAgentsNetworkSecurityGroupResourceId: {
-      value: `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/networkSecurityGroups/nsg-ghrunners-acr-agents-prod-swc-def34`,
-    },
     virtualNetworkResourceId: {
       value: `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/virtualNetworks/vnet-ghrunners-prod-swc-ghi56`,
     },
@@ -271,7 +268,7 @@ test('live preflight queries every exact resource ID with explicit subscription 
     resourceGroup,
   });
 
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 4);
   for (const { file, args, options } of calls) {
     assert.equal(file, 'az');
     assert.deepEqual(args.slice(0, 5), [
@@ -346,7 +343,7 @@ test('rejects resource IDs outside the approved subscription, resource group, ty
 test('rejects repeated network resource IDs before querying Azure', () => {
   let queryCount = 0;
   const outputs = makeOutputs();
-  outputs.acrAgentsNetworkSecurityGroupResourceId = outputs.acaNetworkSecurityGroupResourceId;
+  outputs.virtualNetworkResourceId = outputs.acaNetworkSecurityGroupResourceId;
 
   assert.throws(
     () =>

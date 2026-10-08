@@ -1,0 +1,23 @@
+{
+  "name": "smoke",
+  "repo": "jonathan-vella/ghr-smoke",
+  "visibility": "public",
+  "backend": "aca",
+  "labels": [
+    "ghr-smoke"
+  ],
+  "cpu": 1,
+  "memory": "2Gi",
+  "maxExecutions": 1,
+  "replicaTimeoutSeconds": 1800,
+  "allowedEvents": [
+    "workflow_dispatch"
+  ],
+  "allowedRefs": [
+    "refs/heads/main"
+  ],
+  "allowedWorkflows": [
+    "jonathan-vella/ghr-smoke/.github/workflows/smoke.yml@refs/heads/main"
+  ],
+  "notes": "Platform smoke test: anonymous list of a private-endpoint-only blob container. See docs/smoke.md."
+}

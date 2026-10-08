@@ -1,0 +1,193 @@
+name: Deploy platform
+
+on:
+  workflow_dispatch:
+    inputs:
+      foundation_only:
+        description: Deploy only the foundation; skip image build, import and runner jobs
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-prod
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: rg-ghrunners-prod-swc
+  IMAGE_PREFIX: ghcr.io/jonathan-vella/azure-gh-runners
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' && !inputs.foundation_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      jit_init_digest: ${{ steps.push.outputs.jit_init_digest }}
+      runner_digest: ${{ steps.push.outputs.runner_digest }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and push images
+        id: push
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DOCKER_BUILDKIT: '1'
+        run: |
+          set -euo pipefail
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null' EXIT
+          for target in jit-init runner; do
+            ref="${IMAGE_PREFIX}/${target}:${GITHUB_SHA}"
+            docker build --platform linux/amd64 --target "$target" --file image/Dockerfile --tag "$ref" .
+            docker push "$ref"
+            digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$ref")"
+            digest="${digest##*@}"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "No digest for $target." >&2; exit 1; }
+            echo "${target//-/_}_digest=$digest" >> "$GITHUB_OUTPUT"
+            echo "$target: ${IMAGE_PREFIX}/${target}@${digest}"
+          done
+
+  deploy:
+    needs: build
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      (needs.build.result == 'success' || (inputs.foundation_only && needs.build.result == 'skipped'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: platform-prod
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Azure login (OIDC)
+        uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy foundation
+        env:
+          DEPLOY_JOBS: 'false'
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          GH_APP_ID: ${{ secrets.GH_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "platform-foundation-${GITHUB_RUN_ID}" \
+            --parameters infra/main.bicepparam \
+            --query properties.outputs --output json > "$RUNNER_TEMP/foundation.json"
+
+      - name: Read back foundation
+        run: |
+          set -euo pipefail
+          out() { jq -er --arg name "$1" '.[$name].value' "$RUNNER_TEMP/foundation.json"; }
+          check() { local label="$1"; shift; jq -e "$@" >/dev/null || { echo "::error::Readback failed: $label"; exit 1; }; }
+          acr="$(out registryName)"
+          kv="$(out keyVaultName)"
+          st="$(out smokeStorageAccountName)"
+          cae_id="$(out containerAppsEnvironmentResourceId)"
+
+          az acr show --name "$acr" --output json |
+            check "ACR network" '.publicNetworkAccess == "Disabled" and .adminUserEnabled == false and .networkRuleBypassOptions == "AzureServices"'
+          az keyvault show --name "$kv" --output json |
+            check "Key Vault network" '.properties.publicNetworkAccess == "Disabled" and .properties.enableRbacAuthorization == true'
+          az storage account show --name "$st" --resource-group "$RESOURCE_GROUP" --output json |
+            check "smoke storage network" '.publicNetworkAccess == "Disabled" and .allowBlobPublicAccess == true'
+          az resource show --ids "$cae_id" --output json |
+            check "ACA environment" '.properties.publicNetworkAccess == "Disabled" and .properties.vnetConfiguration.internal == true'
+          az network private-endpoint list --resource-group "$RESOURCE_GROUP" --output json |
+            check "private endpoints approved" 'length == 3 and all(.[]; .privateLinkServiceConnections[0].privateLinkServiceConnectionState.status == "Approved")'
+
+          records() { az network private-dns record-set a list --resource-group "$RESOURCE_GROUP" --zone-name "$1" --query '[].name' --output json; }
+          # shellcheck disable=SC2016
+          records privatelink.azurecr.io |
+            check "ACR DNS records" --arg a "$acr" 'any(.[]; . == $a) and any(.[]; . == $a + ".swedencentral.data")'
+          # shellcheck disable=SC2016
+          records privatelink.vaultcore.azure.net | check "Key Vault DNS record" --arg a "$kv" 'any(.[]; . == $a)'
+          # shellcheck disable=SC2016
+          records privatelink.blob.core.windows.net | check "blob DNS record" --arg a "$st" 'any(.[]; . == $a)'
+          echo "Foundation readbacks passed."
+
+      - name: Import images into ACR
+        if: ${{ !inputs.foundation_only }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          JIT_INIT_IMAGE_DIGEST: ${{ needs.build.outputs.jit_init_digest }}
+          RUNNER_IMAGE_DIGEST: ${{ needs.build.outputs.runner_digest }}
+        run: |
+          set -euo pipefail
+          acr="$(jq -er '.registryName.value' "$RUNNER_TEMP/foundation.json")"
+          for pair in "jit-init:$JIT_INIT_IMAGE_DIGEST" "runner:$RUNNER_IMAGE_DIGEST"; do
+            repo="${pair%%:*}"
+            digest="${pair#*:}"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::Invalid $repo digest."; exit 1; }
+            az acr import \
+              --name "$acr" \
+              --source "${IMAGE_PREFIX}/${repo}@${digest}" \
+              --image "${repo}:${GITHUB_SHA}" \
+              --username "$GITHUB_ACTOR" \
+              --password "$GITHUB_TOKEN" \
+              --force \
+              --output none
+            echo "Imported $repo@$digest"
+          done
+
+      - name: Deploy runner jobs
+        if: ${{ !inputs.foundation_only }}
+        env:
+          DEPLOY_JOBS: 'true'
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          GH_APP_ID: ${{ secrets.GH_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          JIT_INIT_IMAGE_DIGEST: ${{ needs.build.outputs.jit_init_digest }}
+          RUNNER_IMAGE_DIGEST: ${{ needs.build.outputs.runner_digest }}
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "platform-jobs-${GITHUB_RUN_ID}" \
+            --parameters infra/main.bicepparam \
+            --query properties.outputs --output json > "$RUNNER_TEMP/jobs.json"
+
+          for job in $(jq -r '.runnerJobNames.value[]' "$RUNNER_TEMP/jobs.json"); do
+            az resource show --resource-group "$RESOURCE_GROUP" --name "$job" \
+              --resource-type Microsoft.App/jobs --output json |
+              jq -e '.properties.provisioningState == "Succeeded"
+                and ([.properties.template.containers[].env[]? | select(.secretRef != null)] | length == 0)
+                and (.properties.configuration.identitySettings | all(.lifecycle == "None"))' >/dev/null ||
+              { echo "::error::Readback failed for $job"; exit 1; }
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Platform deployment"
+            if [[ -f "$RUNNER_TEMP/foundation.json" ]]; then
+              jq -r '"- NAT egress IP: `\(.natGatewayPublicIpAddress.value)`",
+                "- ACR: `\(.registryLoginServer.value)`",
+                "- Smoke storage account: `\(.smokeStorageAccountName.value)`"' "$RUNNER_TEMP/foundation.json"
+            fi
+            if [[ -f "$RUNNER_TEMP/jobs.json" ]]; then
+              jq -r '.runnerJobNames.value[] | "- ACA job: `\(.)`"' "$RUNNER_TEMP/jobs.json"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -3,7 +3,21 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "consumers": {
-      "value": []
+      "value": [
+        {
+          "name": "smoke",
+          "repo": "jonathan-vella/ghr-smoke",
+          "visibility": "public",
+          "labels": [
+            "ghr-smoke"
+          ],
+          "cpu": 1,
+          "memory": "2Gi",
+          "maxExecutions": 1,
+          "replicaTimeoutSeconds": 1800,
+          "policyJson": "{\"repository\":\"jonathan-vella/ghr-smoke\",\"visibility\":\"public\",\"allowedEvents\":[\"workflow_dispatch\"],\"allowedRefs\":[\"refs/heads/main\"],\"allowedWorkflows\":[\"jonathan-vella/ghr-smoke/.github/workflows/smoke.yml@refs/heads/main\"]}"
+        }
+      ]
     }
   }
 }
