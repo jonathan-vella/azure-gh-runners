@@ -114,6 +114,28 @@ function Assert-SpikeKeyVaultAvailable {
     }
 }
 
+function Get-SpikeFoundationDeploymentName {
+    param([Parameter(Mandatory)][hashtable]$Manifest)
+    if ($Manifest.runId -cnotmatch '^[a-f0-9]{32}$' -or $Manifest.runOrdinal -notin @(1, 2)) {
+        throw 'Foundation deployment identity invalid.'
+    }
+    return "dep-ghr-spike60-$($Manifest.runId)-$($Manifest.runOrdinal)"
+}
+
+function New-SpikeWorkerParameters {
+    param(
+        [Parameter(Mandatory)][hashtable]$Manifest,
+        [Parameter(Mandatory)][hashtable]$Approval
+    )
+    return @{
+        runId = $Manifest.runId; head = $Manifest.head; workerIndex = 1
+        canonicalUbuntuVersion = $Approval.canonicalUbuntuVersion; adminSshPublicKey = $Approval.adminSshPublicKey
+        flexScaleSetResourceId = 'not-set'
+        workerSubnetResourceId = 'not-set'
+        bootstrapCustomData = (New-SpikeCustomData worker $Manifest $Approval)
+    }
+}
+
 function Test-SpikeControllerRoleAssignments {
     param(
         [Parameter(Mandatory)][hashtable]$Manifest,
@@ -164,7 +186,7 @@ function Assert-SpikePreflight {
     if (Invoke-SpikeCommand @('group', 'exists', '--subscription', $sub, '-n', $Manifest.resourceGroup, '-o', 'json')) {
         throw 'Spike RG already exists; recover its original manifest, never overwrite it.'
     }
-    $foundationDeploymentName = "dep-ghr-spike60-$($Manifest.runId)-$($Manifest.runOrdinal)"
+    $foundationDeploymentName = Get-SpikeFoundationDeploymentName $Manifest
     $prior = @(Invoke-SpikeCommand @('deployment', 'sub', 'list', '--subscription', $sub,
         '--query', "[?name=='$foundationDeploymentName'].name", '-o', 'json', '--only-show-errors') -Seconds 60)
     if ($prior.Count -ne 0) { throw 'This full-run ordinal already dispatched; retained history forbids replay after RG removal.' }
@@ -329,6 +351,7 @@ function Invoke-SpikeExecution {
     $Manifest.appKeyFingerprint = $Approval.appKeyFingerprint
     Write-SpikeManifest -Manifest $Manifest -Path $Path
     Assert-SpikePreflight $Manifest $Approval
+    $foundationDeploymentName = Get-SpikeFoundationDeploymentName $Manifest
     $config = @{
         runId = $Manifest.runId; head = $Manifest.head; startedUtc = $Manifest.startedUtc
         workDeadlineUtc = $Manifest.workDeadlineUtc; hardDeadlineUtc = $Manifest.hardDeadlineUtc
@@ -341,13 +364,7 @@ function Invoke-SpikeExecution {
             allowedRefs = @('refs/heads/main'); allowedWorkflows = @($Approval.workflowRef)
             workflowSha = $Approval.smokeCommitSha
         }
-        workerParameters = @{
-            runId = $Manifest.runId; runOrdinal = $Manifest.runOrdinal; head = $Manifest.head; workerIndex = 1
-            canonicalUbuntuVersion = $Approval.canonicalUbuntuVersion; adminSshPublicKey = $Approval.adminSshPublicKey
-            flexScaleSetResourceId = 'not-set'
-            workerSubnetResourceId = 'not-set'
-            bootstrapCustomData = (New-SpikeCustomData worker $Manifest $Approval)
-        }
+        workerParameters = New-SpikeWorkerParameters $Manifest $Approval
     }
     $configBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($config | ConvertTo-Json -Depth 12 -Compress)))
     $parameters = @{

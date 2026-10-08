@@ -38,6 +38,9 @@ test('executor has no role writes, includes inherited roles and checks retained 
   assert.match(execution, /Reviewed smoke workflow absent\/inaccessible/);
   assert.match(execution, /function Test-SpikeControllerRoleAssignments/);
   assert.match(execution, /function Assert-SpikeKeyVaultAvailable/);
+  assert.equal((execution.match(/Get-SpikeFoundationDeploymentName \$Manifest/g) ?? []).length, 2);
+  assert.match(execution, /workerParameters = New-SpikeWorkerParameters \$Manifest \$Approval/);
+  assert.match(execution, /function New-SpikeWorkerParameters/);
   assert.match(execution, /runOrdinal = \$Manifest\.runOrdinal/);
   assert.match(execution, /keyVaultSoftDeleteRetentionInDays\.value -ne \$Manifest\.keyVaultSoftDeleteRetentionInDays/);
   assert.match(execution, /keyVaultPurgeProtectionEnabled\.value -ne \$Manifest\.keyVaultPurgeProtectionEnabled/);

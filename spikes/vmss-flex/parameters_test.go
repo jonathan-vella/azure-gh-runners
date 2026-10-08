@@ -30,6 +30,7 @@ func TestWorkerParameterBoundary(t *testing.T) {
 	for key, value := range map[string]any{
 		"runId": strings.Repeat("c", 32), "head": strings.Repeat("c", 40),
 		"workerIndex": 2, "canonicalUbuntuVersion": "latest",
+		"runOrdinal": 2,
 		"flexScaleSetResourceId": "/subscriptions/foreign/resourceGroups/production",
 		"workerSubnetResourceId": spikeScope + "/providers/Microsoft.Network/virtualNetworks/../other",
 		"bootstrapCustomData":    "invalid!",
