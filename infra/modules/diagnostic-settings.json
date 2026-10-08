@@ -38,7 +38,7 @@
             }
           }
         ],
-        "metrics": "[if(parameters('enableAllMetrics'), createArray(createObject('category', 'AllMetrics', 'enabled', true)), createArray())]"
+        "metrics": "[if(parameters('enableAllMetrics'), createArray(createObject('category', 'AllMetrics', 'enabled', true())), createArray())]"
       }
     }
   ]
