@@ -276,4 +276,27 @@ try {
         }
     } finally { Remove-Item -LiteralPath $directory -Recurse -Force }
 } finally { $env:GHR_SPIKE60_EXECUTION_ENABLED = $saved }
+& {
+    $tokens = $null
+    $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $PSScriptRoot 'Supervisor.ps1'), [ref]$tokens, [ref]$errors)
+    if ($errors.Count -ne 0) { throw 'Supervisor failed to parse.' }
+    $cleanupTry = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.TryStatementAst] -and
+        $node.Finally.Extent.Text -like '*Remove-OwnedSpike*'
+    }, $true)
+    if (-not $cleanupTry) { throw 'Supervisor cleanup finally missing.' }
+    $cleanupReceipt = @{ called = $false }
+    function Invoke-SpikeCommand { throw 'synthetic-supervisor-observation-failed' }
+    function Remove-OwnedSpike { param($Manifest, $Path) $cleanupReceipt.called = $true }
+    $stop = [DateTimeOffset]::UtcNow.AddMinutes(1)
+    $manifest = @{ subscription = 'fixture'; resourceGroup = 'fixture' }
+    $ManifestPath = 'fixture'
+    try { & ([scriptblock]::Create($cleanupTry.Extent.Text)) }
+    catch {
+        if ($_.Exception.Message -cne 'synthetic-supervisor-observation-failed') { throw }
+    }
+    if (-not $cleanupReceipt.called) { throw 'Supervisor observation failure skipped independent cleanup.' }
+}
 Write-Output 'Execution/secret/cost gates, permission exclusions and disabled entrypoint passed offline.'
