@@ -53,7 +53,8 @@ Traffic caps in `guest-bootstrap.sh` apply before archive/package downloads: eac
 to 2 GiB in each direction, and UDP DNS is limited to 2 queries/second with a 20-query burst. On a later boot,
 the root-owned guard is an explicit `Requires`/`After` dependency of the available systemd network managers and
 blocks all IPv4/IPv6 traffic before they start; a guard failure powers the VM off rather than allowing uncapped
-networking. Thus iptables quota counters cannot reset into an unmetered network session.
+networking. If neither supported network-manager unit exists, bootstrap drops all traffic and powers off before
+installing tools or starting the controller. Thus iptables quota counters cannot reset into an unmetered session.
 Across two runs this reserves 17.179869184 decimal GB NAT-processed, 8.589934592 GB Internet egress, 8.589934592 GB Private Endpoint
 ingress, 8.589934592 GB Private Endpoint egress, and 115,280 DNS queries. Each separately billed traffic meter is
 charged against its whole applicable quota, even where that conservatively prices the same packet in more than

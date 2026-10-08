@@ -74,7 +74,14 @@ UNIT
     network_units=$((network_units + 1))
   fi
 done
-[[ $network_units -gt 0 ]]
+if [[ $network_units -eq 0 ]]; then
+  iptables -w 5 -P OUTPUT DROP
+  iptables -w 5 -P INPUT DROP
+  ip6tables -w 5 -P OUTPUT DROP
+  ip6tables -w 5 -P INPUT DROP
+  systemctl poweroff --no-block
+  exit 1
+fi
 systemctl daemon-reload
 # The regional image's patch baseline is not the local rootfs baseline. Install
 # the exact inherited minimum on both guests, inside existing byte/DNS quotas.

@@ -77,6 +77,7 @@ test('both guests adapt exact minimal packages after traffic quotas without assu
   assert.match(script, /for unit in systemd-networkd\.service NetworkManager\.service/);
   assert.match(script, /Requires=ghr-spike60-reboot-guard\.service/);
   assert.match(script, /After=ghr-spike60-reboot-guard\.service/);
+  assert.match(script, /if \[\[ \$network_units -eq 0 \]\]; then[\s\S]*?systemctl poweroff --no-block/);
   assert.doesNotMatch(script, /network-pre\.target/);
   assert.ok(script.indexOf('install-minimal-tools.sh') < script.indexOf('if [[ $mode == worker ]]'));
   assert.match(install, /install "\$\{minimal_packages\[@\]\}"/);
