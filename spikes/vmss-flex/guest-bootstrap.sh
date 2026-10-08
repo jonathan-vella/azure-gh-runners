@@ -109,7 +109,9 @@ manifest=/opt/ghr-source/image/versions.json
 
 if [[ $mode == worker ]]; then
   [[ $config == none ]]
-  exec /bin/bash /opt/ghr-source/spikes/vmss-flex/native-bootstrap.sh
+  /bin/bash /opt/ghr-source/spikes/vmss-flex/native-bootstrap.sh ||
+    fail_closed 'Native worker bootstrap failed; dropping traffic and requesting poweroff.'
+  exit 0
 fi
 [[ $config =~ ^[A-Za-z0-9+/]+={0,2}$ ]]
 getent passwd 1002 >/dev/null && exit 1

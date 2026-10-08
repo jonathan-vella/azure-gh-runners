@@ -90,6 +90,9 @@ test('both guests adapt exact minimal packages after traffic quotas without assu
   assert.match(script, /if \[\[ \$network_units -eq 0 \|\| \$active_network_units -eq 0 \]\]; then\s+fail_closed 'No supported active systemd network manager; refusing to continue.'/);
   assert.match(script, /trap 'fail_closed /);
   assert.match(script, /fail_closed\(\)[\s\S]*?iptables -w 5 -P OUTPUT DROP[\s\S]*?ip6tables -w 5 -P INPUT DROP[\s\S]*?systemctl poweroff --no-block/);
+  const workerBranch = script.slice(script.indexOf('if [[ $mode == worker ]]'), script.indexOf('[[ $config =~'));
+  assert.match(workerBranch, /native-bootstrap\.sh \|\|[\s\S]*?fail_closed 'Native worker bootstrap failed/);
+  assert.match(workerBranch, /exit 0/);
   assert.doesNotMatch(script, /network-pre\.target/);
   assert.ok(script.indexOf('install-minimal-tools.sh') < script.indexOf('if [[ $mode == worker ]]'));
   assert.match(install, /install "\$\{minimal_packages\[@\]\}"/);
