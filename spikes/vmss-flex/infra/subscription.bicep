@@ -5,6 +5,13 @@ targetScope = 'subscription'
 @maxLength(32)
 param runId string
 
+@description('Ordinal within the immutable original spike envelope; only complete runs 1 and 2 are allowed.')
+@allowed([
+  1
+  2
+])
+param runOrdinal int
+
 @description('Reviewed 40-character source commit SHA for ownership tags.')
 @minLength(40)
 @maxLength(40)
@@ -63,6 +70,7 @@ module foundation 'main.bicep' = {
   scope: resourceGroup(spikeResourceGroup.name)
   params: {
     runId: runId
+    runOrdinal: runOrdinal
     head: head
     canonicalUbuntuVersion: canonicalUbuntuVersion
     controllerBootstrapCustomData: controllerBootstrapCustomData
@@ -86,8 +94,12 @@ output flexScaleSetId string = foundation.outputs.flexScaleSetId
 output flexScaleSetResourceId string = foundation.outputs.flexScaleSetResourceId
 output workerSubnetResourceId string = foundation.outputs.workerSubnetResourceId
 output keyVaultId string = foundation.outputs.keyVaultId
+output keyVaultName string = foundation.outputs.keyVaultName
+output keyVaultSecretScope string = foundation.outputs.keyVaultSecretScope
 output keyVaultPrivateEndpointId string = foundation.outputs.keyVaultPrivateEndpointId
 output keyVaultSecretVersionUri string = foundation.outputs.keyVaultSecretVersionUri
 output secretVersionUri string = foundation.outputs.secretVersionUri
+output keyVaultSoftDeleteRetentionInDays int = foundation.outputs.keyVaultSoftDeleteRetentionInDays
+output keyVaultPurgeProtectionEnabled bool = foundation.outputs.keyVaultPurgeProtectionEnabled
 output natGatewayId string = foundation.outputs.natGatewayId
 output natPublicIpId string = foundation.outputs.natPublicIpId

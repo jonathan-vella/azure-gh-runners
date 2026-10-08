@@ -6,13 +6,37 @@ $script:tenant = '30bac921-1547-4b1e-8445-72455da783f1'
 $script:group = 'rg-ghrunners-spike-vmss-swc'
 $script:scope = "/subscriptions/$script:subscription/resourceGroups/$script:group"
 
+function Get-SpikeKeyVaultName {
+    param(
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][ValidateRange(1, 2)][int]$RunOrdinal
+    )
+    if ($RunId -cnotmatch '^[a-f0-9]{32}$') { throw 'Valid original envelope run ID required.' }
+    return "kv-ghr60-$($RunId.Substring(0, 14))$RunOrdinal"
+}
+
+function Get-SpikeSecretScope {
+    param([Parameter(Mandatory)][hashtable]$Manifest)
+    return "$($Manifest.scope)/providers/Microsoft.KeyVault/vaults/$($Manifest.keyVaultName)/secrets/github-app-private-key"
+}
+
 function New-SpikeManifest {
-    param([Parameter(Mandatory)][string]$Head)
+    param(
+        [Parameter(Mandatory)][string]$Head,
+        [string]$RunId,
+        [ValidateRange(1, 2)][int]$RunOrdinal = 1
+    )
     if ($Head -cnotmatch '^[a-f0-9]{40}$') { throw 'Exact reviewed commit SHA required.' }
-    return @{
-        schemaVersion = 1; issue = 60; runId = [guid]::NewGuid().ToString('N')
+    if ([string]::IsNullOrEmpty($RunId)) { $RunId = [guid]::NewGuid().ToString('N') }
+    $null = Get-SpikeKeyVaultName -RunId $RunId -RunOrdinal $RunOrdinal
+    $manifest = @{
+        schemaVersion = 1; issue = 60; runId = $RunId; runOrdinal = $RunOrdinal
+        keyVaultName = (Get-SpikeKeyVaultName -RunId $RunId -RunOrdinal $RunOrdinal)
         head = $Head; subscription = $script:subscription; tenant = $script:tenant
         resourceGroup = $script:group; scope = $script:scope; location = 'swedencentral'
+        keyVaultSecretScope = $null; keyVaultSoftDeleteRetentionInDays = 7
+        keyVaultPurgeProtectionEnabled = $false
+        appKeyFingerprint = $null; ownerRevocationConfirmed = $false
         controllerSku = 'Standard_B2s'; workerSku = 'Standard_D2ls_v5'
         maxWorkers = 2; maxAttempts = 2; attempts = 0
         maxHours = 4; cleanupReserveMinutes = 60; capUsd = 10
@@ -22,11 +46,27 @@ function New-SpikeManifest {
         startedUtc = $null; workDeadlineUtc = $null; hardDeadlineUtc = $null
         phase = 'prepared'; cleanup = 'not-started'
     }
+    $manifest.keyVaultSecretScope = Get-SpikeSecretScope $manifest
+    return $manifest
 }
 
 function Assert-SpikeManifest {
     param([Parameter(Mandatory)][hashtable]$Manifest)
     $expected = New-SpikeManifest -Head $Manifest.head
+    $expected.runId = $Manifest.runId
+    $expected.runOrdinal = $Manifest.runOrdinal
+    $expected.keyVaultName = Get-SpikeKeyVaultName -RunId $Manifest.runId -RunOrdinal $Manifest.runOrdinal
+    $expected.keyVaultSecretScope = Get-SpikeSecretScope $expected
+    if ($null -ne $Manifest.appKeyFingerprint -and $Manifest.appKeyFingerprint -cnotmatch '^[a-f0-9]{64}$') {
+        throw 'Invalid nonsecret spike App-key fingerprint.'
+    }
+    if ($Manifest.ownerRevocationConfirmed -isnot [bool] -or
+        ($Manifest.ownerRevocationConfirmed -and
+            ($Manifest.phase -ne 'closed' -or -not $Manifest.appKeyFingerprint))) {
+        throw 'Owner-only App-key revocation confirmation is invalid before verified cleanup.'
+    }
+    $expected.appKeyFingerprint = $Manifest.appKeyFingerprint
+    $expected.ownerRevocationConfirmed = $Manifest.ownerRevocationConfirmed
     if ($Manifest.Count -ne $expected.Count) { throw 'Unexpected manifest fields; refusing unsafe state.' }
     foreach ($key in $expected.Keys) {
         if (-not $Manifest.ContainsKey($key)) { throw 'Missing manifest field.' }
@@ -171,4 +211,5 @@ function Remove-OwnedSpike {
 }
 
 Export-ModuleMember -Function New-SpikeManifest, Assert-SpikeManifest, Write-SpikeManifest,
-    Start-SpikeClock, Reserve-SpikeAttempt, Assert-OwnedSpikeGroup, Remove-OwnedSpike
+    Start-SpikeClock, Reserve-SpikeAttempt, Assert-OwnedSpikeGroup, Remove-OwnedSpike,
+    Get-SpikeKeyVaultName, Get-SpikeSecretScope

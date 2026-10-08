@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
@@ -26,6 +27,8 @@ type controllerConfig struct {
 	HardDeadlineUTC    time.Time                  `json:"hardDeadlineUtc"`
 	FoundationAttempts int                        `json:"foundationAttempts"`
 	InstallationID     int64                      `json:"installationId"`
+	RunOrdinal         int                        `json:"runOrdinal"`
+	KeyVaultName       string                     `json:"keyVaultName"`
 	SecretVersion      string                     `json:"secretVersion"`
 	TemplateSHA256     string                     `json:"templateSha256"`
 	WorkerParameters   map[string]json.RawMessage `json:"workerParameters"`
@@ -43,10 +46,12 @@ type controllerJournal struct {
 }
 
 func (c controllerConfig) validate(now time.Time) error {
+	expectedVault, vaultErr := keyVaultNameForRun(c.RunID, c.RunOrdinal)
 	if !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(c.RunID) ||
 		!regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(c.Head) ||
 		!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(c.TemplateSHA256) ||
 		!regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(c.SecretVersion) ||
+		vaultErr != nil || c.KeyVaultName != expectedVault ||
 		c.InstallationID <= 0 || c.FoundationAttempts != 1 ||
 		c.StartedUTC.IsZero() || now.Before(c.StartedUTC) ||
 		!c.WorkDeadlineUTC.Equal(c.StartedUTC.Add(3*time.Hour)) ||
@@ -266,7 +271,7 @@ func (s *spikeScaler) provision() error {
 	}
 	defer clear(payload)
 	path := spikeScope + "/providers/Microsoft.Resources/deployments/dep-vm-ghr-spike60-" +
-		s.config.RunID + "-1?api-version=2022-09-01"
+		s.config.RunID + "-" + strconv.Itoa(s.config.RunOrdinal) + "-1?api-version=2022-09-01"
 	s.mu.Lock()
 	s.state.Worker.DeploymentAttempted = true
 	persistErr = writeJournal(s.path, s.state)
@@ -321,7 +326,7 @@ func (s *spikeScaler) cleanup(ctx context.Context) error {
 		}
 		resourceCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		if s.state.Worker.DeploymentAttempted {
-			cleanupErr = s.arm.settleWorkerDeployment(resourceCtx, s.config.RunID)
+			cleanupErr = s.arm.settleWorkerDeployment(resourceCtx, s.config.RunID, s.config.RunOrdinal)
 		}
 		if cleanupErr == nil {
 			cleanupErr = s.arm.removeWorker(resourceCtx, *s.state.Worker, s.config.RunID, s.config.Head)

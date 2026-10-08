@@ -7,6 +7,20 @@ function Reject([scriptblock]$Operation) {
     if (-not $failed) { throw 'Unsafe execution input accepted.' }
 }
 $manifest = New-SpikeManifest -Head ('a' * 40)
+if ($manifest.keyVaultName -cne ("kv-ghr60-" + $manifest.runId.Substring(0, 14) + $manifest.runOrdinal) -or
+    $manifest.runOrdinal -ne 1 -or $manifest.keyVaultName.Length -ne 24) {
+    throw 'Manifest vault name is not uniquely derived from its original run ID and ordinal.'
+}
+$originalRunId = 'a' * 32
+$firstRun = New-SpikeManifest -Head ('a' * 40) -RunId $originalRunId -RunOrdinal 1
+$secondRun = New-SpikeManifest -Head ('a' * 40) -RunId $originalRunId -RunOrdinal 2
+if ($firstRun.runId -cne $secondRun.runId -or $firstRun.keyVaultName -ceq $secondRun.keyVaultName) {
+    throw 'Complete run ordinals do not share the original envelope ID with distinct vault names.'
+}
+Reject { New-SpikeManifest -Head ('a' * 40) -RunId $originalRunId -RunOrdinal 3 }
+$tamperedManifest = $manifest.Clone()
+$tamperedManifest.keyVaultName = 'kv-ghr60-fffffffffffffff'
+Reject { Assert-SpikeManifest $tamperedManifest }
 $now = [DateTimeOffset]::UtcNow
 $approval = @{
     schemaVersion = 1; reviewedHead = $manifest.head; executionDirectionConfirmed = $true; secretReadApproved = $true
@@ -14,10 +28,11 @@ $approval = @{
     workflowRef = 'jonathan-vella/ghr-smoke/.github/workflows/vmss-smoke.yml@refs/heads/main'
     smokeCommitSha = ('c' * 40); smokeWorkflowBlobSha = ('d' * 40)
     archiveSha256 = ('b' * 64); adminSshPublicKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefixture'
+    appKeyFingerprint = ('e' * 64)
     pricing = @{
         refreshedUtc = $now.ToString('o'); b2sHourly = 0.0432; d2lsHourly = 0.091; p4Hourly = 0.008
         natHourly = 0.06; pipHourly = 0.01; peHourly = 0.02; dnsZoneHourly = 0.001
-        natGb = 0.06; egressGb = 0.12; peGb = 0.02; dnsMillionQueries = 0.4
+        natGb = 0.02; egressGb = 0.05; peGb = 0.01; dnsMillionQueries = 0.2
     }
     quota = @{
         subscription = $manifest.subscription; location = 'swedencentral'; refreshedUtc = $now.ToString('o')
@@ -25,6 +40,9 @@ $approval = @{
     }
 }
 Assert-SpikeExecutionApproval $approval $manifest -Now $now
+$approval.appKeyFingerprint = 'invalid'
+Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
+$approval.appKeyFingerprint = 'e' * 64
 $approval.secretReadApproved = $false
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.secretReadApproved = $true
@@ -33,7 +51,7 @@ Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.canonicalUbuntuVersion = '24.04.202609260'
 $approval.pricing.natGb = 10
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
-$approval.pricing.natGb = 0.06
+$approval.pricing.natGb = 0.02
 $approval.pricing.refreshedUtc = $now.AddHours(-25).ToString('o')
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.pricing.refreshedUtc = $now.ToString('o')
@@ -41,6 +59,55 @@ $approval.unexpected = 'fake-input'
 Reject { Assert-SpikeExecutionApproval $approval $manifest -Now $now }
 $approval.Remove('unexpected')
 $module = Get-Module Execution
+& $module {
+    param($manifest)
+    $script:nameAvailable = $false
+    $script:checkedVaultNames = @()
+    function script:Invoke-SpikeCommand {
+        param([string[]]$Arguments)
+        $script:checkedVaultNames += $Arguments[($Arguments.IndexOf('--name') + 1)]
+        return $script:nameAvailable
+    }
+    if (Test-SpikeControllerRoleAssignments $manifest ('1' * 36) @() @()) {
+        throw 'Missing exact role prerequisites were not rejected.'
+    }
+} $manifest
+Reject { & $module { param($m) Assert-SpikeKeyVaultAvailable $m } $manifest }
+& $module {
+    param($manifest)
+    if ($script:checkedVaultNames.Count -ne 1 -or $script:checkedVaultNames[0] -cne $manifest.keyVaultName) {
+        throw 'Name availability check did not use the immutable manifest vault.'
+    }
+    $script:nameAvailable = $true
+    Assert-SpikeKeyVaultAvailable $manifest
+    $principal = '11111111-1111-1111-1111-111111111111'
+    $secretScope = "$($manifest.scope)/providers/Microsoft.KeyVault/vaults/$($manifest.keyVaultName)/secrets/github-app-private-key"
+    $rgAssignments = @(
+        @{ id = 'vm'; principalId = $principal; scope = $manifest.scope
+            roleDefinitionId = "$($manifest.scope)/providers/Microsoft.Authorization/roleDefinitions/9980e02c-c2be-4d73-94e8-173b1dc7cf3c" },
+        @{ id = 'network'; principalId = $principal; scope = $manifest.scope
+            roleDefinitionId = "$($manifest.scope)/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7" },
+        @{ id = 'foreign'; principalId = ('2' * 36); scope = '/subscriptions/other'
+            roleDefinitionId = '/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c' }
+    )
+    $secretAssignments = @(@{ id = 'secret'; principalId = $principal; scope = $secretScope
+        roleDefinitionId = "$($manifest.scope)/providers/Microsoft.Authorization/roleDefinitions/4633458b-17de-408a-b874-0445c86b69e6" })
+    if (-not (Test-SpikeControllerRoleAssignments $manifest $principal $rgAssignments $secretAssignments)) {
+        throw 'Exact controller role allowlist was rejected.'
+    }
+    $wrongSecret = $secretAssignments[0].Clone()
+    $wrongSecret.scope = "$($manifest.scope)/providers/Microsoft.KeyVault/vaults/kv-ghr60-fffffffffffffff/secrets/github-app-private-key"
+    $rejected = $false
+    try { Test-SpikeControllerRoleAssignments $manifest $principal $rgAssignments @($wrongSecret) }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw 'Foreign run vault role scope was accepted.' }
+    $broadRole = $rgAssignments[0].Clone()
+    $broadRole.scope = '/subscriptions/b47d2942-f5ad-4d3c-b28e-c23e4f83d97e'
+    $rejected = $false
+    try { Test-SpikeControllerRoleAssignments $manifest $principal @($broadRole, $rgAssignments[1]) $secretAssignments }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw 'Broader controller grant was accepted.' }
+} $manifest
 & $module {
     param($approval)
     $branch = @{ ref = 'refs/heads/main'; object = @{ type = 'commit'; sha = $approval.smokeCommitSha } }

@@ -33,7 +33,7 @@ try {
             Invoke-SpikeExecution -Manifest $manifest -Path $path -Approval $approval
             Write-Output 'One-worker lifecycle ended. Policy/NAT/MI/protection/termination acceptance remains unverified.'
         } finally {
-            [Environment]::SetEnvironmentVariable('GH_APP_PRIVATE_KEY', $null)
+            [Environment]::SetEnvironmentVariable('GHR_SPIKE60_APP_PRIVATE_KEY', $null)
             try {
                 if ($manifest.attempts -gt 0) {
                     try {

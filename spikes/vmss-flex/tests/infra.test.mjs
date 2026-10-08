@@ -12,7 +12,8 @@ test('foundation pins the approved isolated spike scope and versioned AVMs', () 
   assert.match(foundation, /b47d2942-f5ad-4d3c-b28e-c23e4f83d97e/);
   assert.match(foundation, /30bac921-1547-4b1e-8445-72455da783f1/);
   assert.match(foundation, /rg-ghrunners-spike-vmss-swc/);
-  assert.match(foundation, /kv-ghr-spike60-swc/);
+  assert.match(foundation, /param runOrdinal int/);
+  assert.match(foundation, /var keyVaultName = 'kv-ghr60-\$\{substring\(runId, 0, 14\)\}\$\{string\(runOrdinal\)\}'/);
   for (const moduleRef of [
     'avm/res/network/network-security-group:0.5.0',
     'avm/res/network/nat-gateway:2.1.0',
@@ -31,6 +32,8 @@ test('subscription wrapper creates the fixed tagged resource group and deploys f
   assert.match(subscription, /var approvedResourceGroupName = 'rg-ghrunners-spike-vmss-swc'/);
   assert.match(subscription, /var location = 'swedencentral'/);
   assert.match(subscription, /location: location/);
+  assert.match(subscription, /param runOrdinal int/);
+  assert.match(subscription, /runOrdinal: runOrdinal/);
   assert.match(subscription, /scope: resourceGroup\(spikeResourceGroup\.name\)/);
   assert.match(subscription, /module foundation 'main\.bicep'/);
   assert.match(subscription, /@secure\(\)\s*param githubAppPrivateKey string/);
@@ -38,6 +41,10 @@ test('subscription wrapper creates the fixed tagged resource group and deploys f
   assert.match(subscription, /adminSshPublicKey: adminSshPublicKey/);
   assert.match(subscription, /githubAppPrivateKey: githubAppPrivateKey/);
   assert.match(subscription, /output keyVaultSecretVersionUri string = foundation\.outputs\.keyVaultSecretVersionUri/);
+  assert.match(subscription, /output keyVaultName string = foundation\.outputs\.keyVaultName/);
+  assert.match(subscription, /output keyVaultSecretScope string = foundation\.outputs\.keyVaultSecretScope/);
+  assert.match(subscription, /output keyVaultSoftDeleteRetentionInDays int = foundation\.outputs\.keyVaultSoftDeleteRetentionInDays/);
+  assert.match(subscription, /output keyVaultPurgeProtectionEnabled bool = foundation\.outputs\.keyVaultPurgeProtectionEnabled/);
   assert.match(subscription, /output controllerPrincipalId string = foundation\.outputs\.controllerPrincipalId/);
   assert.match(subscription, /output secretVersionUri string = foundation\.outputs\.secretVersionUri/);
   assert.match(subscription, /output workerSubnetResourceId string = foundation\.outputs\.workerSubnetResourceId/);
@@ -92,6 +99,10 @@ test('foundation has a controller-only system identity and secure private Key Va
   assert.match(foundation, /enableRbacAuthorization: true/);
   assert.match(foundation, /enablePurgeProtection: false/);
   assert.match(foundation, /softDeleteRetentionInDays: 7/);
+  assert.match(foundation, /output keyVaultSoftDeleteRetentionInDays int = 7/);
+  assert.match(foundation, /output keyVaultPurgeProtectionEnabled bool = false/);
+  assert.match(foundation, /output keyVaultSecretScope string = '\$\{keyVault\.outputs\.resourceId\}\/secrets\/github-app-private-key'/);
+  assert.match(foundation, /output keyVaultName string = keyVaultName/);
   assert.match(foundation, /name: 'github-app-private-key'\s*value: githubAppPrivateKey/);
   assert.match(foundation, /output keyVaultSecretVersionUri string = keyVault\.outputs\.secrets\[0\]\.uriWithVersion/);
   assert.doesNotMatch(foundation, /Microsoft\.Authorization\/roleAssignments|roleAssignments:/);

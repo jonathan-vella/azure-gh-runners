@@ -78,7 +78,8 @@ func run() (result probeEvidence) {
 		ctx, cancel := context.WithDeadline(signalCtx, stop)
 		defer cancel()
 		azure := azureHTTPClient()
-		key, err := privateAppKey(ctx, managedIdentityToken, azure, config.SecretVersion)
+		key, err := privateAppKey(ctx, managedIdentityToken, azure, config.RunID, config.RunOrdinal,
+			config.KeyVaultName, config.SecretVersion)
 		if err != nil {
 			return probeEvidence{Result: err.Error()}
 		}

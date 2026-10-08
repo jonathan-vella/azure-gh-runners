@@ -70,8 +70,8 @@ func (a *armClient) request(ctx context.Context, method, path string, body []byt
 		return nil, false, errors.New("arm_scope_or_method_invalid")
 	}
 	resourcePath := strings.SplitN(strings.TrimPrefix(path, spikeScope+"/providers/"), "?", 2)[0]
-	deployment := regexp.MustCompile(`^Microsoft.Resources/deployments/dep-vm-ghr-spike60-[a-f0-9]{32}-1$`).MatchString(resourcePath)
-	cancelDeployment := regexp.MustCompile(`^Microsoft.Resources/deployments/dep-vm-ghr-spike60-[a-f0-9]{32}-1/cancel$`).MatchString(resourcePath)
+	deployment := regexp.MustCompile(`^Microsoft.Resources/deployments/dep-vm-ghr-spike60-[a-f0-9]{32}-[12]-1$`).MatchString(resourcePath)
+	cancelDeployment := regexp.MustCompile(`^Microsoft.Resources/deployments/dep-vm-ghr-spike60-[a-f0-9]{32}-[12]-1/cancel$`).MatchString(resourcePath)
 	workerResource := regexp.MustCompile(`^(Microsoft.Compute/virtualMachines/vm|Microsoft.Network/networkInterfaces/nic-vm|Microsoft.Compute/disks/disk-vm)-ghr-spike60-[a-f0-9]{25}-1(-os)?$`).MatchString(resourcePath)
 	if (!deployment && !workerResource && !cancelDeployment) || method == http.MethodPut && !deployment ||
 		method == http.MethodDelete && !workerResource || method == http.MethodPost && !cancelDeployment ||
@@ -108,8 +108,12 @@ func (a *armClient) request(ctx context.Context, method, path string, body []byt
 	return data, false, nil
 }
 
-func (a *armClient) settleWorkerDeployment(ctx context.Context, runID string) error {
-	path := spikeScope + "/providers/Microsoft.Resources/deployments/dep-vm-ghr-spike60-" + runID + "-1"
+func (a *armClient) settleWorkerDeployment(ctx context.Context, runID string, runOrdinal int) error {
+	if _, err := keyVaultNameForRun(runID, runOrdinal); err != nil {
+		return errors.New("worker_deployment_identity_invalid")
+	}
+	path := spikeScope + "/providers/Microsoft.Resources/deployments/dep-vm-ghr-spike60-" +
+		runID + "-" + strconv.Itoa(runOrdinal) + "-1"
 	cancelRequested := false
 	for {
 		data, absent, err := a.request(ctx, http.MethodGet, path+"?api-version=2022-09-01", nil)
@@ -146,7 +150,19 @@ func (a *armClient) settleWorkerDeployment(ctx context.Context, runID string) er
 	}
 }
 
-func privateAppKey(ctx context.Context, token tokenSource, client *http.Client, version string) (string, error) {
+func keyVaultNameForRun(runID string, runOrdinal int) (string, error) {
+	if !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(runID) || runOrdinal < 1 || runOrdinal > 2 {
+		return "", errors.New("run_id_invalid")
+	}
+	return "kv-ghr60-" + runID[:14] + strconv.Itoa(runOrdinal), nil
+}
+
+func privateAppKey(ctx context.Context, token tokenSource, client *http.Client, runID string, runOrdinal int,
+	vaultName, version string) (string, error) {
+	expectedVault, err := keyVaultNameForRun(runID, runOrdinal)
+	if err != nil || vaultName != expectedVault {
+		return "", errors.New("secret_vault_invalid")
+	}
 	if len(version) != 32 || strings.Trim(version, "0123456789abcdef") != "" {
 		return "", errors.New("secret_version_invalid")
 	}
@@ -155,7 +171,7 @@ func privateAppKey(ctx context.Context, token tokenSource, client *http.Client, 
 		return "", err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"https://kv-ghr-spike60-swc.vault.azure.net/secrets/github-app-private-key/"+version+"?api-version=7.4", nil)
+		"https://"+vaultName+".vault.azure.net/secrets/github-app-private-key/"+version+"?api-version=7.4", nil)
 	if err != nil {
 		return "", errors.New("secret_request_invalid")
 	}
