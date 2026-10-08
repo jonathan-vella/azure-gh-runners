@@ -255,8 +255,8 @@ async function performIdentityCleanup(path, invoke, { clock, sleep, session }) {
     state = read(path);
     if (state.runs.at(-1).cleanup[step] === 'pending') {
       const mutation = operationIntent(state, 'mutation', step);
-      // An in-flight create may appear after a delete. No inventory-only terminal proof.
-      if (mutation && !['succeeded', 'failed'].includes(mutation.receipt?.state)) await settle('mutation', step);
+      check(!mutation || ['succeeded', 'failed'].includes(mutation.receipt?.state),
+        'Settle mutation before fresh owned inventory and delete reservation.');
       updateIdentityEnvelope(path, 'reserve-delete', { step });
       state = read(path);
       const intent = operationIntent(state, 'delete', step);
@@ -286,7 +286,8 @@ async function performIdentityCleanup(path, invoke, { clock, sleep, session }) {
     const exists = await invoke('group-exists');
     check(typeof exists === 'boolean', 'RG absence is unverified.');
     if (run.cleanup.resourceGroup === 'pending') {
-      check(exists || run.steps.resourceGroup !== 'reserved',
+      check(exists || run.steps.resourceGroup !== 'reserved' ||
+        operationIntent(read(path), 'mutation', 'resourceGroup')?.receipt?.state === 'failed',
         'Ambiguous RG creation has no terminal evidence; early absence cannot certify cleanup.');
       if (exists) {
         const group = await invoke('group-read');
@@ -308,6 +309,8 @@ async function performIdentityCleanup(path, invoke, { clock, sleep, session }) {
   for (const step of ['owner', 'federation', 'application', 'servicePrincipal', 'environment']) {
     state = read(path);
     if (state.runs.at(-1).cleanup[step] === 'absent') continue;
+    const mutation = operationIntent(state, 'mutation', step);
+    if (mutation && !['succeeded', 'failed'].includes(mutation.receipt?.state)) await settle('mutation', step);
     if (step === 'environment') {
       const policy = operationIntent(state, 'mutation', 'environmentPolicy');
       if (policy && !['succeeded', 'failed'].includes(policy.receipt?.state)) await settle('mutation', 'environmentPolicy');

@@ -122,6 +122,9 @@ is rejected; accepted is not terminal. Receipt persistence precedes identity cap
 Terminal settling uses read-only GETs of the captured handle, never another mutation. Failed/canceled status,
 404/403, lost response, timeout, unknown status and missing receipt cannot certify deletion. Terminal success plus
 two consecutive authoritative absence reads is required; late visibility resets absence observation.
+Settle each reserved create before collecting fresh owned cleanup inventory, including late Owner assignments.
+A persisted terminal failed RG create may close through authoritative absence without any new PUT or DELETE;
+failure of a DELETE never supplies that proof. Missing receipts remain unresolved.
 The adapter persists server-generated identity IDs before advancing, reconciles ambiguous tagged app/SP/FIC creates,
 and routes bootstrap exceptions into cleanup. GitHub environments cannot carry ownership tags; an interrupted
 create with no captured environment ID requires operator reconciliation, never automatic name-only deletion.

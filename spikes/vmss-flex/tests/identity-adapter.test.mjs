@@ -280,6 +280,71 @@ test('shared mock serializes isolated snapshots; stale copies and cleanup intent
 });
 
 const operationUrl = `https://management.azure.com/subscriptions/${scope.split('/')[2]}/providers/Microsoft.Resources/locations/swedencentral/operations/${uid(9)}?api-version=2024-03-01`;
+test('late Owner creation during terminal settling is freshly inventoried and exactly deleted', async () => {
+  const f = fixture();
+  const mock = fakeTransport();
+  let lateOwner;
+  let settled = false;
+  try {
+    const invoke = async (operation, payload) => {
+      if (operation === 'operation-status') {
+        mock.cloud.owner = lateOwner;
+        settled = true;
+        return { state: 'succeeded' };
+      }
+      if (operation === 'assignments' && lateOwner) assert.equal(settled, true);
+      const result = await mock.invoke(operation, payload);
+      if (operation === 'request' && payload.step === 'owner' && payload.method === 'PUT') {
+        lateOwner = mock.cloud.owner;
+        mock.cloud.owner = null;
+        return { ...result, receipt: { ...result.receipt, state: 'accepted', operationUrl } };
+      }
+      return result;
+    };
+    await assert.rejects(bootstrapTemporaryIdentity(f.path, invoke, { ...options, coordination: f.coordination }),
+      /exact cloud cleanup completed/);
+    const deletes = mock.writes.filter(write => write.step === 'owner' && write.method === 'DELETE');
+    assert.equal(deletes.length, 1);
+    assert.equal(deletes[0].url.split('?')[0], `https://management.azure.com${lateOwner.id}`);
+    assert.equal(mock.cloud.owner, null);
+    assert.equal(JSON.parse(readFileSync(f.path, 'utf8')).runs[0].phase, 'closed');
+  } finally { f.close(); }
+});
+
+test('terminal failed RG PUT plus fresh authoritative absence closes without resending and permits run two', async () => {
+  const f = fixture();
+  const mock = fakeTransport();
+  let terminalFailed = false;
+  let absentReads = 0;
+  try {
+    const invoke = async (operation, payload) => {
+      if (operation === 'operation-status') {
+        terminalFailed = true;
+        return { state: 'failed' };
+      }
+      if (operation === 'group-exists' && terminalFailed) absentReads++;
+      const result = await mock.invoke(operation, payload);
+      if (operation === 'request' && payload.step === 'resourceGroup' && payload.method === 'PUT') {
+        mock.cloud.group = null;
+        return { ...result, receipt: { ...result.receipt, state: 'accepted', operationUrl } };
+      }
+      return result;
+    };
+    await assert.rejects(bootstrapTemporaryIdentity(f.path, invoke, { ...options, coordination: f.coordination }),
+      /exact cloud cleanup completed/);
+    const state = JSON.parse(readFileSync(f.path, 'utf8'));
+    assert.equal(operationIntent(state, 'mutation', 'resourceGroup').receipt.state, 'failed');
+    assert.equal(state.runs[0].phase, 'closed');
+    assert.ok(absentReads >= 3);
+    assert.equal(mock.writes.length, 1);
+    assert.equal(mock.writes[0].method, 'PUT');
+    const second = updateIdentityEnvelope(f.path, 'begin', { now, pricing }, f.coordination.session);
+    assert.equal(second.runOrdinal, 2);
+    assert.equal(second.startedUtc, state.startedUtc);
+    assert.equal(mock.writes.length, 1);
+  } finally { f.close(); }
+});
+
 test('accepted delete settles provider first; early absence and late visibility cannot certify success', async () => {
   for (const outcome of ['unknown', 'failed', 'timeout', 'running', 'succeeded']) {
     const f = fixture();
