@@ -3,4 +3,5 @@ image/*.py text eol=lf
 tests/*.bats text eol=lf
 image/Dockerfile text eol=lf
 spikes/vmss-flex/*.sh text eol=lf
+spikes/vmss-flex/tests/*.sh text eol=lf
 spikes/vmss-flex/*.Dockerfile text eol=lf
