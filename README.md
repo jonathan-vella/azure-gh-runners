@@ -3,8 +3,10 @@
 Shared, private-endpoint-only Azure platform that runs **ephemeral self-hosted GitHub Actions runners** as Azure
 Container Apps jobs for any onboarded repository.
 
-> Status: pre-implementation. Work is tracked in [GitHub issues](https://github.com/jonathan-vella/azure-gh-runners/issues)
-> grouped by [milestones](https://github.com/jonathan-vella/azure-gh-runners/milestones).
+> Status: implementation in progress (ACA-only v1). Work is tracked in [GitHub issues](https://github.com/jonathan-vella/azure-gh-runners/issues)
+> grouped by [milestones](https://github.com/jonathan-vella/azure-gh-runners/milestones). v1 is done when the
+> `jonathan-vella/ghr-smoke` smoke workflow, running on the deployed ACA runner, lists a private-endpoint-only blob
+> container.
 
 ## Start here
 
@@ -19,7 +21,7 @@ Container Apps jobs for any onboarded repository.
 | [Observability](docs/observability.md) | Log Analytics network exception and diagnostic-settings contract |
 | [Runner image](image/README.md) | Pinned generic toolset, local image checks, and remaining runtime contracts |
 | [Identity bootstrap](docs/runbooks/bootstrap-identity.md) | Approved Azure identities, constrained RBAC, and GitHub OIDC configuration |
-| [ADRs](docs/adr/README.md) | Decisions, including spike outcomes |
+| [ADRs](docs/adr/README.md) | v1 decisions (ACA-only) |
 | [AGENTS.md](AGENTS.md) | Rules for AI agents working in this repo |
 
 Background research: [runner options on Azure](docs/research-azure-runner-options.md) and
@@ -28,10 +30,8 @@ Both were written while evaluating `apex-vnext` as the first consumer.
 
 ## Local validation
 
-Install Node.js/npm, the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), PowerShell 7.5+, and Python 3.
+Install Node.js/npm and the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) with Bicep.
 Hook tests additionally require Bash, git, jq, and curl on Linux, or Linux Docker on Windows.
-The [VMSS spike preparation](spikes/vmss-flex/README.md) client checks require Linux Docker on every host;
-they compile the pinned Go integration inside a digest-pinned builder without installing Go locally.
 Then run:
 
 ```powershell
@@ -39,18 +39,17 @@ npm ci
 npm run validate
 ```
 
-`npm run validate` runs consumer schema, policy, and generator tests; validates active `config/consumers/*.json`
+`npm run validate` runs consumer schema, registry, and generator tests; validates active `config/consumers/*.json`
 entries against GitHub repository visibility and default-branch metadata; checks generated consumer parameters for
-drift; builds and lints the Bicep deployment and modules; validates diagnostic categories against the configuration
-consumed by the deployment; checks the offline image contract and executes the Bats policy-hook fixtures; and checks all Markdown with the repository's
-`.markdownlint-cli2.jsonc` configuration.
-Run `npm run generate:consumers` after editing the registry to update `infra/generated/consumers.json`. The generated
-ARM parameters document contains typed consumer deployment fields and a serialized `policyJson`; `main.bicep` does
-not consume it until consumer-job infrastructure is implemented. The registry currently has no active consumers, so
-validation does not need GitHub access; when entries are added, install GitHub CLI and authenticate with access to
-each registered repository. Files ending in `.sample` are examples, not active entries. It also compiles the issue-9
-spike templates and runs its offline PowerShell/Python unit tests, plus issue-60 offline budget/cleanup tests
-and the pinned Go client build/vet/tests. Validation does not deploy resources.
+drift; builds and lints `infra/main.bicep`, `infra/main.bicepparam`, and `infra/modules/network.bicep`; runs network
+tests and observability/diagnostic-category checks; checks the offline image contract and executes the Bats
+policy-hook fixtures; and lints Markdown with `.markdownlint-cli2.jsonc`. The PR workflow
+`.github/workflows/validate.yml` runs it on GitHub-hosted runners.
+Run `npm run generate:consumers` after editing the registry to update `infra/generated/consumers.json`. The registry
+currently has no active consumers, so validation does not need GitHub access; when entries are added, install GitHub
+CLI and authenticate with access to each registered repository. Files ending in `.sample` are examples, not active
+entries. Validation does not deploy resources. Spike harnesses under `spikes/` and related `spike*` paths are archival
+and not validated.
 
 ## At a glance
 

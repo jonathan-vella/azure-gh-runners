@@ -1,4 +1,4 @@
-# ADR-0006: Bounded VMSS Flex feasibility protocol
+# ADR-0006: Bounded VMSS Flex feasibility protocol (rejected for v1)
 
 ## Context
 
@@ -9,7 +9,7 @@ Existing PRD/plan/defaults remain unchanged until real evidence and a separately
 
 ## Decision
 
-**Proposed only.** Prepare the [bounded protocol](../../spikes/vmss-flex/README.md) at the exact owner limits:
+**Historical; superseded by the rejection below.** The proposal was to prepare the [bounded protocol](../../spikes/vmss-flex/README.md) at the exact owner limits:
 shared subscription/tenant, Sweden Central, `rg-ghrunners-spike-vmss-swc`, one B2s, at most two D2ls v5,
 two attempts, four hours and $10 total. Reserve the final hour for cleanup.
 Workers must run one job as nonroot with no Docker/sudo/MI. A new spike-only key for the same GitHub App belongs
@@ -60,6 +60,9 @@ unreviewed workflow code; the shared consumer policy schema and hook remain unch
 
 ## Status
 
-**Proposed; incomplete for cloud execution.** #10/dependency direction, safe scoped-key tooling, exact Marketplace
-guest verification, complete effective pricing/quota and actually available reviewed recovery remain gates.
-Offline client/native tests and template builds are not feasibility or live acceptance evidence.
+Rejected (deferred for v1), 2026-10-08.
+
+**2026-10-08 note:** the owner chose Azure Container Apps jobs as the only v1 backend and ended further spikes. The
+bounded VMSS protocol was never executed in the cloud, and the VMSS issues (#59–#72, #81, #84) are being closed. The
+context and protocol above are kept as a historical record only; `spikes/vmss-flex/` and its workflow are archival
+and not part of validation. A VMSS Flex backend may be revisited after v1 if ACA proves insufficient.

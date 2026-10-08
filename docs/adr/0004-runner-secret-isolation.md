@@ -2,52 +2,35 @@
 
 ## Context
 
-Backlog issue [#9](https://github.com/jonathan-vella/azure-gh-runners/issues/9) requires proving that an Azure Container
-Apps job can provide an application secret to an init container, hand off only a JIT configuration through an
-`EmptyDir`, and keep container managed identity unavailable when `identitySettings` uses lifecycle `None`. A secret
-used only by scale-rule authentication must not be exposed to either container.
+Backlog issue [#9](https://github.com/jonathan-vella/azure-gh-runners/issues/9) asked how an Azure Container Apps job can
+give the GitHub App key to an init container, hand off only a JIT configuration through an `EmptyDir`, keep container
+managed identity unavailable with `identitySettings` lifecycle `None`, and keep a scale-rule-only secret out of both
+containers.
 
-The spike harness in `tools/spike-job-identity-init/` creates a dedicated, internal-only workload-profiles environment,
-private ACR and Key Vault endpoints, and a user-assigned identity. It uses a randomly generated synthetic canary, never
-the GitHub App key. The probe image must be preloaded into private ACR through the approved #6 transfer path and is
-specified by immutable digest; no public import or trusted-service bypass is used. The init container checks the
-canary against a locally computed hash without printing it, then writes a non-secret placeholder JIT document to an
-`EmptyDir` file owned by UID/GID 65532 with mode `0400`. The main process drops to that UID before checking the file,
-identity endpoint, metadata-token denial, scale-only canary absence, and read/delete access.
-
-The harness does not call GitHub or test a real App key or JIT configuration. Those checks require the protected
-`platform-prod` secrets and belong behind the gated deployment path.
+The 2026-10-07 spike harness (`tools/spike-job-identity-init/`, now archival) stopped at Container Apps environment
+provisioning with `ManagedEnvironmentCapacityHeavyUsageError` / `AKSCapacityHeavyUsage` in `swedencentral`. No job ran;
+its resource groups were deleted and verified absent. No further spikes will run.
 
 ## Decision
 
-**No production decision is accepted.** The 2026-10-07 deployment attempt stopped at Container Apps environment
-provisioning with `ManagedEnvironmentCapacityHeavyUsageError` / `AKSCapacityHeavyUsage` in `swedencentral`. ARM
-preflight also rejected ACR API `2026-05-01` as unsupported in this region; the harness now pins ACR to the latest
-stable version reported for this region, `2025-11-01`. No job ran and none of the issue's runtime acceptance criteria
-were demonstrated. Do not repeat the full resource deployment until the regional capacity blocker changes; do not
-switch regions.
+- The **init container** receives the GitHub App key through a job secret (see
+  [ADR-0002](0002-key-vault-secret-references.md)), mints a single-use repository JIT configuration, and writes it to an
+  `EmptyDir` volume readable only by the runner user. It never logs the key or the JIT configuration.
+- The **main runner container** has no secret environment variables and no usable managed identity. It reads and
+  deletes the JIT file, then runs the runner with that configuration.
+- The job's user-assigned identity uses `identitySettings.lifecycle: None`, so neither container can obtain a
+  managed-identity token; the platform still uses the identity for image pull and Key Vault reference resolution.
+- The scale-rule authentication references the App key secret without exposing it as container environment.
 
-The private ACR and Key Vault are reachable only through private endpoints; public network access is disabled. The
-Container Apps environment is internal with public network access disabled. The UAMI has only `AcrPull` on the
-spike ACR and `Key Vault Secrets User` on the spike vault. The harness's bounded cleanup wait timed out, after which
-the exact issue-9 environment and resource group were deleted and both resource groups were verified absent. Key Vault
-purge protection is not bypassed. All taggable spike resources carry the agreed ownership/governance contract plus
-issue-specific ownership and expiry tags; the diagnostic ACA subnet allows required platform/private-endpoint flows
-before denying RFC1918 lateral traffic.
+This is the chosen default; no live evidence is claimed. The real `platform-prod` deployment and the `ghr-smoke` smoke
+test will prove it, including that no managed-identity token is obtainable inside the job.
 
 ## Consequences
 
-- A successful job execution proves that the init secret reference resolved, the private image pull succeeded, and
-  the init-to-main `EmptyDir` handoff passed its file-mode and content checks.
-- `identitySettings.lifecycle: None` is accepted for this pattern only if the non-root main process reports that
-  `IDENTITY_ENDPOINT` and `IDENTITY_HEADER` are absent and an IMDS token request fails.
-- The scale-only secret is verified in scale-rule auth and absent from both containers' environment declarations and
-  runtime checks. This does not validate scaler polling or GitHub App authentication.
-- The synthetic canary is not evidence that the real GitHub App key works. Production App authentication remains
-  unverified until tested through the protected platform path.
-- Key Vault tombstone status was not independently verified after cleanup; no vault purge is attempted.
+- A compromised job step cannot read the App key or obtain an Azure token from the main container.
+- The App key remains high value; keep the GitHub App installation limited to selected repositories and rotate it.
+- `Microsoft.App/jobs/start/action` must not be granted broadly because it can expose job secrets.
 
 ## Status
 
-**Proposed — blocked by regional ACA capacity.** The current run has no successful runtime evidence; see the
-sanitized, criterion-by-criterion record in `tools/spike-job-identity-init/attempt.json`.
+Accepted (default, pending live smoke), 2026-10-08.

@@ -12,14 +12,11 @@ Each onboarded repository has one JSON declaration in `config/consumers/<name>.j
 | `name` | Required lowercase kebab-case identifier. |
 | `repo` | Required GitHub `owner/name`. |
 | `visibility` | Required `public` or `private`. |
-| `backend` | Optional explicit `aca` or `vmss`. Omission preserves legacy declarations and has no schema default. |
-| `vmSku` | Required only for `backend: "vmss"`; initially allowlisted to `Standard_D2ls_v5`. |
-| `maxRunners` | Required only for `backend: "vmss"`; integer from 1 through the platform cap of 2. |
-| `jobTimeoutMinutes` | Required only for `backend: "vmss"`; integer from 1 through 360 minutes. |
+| `backend` | Optional; the only accepted value is `aca`. Omission is equivalent to `aca`. `vmss` is rejected in v1. |
 | `labels` | Required, non-empty, unique custom runner labels. The registry validator requires `ghr-<name>`. |
-| `cpu`, `memory` | Required for legacy and explicit ACA declarations: total ACA replica resources across all job containers, using one of the supported pairs below. Not valid for VMSS. |
-| `maxExecutions` | Required for legacy and explicit ACA declarations: positive integer for maximum concurrent executions. Not valid for VMSS. |
-| `replicaTimeoutSeconds` | Required for legacy and explicit ACA declarations: positive ACA job replica timeout in seconds. Not valid for VMSS. |
+| `cpu`, `memory` | Required: total ACA replica resources across all job containers, using one of the supported pairs below. |
+| `maxExecutions` | Required: positive integer for maximum concurrent executions. |
+| `replicaTimeoutSeconds` | Required: positive ACA job replica timeout in seconds. |
 | `allowedEvents` | Required, non-empty list of `workflow_dispatch`, `schedule`, and `push`; private consumers may also opt into `pull_request`. `pull_request_target` and `workflow_run` are never accepted. |
 | `allowedRefs` | Required, non-empty list of branch refs in `refs/heads/<branch>` form. Public declarations can list only one ref; the registry validator checks that it is the repository's actual default branch. For opted-in private PRs, this allowlists the PR base branch. |
 | `allowedWorkflows` | Required, non-empty list in `<owner>/<repo>/.github/workflows/<file>@refs/heads/<branch>` form. Branch jobs match directly; private PRs authorize the workflow path against the PR base branch while validating the actual merge ref separately. |
@@ -31,18 +28,12 @@ The schema cannot know a repository's current default branch by itself. Public c
 `workflow_dispatch`, `schedule`, and default-branch `push`; private consumers may opt into `pull_request` where policy
 allows it. The runner pre-job hook remains responsible for enforcing the policy at runtime.
 
-## Runner backend contract
+## Runner backend
 
-The legacy [`example.json.sample`](../config/consumers/example.json.sample) remains valid without a `backend`.
-[`example-aca.json.sample`](../config/consumers/example-aca.json.sample) and
-[`example-vmss.json.sample`](../config/consumers/example-vmss.json.sample) show the explicit variants. VMSS-only
-fields are rejected when `backend` is absent or set to `aca`; ACA sizing fields (`cpu`, `memory`, `maxExecutions`,
-and `replicaTimeoutSeconds`) are required for legacy and explicit ACA declarations and rejected for `vmss`. All
-three VMSS sizing fields are required for `vmss`. The schema intentionally has no default for `backend`: the primary
-backend is unresolved pending the accepted backend ADR. Omitted-backend runtime and generator behavior remain gated
-on that decision. The VMSS sample is a schema-preparation example only, not a deployable registry entry: the
-registry validator and generator reject active VMSS consumers until runtime support lands. This change does not
-alter active consumer declarations, generated parameters, or runtime behavior.
+v1 runs every consumer as an Azure Container Apps job. [`example.json.sample`](../config/consumers/example.json.sample)
+omits `backend`; [`example-aca.json.sample`](../config/consumers/example-aca.json.sample) sets `backend: "aca"`
+explicitly. Both are equivalent. The schema rejects `vmss` and the former VMSS fields (`vmSku`, `maxRunners`,
+`jobTimeoutMinutes`); VMSS Flex is deferred ([ADR-0006](adr/0006-vmss-flex-spike.md)).
 
 ## Generated deployment parameters
 
@@ -51,9 +42,7 @@ policy, and GitHub repository metadata validation as the registry validator, the
 [`infra/generated/consumers.json`](../infra/generated/consumers.json). `npm run validate` runs the generator's
 `--check` mode, which fails if the artifact is missing or stale and never writes it.
 
-The artifact is an ARM deployment parameters document with `parameters.consumers.value` as an array. Active VMSS
-entries are rejected until backend runtime support is implemented, so generated entries currently use the legacy or
-ACA shape. Consumers are sorted by `name`; `labels`, `allowedEvents`, `allowedRefs`, and `allowedWorkflows` are
+The artifact is an ARM deployment parameters document with `parameters.consumers.value` as an array. Consumers are sorted by `name`; `labels`, `allowedEvents`, `allowedRefs`, and `allowedWorkflows` are
 sorted because their registry semantics are set-valued. Each generated consumer has this typed shape:
 
 | Field | JSON type | Source |

@@ -3,26 +3,13 @@
 Source of truth for work items. Each item maps to one GitHub issue. Pick items whose dependencies are closed.
 See [Roadmap](roadmap.md) for milestone exit criteria and [PRD](prd.md) for requirements.
 
-## Dual-backend planning
+## v1 scope (2026-10-08)
 
-The planning tracker is [#59](https://github.com/jonathan-vella/azure-gh-runners/issues/59). The primary backend is
-unresolved. The latest owner-authorized non-zonal D4 attempt used reviewed source
-`e934066c3c1cb43fa33cf7ee835389f03de48389`. Observed activity shows the ARM validation action was asynchronously
-accepted, with no deployment write or ACA managed-environment write observed and inventory confirming zero
-deployments/resources. The original CLI exit was 1 (`Unclassified`); readback was `DeploymentNotFound`, and
-independent diagnosis was `DeploymentAbsentOwnedGroupEmpty`. Offline mocks show that an accepted asynchronous
-validation can later return an error before deployment creation, but this is only a possible control-flow explanation,
-not evidence of what happened in the real attempt. The actual cause is unknown. Cleanup succeeded and the exact
-`rg-ghrunners-spike7-swc` resource group was verified absent. No ACA environment create or job run occurred; this is
-not evidence of ACA capacity failure. See
-[the recorded D4 outcome](https://github.com/jonathan-vella/azure-gh-runners/issues/7#issuecomment-6045915111).
-The additional D4 authorization has been consumed; no further retry is authorized. Apply the conditional rule in the
-roadmap; do not set backend defaults, change the active consumer contract, or reprioritize/relabel ACA work until
-evidence selects a primary.
-
-The additive schema issue #63 may proceed independently of the D4 outcome and VMSS spike. It must not set a default or
-alter existing ACA entries. All runtime/tooling changes and persistent VMSS implementation remain gated by the accepted
-ADR. A failed or inconclusive VMSS spike blocks persistent VMSS implementation.
+v1 uses Azure Container Apps (ACA) jobs only and deploys directly into the existing `rg-ghrunners-prod-swc` through
+the `platform-prod` workflow. No further spikes are planned; ADR-0001 to ADR-0005 record default decisions proven by
+the real deployment and the `ghr-smoke` smoke test. **Historical:** the dual-backend/VMSS Flex plan (tracker #59,
+issues #60–#72, #81, #84) and the D4 evidence rule are superseded ([ADR-0006](adr/0006-vmss-flex-spike.md)); those
+issues will be closed and are omitted from the tables below.
 
 ## M0 - Foundation
 
@@ -36,9 +23,9 @@ Repository, identities, and GitHub App exist; agents can work in the repo.
 | [#4](https://github.com/jonathan-vella/azure-gh-runners/issues/4) | `entra-oidc` | Bootstrap Entra OIDC identities for platform CI | setup, security | [#1](https://github.com/jonathan-vella/azure-gh-runners/issues/1) |
 | [#5](https://github.com/jonathan-vella/azure-gh-runners/issues/5) | `github-app` | Create and install the runner GitHub App | setup, security | [#1](https://github.com/jonathan-vella/azure-gh-runners/issues/1) |
 
-## M1 - De-risk spikes
+## M1 - Default decisions
 
-Preview and undocumented behaviours are proven or replaced; findings recorded as ADRs.
+Spikes are closed without further runs. Each issue is resolved by a default ADR (Accepted, pending live smoke).
 
 | Issue | ID | Title | Labels | Depends on |
 | --- | --- | --- | --- | --- |
@@ -47,8 +34,6 @@ Preview and undocumented behaviours are proven or replaced; findings recorded as
 | [#8](https://github.com/jonathan-vella/azure-gh-runners/issues/8) | `spike-keda-egress` | Spike: KEDA github-runner scaler polling path | spike | [#5](https://github.com/jonathan-vella/azure-gh-runners/issues/5) |
 | [#9](https://github.com/jonathan-vella/azure-gh-runners/issues/9) | `spike-job-identity-init` | Spike: init container, EmptyDir, and identitySettings on ACA jobs | spike, security | [#5](https://github.com/jonathan-vella/azure-gh-runners/issues/5) |
 | [#10](https://github.com/jonathan-vella/azure-gh-runners/issues/10) | `spike-jit-labels` | Spike: JIT runner labels and runs-on syntax | spike | [#5](https://github.com/jonathan-vella/azure-gh-runners/issues/5) |
-| [#60](https://github.com/jonathan-vella/azure-gh-runners/issues/60) | `spike-vmss` | Spike: prove VMSS Flex single-job runner lifecycle | spike, infra, security | [#5](https://github.com/jonathan-vella/azure-gh-runners/issues/5), [#10](https://github.com/jonathan-vella/azure-gh-runners/issues/10), [#19](https://github.com/jonathan-vella/azure-gh-runners/issues/19), [#20](https://github.com/jonathan-vella/azure-gh-runners/issues/20) |
-| [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61) | `adr-dual-backend` | ADR: dual ACA and VMSS Flex backend decision | infra, docs, security | [#60](https://github.com/jonathan-vella/azure-gh-runners/issues/60) |
 
 ## M2 - Platform infrastructure
 
@@ -61,12 +46,11 @@ Private-endpoint-only network, observability, Key Vault, ACR and ACA environment
 | [#13](https://github.com/jonathan-vella/azure-gh-runners/issues/13) | `iac-identity-kv` | Identity and Key Vault | infra, security | [#11](https://github.com/jonathan-vella/azure-gh-runners/issues/11), [#7](https://github.com/jonathan-vella/azure-gh-runners/issues/7) |
 | [#14](https://github.com/jonathan-vella/azure-gh-runners/issues/14) | `iac-acr` | Azure Container Registry Premium (private) | infra, security | [#11](https://github.com/jonathan-vella/azure-gh-runners/issues/11), [#6](https://github.com/jonathan-vella/azure-gh-runners/issues/6) |
 | [#15](https://github.com/jonathan-vella/azure-gh-runners/issues/15) | `iac-aca-env` | Container Apps workload-profiles environment (internal) | infra, security | [#11](https://github.com/jonathan-vella/azure-gh-runners/issues/11), [#12](https://github.com/jonathan-vella/azure-gh-runners/issues/12) |
-| [#66](https://github.com/jonathan-vella/azure-gh-runners/issues/66) | `iac-network-vmss` | Network: add private controller and worker subnets | infra, security | [#11](https://github.com/jonathan-vella/azure-gh-runners/issues/11), [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61) |
 
 ## M3 - Runner image and consumer jobs
 
-Hardened runner image, consumer registry, and one runner backend per registry entry. ACA remains supported; the primary
-backend and active defaults are set only after the D4 evidence rule is conclusive.
+Hardened runner image, consumer registry, and one ACA runner job per registry entry. The registry accepts only the
+`aca` backend.
 
 | Issue | ID | Title | Labels | Depends on |
 | --- | --- | --- | --- | --- |
@@ -80,15 +64,6 @@ backend and active defaults are set only after the D4 evidence rule is conclusiv
 | [#23](https://github.com/jonathan-vella/azure-gh-runners/issues/23) | `image-build-pipeline` | Image build pipeline | image, ci | [#19](https://github.com/jonathan-vella/azure-gh-runners/issues/19), [#14](https://github.com/jonathan-vella/azure-gh-runners/issues/14) |
 | [#24](https://github.com/jonathan-vella/azure-gh-runners/issues/24) | `iac-runner-job-module` | Reusable per-consumer ACA runner job module | infra, security | [#15](https://github.com/jonathan-vella/azure-gh-runners/issues/15), [#13](https://github.com/jonathan-vella/azure-gh-runners/issues/13), [#8](https://github.com/jonathan-vella/azure-gh-runners/issues/8), [#22](https://github.com/jonathan-vella/azure-gh-runners/issues/22) |
 | [#25](https://github.com/jonathan-vella/azure-gh-runners/issues/25) | `iac-consumers-loop` | Wire the consumer loop into main.bicep | infra | [#24](https://github.com/jonathan-vella/azure-gh-runners/issues/24), [#18](https://github.com/jonathan-vella/azure-gh-runners/issues/18) |
-| [#63](https://github.com/jonathan-vella/azure-gh-runners/issues/63) | `registry-backend-schema` | Registry schema: add VMSS backend sizing contract | infra, registry | [#16](https://github.com/jonathan-vella/azure-gh-runners/issues/16); independent of D4 and #60 |
-| [#64](https://github.com/jonathan-vella/azure-gh-runners/issues/64) | `registry-backend-tooling` | Registry tooling: validate and generate dual-backend consumers | registry, security | [#63](https://github.com/jonathan-vella/azure-gh-runners/issues/63), [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61) |
-| [#65](https://github.com/jonathan-vella/azure-gh-runners/issues/65) | `iac-backend-flags` | IaC flags: independently gate ACA and VMSS backends | infra, security | [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61), [#63](https://github.com/jonathan-vella/azure-gh-runners/issues/63), [#64](https://github.com/jonathan-vella/azure-gh-runners/issues/64), conclusive D4 primary decision |
-| [#67](https://github.com/jonathan-vella/azure-gh-runners/issues/67) | `iac-gallery-image` | Image: build VMSS worker image with VM Image Builder | image, infra, security | [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61), [#19](https://github.com/jonathan-vella/azure-gh-runners/issues/19), [#20](https://github.com/jonathan-vella/azure-gh-runners/issues/20); reuse [#23](https://github.com/jonathan-vella/azure-gh-runners/issues/23) |
-| [#68](https://github.com/jonathan-vella/azure-gh-runners/issues/68) | `iac-vmss-module` | IaC: reusable per-consumer VMSS Flex module | infra, security | [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61), [#63](https://github.com/jonathan-vella/azure-gh-runners/issues/63), [#64](https://github.com/jonathan-vella/azure-gh-runners/issues/64), [#65](https://github.com/jonathan-vella/azure-gh-runners/issues/65), [#66](https://github.com/jonathan-vella/azure-gh-runners/issues/66), [#67](https://github.com/jonathan-vella/azure-gh-runners/issues/67) |
-| [#70](https://github.com/jonathan-vella/azure-gh-runners/issues/70) | `iac-controller` | IaC: provision the private VMSS controller | infra, security | [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61), [#66](https://github.com/jonathan-vella/azure-gh-runners/issues/66), [#13](https://github.com/jonathan-vella/azure-gh-runners/issues/13), [#65](https://github.com/jonathan-vella/azure-gh-runners/issues/65) |
-| [#69](https://github.com/jonathan-vella/azure-gh-runners/issues/69) | `runbook-controller-rbac` | Runbook: controller managed-identity RBAC | docs, security | [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61), [#13](https://github.com/jonathan-vella/azure-gh-runners/issues/13), [#70](https://github.com/jonathan-vella/azure-gh-runners/issues/70); before first persistent controller deployment |
-| [#71](https://github.com/jonathan-vella/azure-gh-runners/issues/71) | `controller-app` | Controller: implement VMSS Flex runner lifecycle service | infra, security, test | [#60](https://github.com/jonathan-vella/azure-gh-runners/issues/60), [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61), [#68](https://github.com/jonathan-vella/azure-gh-runners/issues/68), [#69](https://github.com/jonathan-vella/azure-gh-runners/issues/69), [#70](https://github.com/jonathan-vella/azure-gh-runners/issues/70), [#10](https://github.com/jonathan-vella/azure-gh-runners/issues/10) |
-| [#72](https://github.com/jonathan-vella/azure-gh-runners/issues/72) | `worker-bootstrap` | Image: bootstrap one-job VMSS worker | image, security, test | [#67](https://github.com/jonathan-vella/azure-gh-runners/issues/67), [#71](https://github.com/jonathan-vella/azure-gh-runners/issues/71), [#20](https://github.com/jonathan-vella/azure-gh-runners/issues/20) |
 
 ## M4 - Platform CI/CD
 
@@ -110,7 +85,6 @@ Agent-executable architecture, onboarding, operations, and security documentatio
 | [#30](https://github.com/jonathan-vella/azure-gh-runners/issues/30) | `docs-onboarding` | Agent-executable consumer onboarding guide | docs | [#25](https://github.com/jonathan-vella/azure-gh-runners/issues/25) |
 | [#31](https://github.com/jonathan-vella/azure-gh-runners/issues/31) | `docs-operations` | Operations runbook | docs | [#27](https://github.com/jonathan-vella/azure-gh-runners/issues/27) |
 | [#32](https://github.com/jonathan-vella/azure-gh-runners/issues/32) | `docs-security` | Security model and threat analysis | docs, security | [#20](https://github.com/jonathan-vella/azure-gh-runners/issues/20) |
-| [#62](https://github.com/jonathan-vella/azure-gh-runners/issues/62) | `docs-prd-plan` | Update shared platform design for dual backends | docs, security | [#61](https://github.com/jonathan-vella/azure-gh-runners/issues/61); reuse #29–#32 where applicable |
 | [#75](https://github.com/jonathan-vella/azure-gh-runners/issues/75) | `docs-automation-gates` | Document automated merge and deployment gates | docs, security | — |
 
 ## M6 - v1.0 acceptance
@@ -180,60 +154,18 @@ Acceptance criteria:
 - App ID, installation ID and private key stored as `platform-prod` environment secrets
 - Runbook `docs/runbooks/github-app.md` covering creation, installation on a new repo, and key rotation
 
-### `spike-acr-agentpool` — Spike: ACR Tasks agent-pool build against a private ACR ([#6](https://github.com/jonathan-vella/azure-gh-runners/issues/6))
+### M1 spikes #6–#10 — closed by default ADRs
 
-Prove that a GitHub-hosted runner can trigger an image build on an ACR Tasks dedicated agent pool (preview) in a VNet, with ACR Premium public network access disabled.
+No further spike runs. Each issue closes with its default ADR (Accepted, pending live smoke); the real `platform-prod`
+deployment and the `ghr-smoke` smoke test provide the live evidence.
 
-Acceptance criteria:
-
-- Determine whether `az acr build --agent-pool` source-context upload works with public access disabled; if not, evaluate a git-context ACR task
-- Confirm agent-pool subnet egress needed to pull `ghcr.io/actions/actions-runner` base image
-- Confirm S1/S2 tier availability and quota in `swedencentral`
-- Decision recorded in `docs/adr/0001-image-build-path.md`, including fallback (GitHub-hosted build -> private GHCR -> `az acr import` by digest) if the spike fails
-- Spike resources deleted
-
-### `spike-kv-ref-pe` — Spike: ACA job Key Vault secret references over a private endpoint ([#7](https://github.com/jonathan-vella/azure-gh-runners/issues/7))
-
-Microsoft docs do not state whether ACA resolves `keyVaultUrl` secrets when Key Vault public access is disabled. Prove it.
-
-Acceptance criteria:
-
-- ACA job in a VNet-integrated workload-profiles environment resolves a `keyVaultUrl` secret from a Key Vault with public access disabled and a private endpoint
-- Document whether 'Allow trusted Microsoft services' is required
-- Decision recorded in `docs/adr/0002-key-vault-secret-references.md`
-- Spike resources deleted
-
-### `spike-keda-egress` — Spike: KEDA github-runner scaler polling path ([#8](https://github.com/jonathan-vella/azure-gh-runners/issues/8))
-
-Determine whether the KEDA `github-runner` scale-rule polling to api.github.com originates from the customer subnet (traverses NAT/NSG) or from the platform.
-
-Acceptance criteria:
-
-- Evidence (NSG flow logs / NAT metrics / deny test) of where scaler traffic originates
-- Required egress list for scaler + runner documented
-- Decision recorded in `docs/adr/0003-egress-requirements.md`
-
-### `spike-job-identity-init` — Spike: init container, EmptyDir, and identitySettings on ACA jobs ([#9](https://github.com/jonathan-vella/azure-gh-runners/issues/9))
-
-Prove the secret-isolation pattern: init container holds the App key and writes a JIT config to an EmptyDir; main container has no secrets and no managed identity.
-
-Acceptance criteria:
-
-- Init container can read the App key secret via `secretRef`; main container env contains no secret values
-- With `identitySettings` lifecycle `None`, `IDENTITY_ENDPOINT` is absent / token request fails in the main container while ACR pull and KV refs still work
-- Secret referenced only by scale-rule auth is not visible in either container
-- Decision recorded in `docs/adr/0004-runner-secret-isolation.md`
-
-### `spike-jit-labels` — Spike: JIT runner labels and runs-on syntax ([#10](https://github.com/jonathan-vella/azure-gh-runners/issues/10))
-
-Confirm which labels `POST /repos/{owner}/{repo}/actions/runners/generate-jitconfig` registers and how consumers must write `runs-on` when the scaler uses `noDefaultLabels=true`.
-
-Acceptance criteria:
-
-- Documented label set of a JIT runner (including whether `self-hosted` is implicit)
-- Confirmed `runs-on` form that both scales the KEDA rule and matches the JIT runner
-- Confirmed a plain `runs-on: self-hosted` does not wake the pool
-- Decision recorded in `docs/adr/0005-runner-labels.md`
+| Issue | Default decision |
+| --- | --- |
+| #6 | [ADR-0001](adr/0001-image-build-path.md): GitHub-hosted build → private GHCR → `az acr import` by digest; no ACR agent pool. |
+| #7 | [ADR-0002](adr/0002-key-vault-secret-references.md): Key Vault secret reference via one UAMI; ARM secure secret fallback. |
+| #8 | [ADR-0003](adr/0003-egress-requirements.md): NAT Gateway egress, outbound 443 to Internet; scaler origin is observational. |
+| #9 | [ADR-0004](adr/0004-runner-secret-isolation.md): init container mints JIT into EmptyDir; main container has no secrets or MI. |
+| #10 | [ADR-0005](adr/0005-runner-labels.md): custom label only, `noDefaultLabels: true`, `runs-on: ghr-<name>`. |
 
 ### `iac-network` — Network: VNet, subnets, NSGs, NAT Gateway, private DNS zones ([#11](https://github.com/jonathan-vella/azure-gh-runners/issues/11))
 
@@ -266,7 +198,7 @@ Acceptance criteria:
 - UAMI for runner jobs (AcrPull + Key Vault Secrets User only)
 - Key Vault: RBAC mode, public network access disabled, purge protection on, private endpoint in `snet-pe` with DNS zone group
 - GitHub App private key written via ARM (`Microsoft.KeyVault/vaults/secrets`) from a `@secure()` parameter
-- Per ADR-0002, trusted-services setting matches the proven configuration
+- Per ADR-0002, the job resolves the App key through a Key Vault reference using the UAMI; fallback is an ARM secure job secret
 
 ### `iac-acr` — Azure Container Registry Premium (private) ([#14](https://github.com/jonathan-vella/azure-gh-runners/issues/14))
 
@@ -274,9 +206,9 @@ Private ACR for the runner image, implementing the build path chosen in ADR-0001
 
 Acceptance criteria:
 
-- ACR Premium: public network access disabled, admin user disabled, ARM-audience tokens enabled, trusted services enabled
+- ACR Premium: public network access disabled, admin user disabled, ARM-audience tokens enabled, trusted services enabled (required for `az acr import`)
 - Private endpoint (registry + data endpoint) in `snet-pe` linked to `privatelink.azurecr.io`
-- Agent pool in `snet-acr-agents` (or ADR-0001 fallback resources)
+- No ACR agent pool (ADR-0001)
 - AcrPull role for the runner UAMI
 
 ### `iac-aca-env` — Container Apps workload-profiles environment (internal) ([#15](https://github.com/jonathan-vella/azure-gh-runners/issues/15))
@@ -295,7 +227,7 @@ Typed contract for `config/consumers/<name>.json`.
 
 Acceptance criteria:
 
-- Fields: `name`, `repo` (owner/name), `visibility` (public|private), `labels`, `cpu`, `memory`, `maxExecutions`, `replicaTimeoutSeconds`, `allowedEvents`, `allowedRefs`, `allowedWorkflows`, optional `notes`
+- Fields: `name`, `repo` (owner/name), `visibility` (public|private), optional `backend` (only `aca`; `vmss` rejected), `labels`, `cpu`, `memory`, `maxExecutions`, `replicaTimeoutSeconds`, `allowedEvents`, `allowedRefs`, `allowedWorkflows`, optional `notes`
 - Schema in `config/schema/consumer.v1.json` with examples
 - Example entry `config/consumers/example.json.sample` (not deployed)
 
@@ -369,7 +301,7 @@ Build and publish the runner image via the path chosen in ADR-0001.
 
 Acceptance criteria:
 
-- Image tagged with git SHA; digest captured as a workflow output and fed to deployment
+- Built on a GitHub-hosted runner and pushed to private GHCR tagged with git SHA; imported into ACR by digest with `az acr import`; digest fed to the jobs deployment
 - Base image and tool pins updated by Dependabot or a scheduled job
 - Optional: build provenance attestation
 
@@ -401,8 +333,8 @@ Required check for every PR.
 
 Acceptance criteria:
 
-- markdownlint, `bicep build` + `bicep lint`, registry validator + generator drift, bats hook tests, hadolint
-- What-if against `rg-ghrunners-prod-swc` using the Reader OIDC credential; summary posted to the job summary
+- `.github/workflows/validate.yml` runs `npm run validate` on GitHub-hosted runners
+- Optional follow-up: what-if against `rg-ghrunners-prod-swc` using the Reader OIDC credential; summary posted to the job summary
 - Actions pinned by SHA; `permissions` least privilege; marked as required in branch protection
 
 ### `ci-deploy` — Gated deployment workflow ([#27](https://github.com/jonathan-vella/azure-gh-runners/issues/27))
@@ -412,7 +344,7 @@ Acceptance criteria:
 Acceptance criteria:
 
 - Runs only on `main`; environment `platform-prod` is restricted to `main` and has no required human reviewer. Unattended deployments remain enabled under the current owner decision; do not broaden the workflow's branch/ref scope.
-- Builds image if changed, deploys Bicep with the image digest
+- `.github/workflows/deploy.yml` deploys in stages: image build → private GHCR → foundation (`deployJobs=false`) → `az acr import` by digest → jobs (`deployJobs=true`)
 - Post-deploy assertions: every PaaS resource has public network access disabled; job count equals registry entries; App key secret present
 - Deployment outputs published to `docs/platform-outputs.md` via PR or job summary
 
@@ -477,7 +409,7 @@ Create public throwaway repo `jonathan-vella/ghr-smoke` and onboard it using onl
 
 Acceptance criteria:
 
-- `workflow_dispatch` on `main` runs on the platform and reads a blob from a test storage account via a PE in `snet-consumer-pe`
+- Definition of done: `workflow_dispatch` on `main` runs on the real ACA runner and lists an anonymous-read, empty blob container in a storage account with public network access disabled, reached only through a PE in `snet-consumer-pe`
 - `push` to a non-default branch is rejected by the hook
 - A `pull_request` job targeting the label is rejected or never scheduled
 - No managed-identity token obtainable inside the job
@@ -493,47 +425,3 @@ Acceptance criteria:
 - Automated check: no PaaS resource with public network access enabled; only public IP is the NAT egress IP
 - An agent onboarded the smoke repo from docs alone (evidence linked)
 - All M0-M5 issues closed; tag `v1.0.0` with release notes
-
-## Dual-backend issue acceptance notes
-
-The new issue bodies are the detailed acceptance source; this section keeps sequencing and cross-issue invariants
-visible alongside the existing work items.
-
-- **Spike #60:** exact authorized scope is `rg-ghrunners-spike-vmss-swc` in `shared` / `swedencentral`, one `Standard_B2s`
-  controller, at most two `Standard_D2ls_v5` workers, four hours, $10, and two deployment attempts. Stop before any
-  limit is exceeded. Verify private networking/NAT, hook rejection, no worker identity, one-job deletion, instance
-  protection, and termination notifications. On every outcome delete and verify the entire spike RG; never widen
-  permissions if the deployment identity is insufficient.
-- **ADR #61 and shared docs #62:** record the reviewed spike outcome and exact D4 evidence rule. Only an actual
-  environment and job success selects ACA primary; repeated actual capacity failure selects VMSS primary; any other
-  evidence leaves primary/defaults unresolved. The latest authorized attempt's ARM validation action was
-  asynchronously accepted; no deployment write, ACA managed-environment write, deployment inventory, or resource
-  inventory was observed. Original CLI exit was 1 (`Unclassified`), readback was `DeploymentNotFound`, and independent
-  diagnosis found `DeploymentAbsentOwnedGroupEmpty`. Offline mocks establish a possible validation-error-before-create
-  path only, not the actual cause, which remains unknown. Cleanup succeeded and the exact
-  `rg-ghrunners-spike7-swc` group was verified absent. No ACA environment/job was created, so this is not a capacity
-  verdict. The additional D4 authorization has been consumed; no further retry is authorized.
-- **Schema #63:** may proceed before the D4 decision and VMSS spike, but stays additive, has no default, and preserves
-  current ACA entries. Tooling #64 and backend flags #65 depend on the accepted ADR; flags additionally require a
-  conclusive primary decision before choosing defaults. An explicitly assigned consumer on a disabled backend must
-  fail clearly rather than silently disappear.
-- **Network/image/modules #66–#68 and controller #70:** workers have no public IP, inbound access, managed identity,
-  Docker daemon, or default outbound access; use the private worker subnet, NAT egress, non-root execution, exact
-  existing tool manifest/hook, immutable gallery image, and zero-idle per-consumer VMSS Flex. Do not deploy outside
-  the protected main-only `platform-prod` path.
-- **Controller RBAC #69:** Bicep may assign only Virtual Machine Contributor (`9980e02c-c2be-4d73-94e8-173b1dc7cf3c`)
-  and Network Contributor (`4d97b98b-1d4f-4787-a291-c67834d212e7`) to the controller identity at
-  `rg-ghrunners-prod-swc`. Do not grant the broader Contributor role. The existing platform deployment identity's
-  constrained condition currently permits only AcrPull, AcrPush, and Key Vault Secrets User. After the
-  controller-RBAC runbook PR merges, an agent may perform the one-time update to add only those two exact controller
-  role IDs; verify and record the exact before/after state and stop on mismatch. Preserve all scope/action constraints.
-  Persistent role assignments deploy only through the main-only `platform-prod` workflow; no subscription-wide grant,
-  worker identity, or extra role is allowed.
-- **Controller/runtime #71–#72:** pin `actions/scaleset` v0.4.0 behind an interface. Keep JIT data only in protected
-  Custom Script Extension settings, never logs/arguments/source. Reconcile worker, NIC, disk, and extension cleanup
-  after success, error, timeout, cancellation, and restart; surface cleanup failures as pending rather than success.
-  Reuse the existing pre-job hook and fail closed.
-- **Reuse existing issues:** #13 owns shared identity/Key Vault foundations; #10 owns JIT labels; #23 owns image
-  pipeline integration; #26–#28 own validation, deployment, and maintenance; #29–#32 own architecture, onboarding,
-  operations, and security docs; #33–#34 own smoke and release acceptance. Extend these rather than creating
-  duplicates. No ACA issue state, milestone, or label is changed by this plan.
