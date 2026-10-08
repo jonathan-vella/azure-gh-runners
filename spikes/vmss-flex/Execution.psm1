@@ -32,7 +32,7 @@ function Assert-SpikeExecutionApproval {
     Assert-SpikeManifest $Manifest
     $keys = @('schemaVersion', 'reviewedHead', 'executionDirectionConfirmed', 'secretReadApproved',
         'canonicalUbuntuVersion', 'installationId', 'workflowRef', 'smokeCommitSha', 'smokeWorkflowBlobSha',
-        'archiveSha256', 'adminSshPublicKey', 'pricing', 'quota')
+        'archiveSha256', 'adminSshPublicKey', 'appKeyFingerprint', 'pricing', 'quota')
     if ($Approval.Count -ne $keys.Count -or @($keys | Where-Object { -not $Approval.ContainsKey($_) }).Count -ne 0 -or
         $Approval.schemaVersion -ne 1 -or $Approval.reviewedHead -cne $Manifest.head -or
         $Approval.executionDirectionConfirmed -isnot [bool] -or $Approval.executionDirectionConfirmed -ne $true -or
@@ -40,6 +40,7 @@ function Assert-SpikeExecutionApproval {
         $Approval.canonicalUbuntuVersion -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or
         ($Approval.installationId -isnot [long] -and $Approval.installationId -isnot [int]) -or
         $Approval.installationId -le 0 -or $Approval.archiveSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        $Approval.appKeyFingerprint -cnotmatch '^[a-f0-9]{64}$' -or
         $Approval.smokeCommitSha -cnotmatch '^[a-f0-9]{40}$' -or $Approval.smokeWorkflowBlobSha -cnotmatch '^[a-f0-9]{40}$' -or
         $Approval.adminSshPublicKey -cnotmatch '^(ssh-ed25519|ssh-rsa) [A-Za-z0-9+/]+={0,2}$' -or
         $Approval.adminSshPublicKey.Length -gt 4096 -or
@@ -63,10 +64,9 @@ function Assert-SpikeExecutionApproval {
     }
     $hourly = $pricing.b2sHourly + 2 * $pricing.d2lsHourly + 3 * $pricing.p4Hourly +
         $pricing.natHourly + $pricing.pipHourly + 2 * $pricing.peHourly + 2 * $pricing.dnsZoneHourly
-    # Current literal invocation cap permits TWO guests: one controller, one worker.
-    # Kernel quotas cap each to 2 GiB ingress + 2 GiB egress; DNS UDP is rate-limited.
-    $variable = 8.589934592 * $pricing.natGb + 4.294967296 * ($pricing.egressGb + $pricing.peGb) +
-        ((2 * 14400 * 2 + 40) / 1000000) * $pricing.dnsMillionQueries
+    # Two sequential full runs each have a controller and one worker; guest byte/DNS quotas reset per VM.
+    $variable = 2 * (8.589934592 * $pricing.natGb + 4.294967296 * ($pricing.egressGb + $pricing.peGb)) +
+        ((4 * 14400 * 2 + 80) / 1000000) * $pricing.dnsMillionQueries
     if ($hourly -gt $Manifest.hourlyCeilingUsd -or $variable -gt 1.5 -or
         4 * $hourly + $Manifest.fixedReserveUsd -gt $Manifest.envelopeUsd) {
         throw 'Refreshed conservative pricing exceeds the original envelope; no deployment.'
@@ -105,6 +105,67 @@ function Assert-SpikeCleanupPermission {
     }
 }
 
+function Assert-SpikeKeyVaultAvailable {
+    param([Parameter(Mandatory)][hashtable]$Manifest)
+    $available = Invoke-SpikeCommand @('keyvault', 'check-name', '--subscription', $Manifest.subscription,
+        '--name', $Manifest.keyVaultName, '--query', 'nameAvailable', '-o', 'json', '--only-show-errors')
+    if ($available -isnot [bool] -or $available -ne $true) {
+        throw 'Exact manifest-bound vault name unavailable; no substitution, purge or recovery.'
+    }
+}
+
+function Get-SpikeFoundationDeploymentName {
+    param([Parameter(Mandatory)][hashtable]$Manifest)
+    if ($Manifest.runId -cnotmatch '^[a-f0-9]{32}$' -or $Manifest.runOrdinal -notin @(1, 2)) {
+        throw 'Foundation deployment identity invalid.'
+    }
+    return "dep-ghr-spike60-$($Manifest.runId)-$($Manifest.runOrdinal)"
+}
+
+function New-SpikeWorkerParameters {
+    param(
+        [Parameter(Mandatory)][hashtable]$Manifest,
+        [Parameter(Mandatory)][hashtable]$Approval
+    )
+    return @{
+        runId = $Manifest.runId; head = $Manifest.head; workerIndex = 1
+        canonicalUbuntuVersion = $Approval.canonicalUbuntuVersion; adminSshPublicKey = $Approval.adminSshPublicKey
+        flexScaleSetResourceId = 'not-set'
+        workerSubnetResourceId = 'not-set'
+        bootstrapCustomData = (New-SpikeCustomData worker $Manifest $Approval)
+    }
+}
+
+function Test-SpikeControllerRoleAssignments {
+    param(
+        [Parameter(Mandatory)][hashtable]$Manifest,
+        [Parameter(Mandatory)][string]$Principal,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$ResourceGroupAssignments,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$SecretAssignments
+    )
+    if ($Principal -cnotmatch '^[a-f0-9-]{36}$') { throw 'Controller principal metadata invalid.' }
+    $secretScope = Get-SpikeSecretScope $Manifest
+    $approved = @('9980e02c-c2be-4d73-94e8-173b1dc7cf3c', '4d97b98b-1d4f-4787-a291-c67834d212e7')
+    $controllerRoles = @($ResourceGroupAssignments + $SecretAssignments |
+        Where-Object principalId -IEQ $Principal | Sort-Object id -Unique)
+    foreach ($assignment in $controllerRoles) {
+        $id = ($assignment.roleDefinitionId -split '/')[-1]
+        if (-not ($id -in $approved -and $assignment.scope -ieq $Manifest.scope) -and
+            -not ($id -ceq '4633458b-17de-408a-b874-0445c86b69e6' -and $assignment.scope -ieq $secretScope)) {
+            throw 'Controller has an unapproved role or broader scope; refusing execution.'
+        }
+    }
+    foreach ($role in $approved) {
+        if (@($controllerRoles | Where-Object { $_.scope -ieq $Manifest.scope -and
+            $_.roleDefinitionId.EndsWith("/$role", [StringComparison]::OrdinalIgnoreCase) }).Count -ne 1) { return $false }
+    }
+    if (@($controllerRoles | Where-Object { $_.scope -ieq $secretScope -and
+        $_.roleDefinitionId.EndsWith('/4633458b-17de-408a-b874-0445c86b69e6', [StringComparison]::OrdinalIgnoreCase) }).Count -ne 1) {
+        return $false
+    }
+    return $true
+}
+
 function Invoke-SpikeCommand {
     param([string[]]$Arguments, [ValidateRange(1, 2700)][int]$Seconds = 30)
     Update-SpikeOidcLogin
@@ -125,9 +186,10 @@ function Assert-SpikePreflight {
     if (Invoke-SpikeCommand @('group', 'exists', '--subscription', $sub, '-n', $Manifest.resourceGroup, '-o', 'json')) {
         throw 'Spike RG already exists; recover its original manifest, never overwrite it.'
     }
+    $foundationDeploymentName = Get-SpikeFoundationDeploymentName $Manifest
     $prior = @(Invoke-SpikeCommand @('deployment', 'sub', 'list', '--subscription', $sub,
-        '--query', "[?name=='dep-ghr-spike60-$($Manifest.runId)'].name", '-o', 'json', '--only-show-errors') -Seconds 60)
-    if ($prior.Count -ne 0) { throw 'Original foundation already dispatched; retained history forbids replay after RG removal.' }
+        '--query', "[?name=='$foundationDeploymentName'].name", '-o', 'json', '--only-show-errors') -Seconds 60)
+    if ($prior.Count -ne 0) { throw 'This full-run ordinal already dispatched; retained history forbids replay after RG removal.' }
     $gh = (Get-Command gh -CommandType Application -ErrorAction Stop).Source
     $repository = Invoke-BoundedProcess -FileName $gh -Arguments @('api', 'repos/jonathan-vella/ghr-smoke') -TimeoutSeconds 20
     if ($repository.exitCode -ne 0) { throw 'Smoke repository metadata unavailable; no deployment.' }
@@ -150,9 +212,7 @@ function Assert-SpikePreflight {
     catch { throw 'Smoke workflow metadata invalid; provider output suppressed.' }
     Assert-SpikeSmokePins $Approval $branchMetadata $file
     Assert-SpikeCleanupPermission $Manifest
-    $available = Invoke-SpikeCommand @('keyvault', 'check-name', '--subscription', $sub,
-        '--name', 'kv-ghr-spike60-swc', '--query', 'nameAvailable', '-o', 'json', '--only-show-errors')
-    if ($available -isnot [bool] -or $available -ne $true) { throw 'Exact vault name unavailable; no substitution or purge.' }
+    Assert-SpikeKeyVaultAvailable $Manifest
     foreach ($provider in @('Microsoft.Compute', 'Microsoft.Network', 'Microsoft.KeyVault')) {
         $state = Invoke-SpikeCommand @('provider', 'show', '--subscription', $sub, '-n', $provider,
             '--query', 'registrationState', '-o', 'json', '--only-show-errors')
@@ -261,6 +321,12 @@ jq --arg result "$result" '{runId,head,startedUtc,attempts:(.attempts // 1),scal
         $evidence.result -cnotmatch '^[a-z0-9_\n]+$') {
         throw 'Controller evidence does not match the immutable owner envelope.'
     }
+    $evidence.keyVaultName = $Manifest.keyVaultName
+    $evidence.keyVaultSecretScope = $Manifest.keyVaultSecretScope
+    $evidence.keyVaultSoftDeleteRetentionInDays = $Manifest.keyVaultSoftDeleteRetentionInDays
+    $evidence.keyVaultPurgeProtectionEnabled = $Manifest.keyVaultPurgeProtectionEnabled
+    $evidence.appKeyFingerprint = $Manifest.appKeyFingerprint
+    $evidence.ownerRevocationConfirmed = $Manifest.ownerRevocationConfirmed
     [IO.File]::WriteAllText($Path, ($evidence | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
 }
 
@@ -278,32 +344,32 @@ function Invoke-SpikeExecution {
         [DateTimeOffset]::UtcNow.AddMinutes(75) -ge [DateTimeOffset]::Parse($Manifest.workDeadlineUtc)) {
         throw 'No resumed deployments or insufficient original work window.'
     }
-    $key = [Environment]::GetEnvironmentVariable('GH_APP_PRIVATE_KEY')
+    $key = [Environment]::GetEnvironmentVariable('GHR_SPIKE60_APP_PRIVATE_KEY')
     if (-not $key -or $key.Length -gt 16384 -or -not $key.Contains('PRIVATE KEY-----')) {
-        throw 'Approved protected-environment seeding credential unavailable; never retrieve it locally.'
+        throw 'Owner-supplied spike-only App key unavailable; never use the production key or retrieve it locally.'
     }
+    $Manifest.appKeyFingerprint = $Approval.appKeyFingerprint
+    Write-SpikeManifest -Manifest $Manifest -Path $Path
     Assert-SpikePreflight $Manifest $Approval
+    $foundationDeploymentName = Get-SpikeFoundationDeploymentName $Manifest
     $config = @{
         runId = $Manifest.runId; head = $Manifest.head; startedUtc = $Manifest.startedUtc
         workDeadlineUtc = $Manifest.workDeadlineUtc; hardDeadlineUtc = $Manifest.hardDeadlineUtc
-        foundationAttempts = 1; installationId = $Approval.installationId; secretVersion = ('0' * 32)
+        foundationAttempts = 1; installationId = $Approval.installationId; runOrdinal = $Manifest.runOrdinal
+        keyVaultName = $Manifest.keyVaultName
+        secretVersion = ('0' * 32)
         templateSha256 = ('0' * 64)
         policy = @{
             repository = 'jonathan-vella/ghr-smoke'; visibility = 'public'; allowedEvents = @('workflow_dispatch')
             allowedRefs = @('refs/heads/main'); allowedWorkflows = @($Approval.workflowRef)
             workflowSha = $Approval.smokeCommitSha
         }
-        workerParameters = @{
-            runId = $Manifest.runId; head = $Manifest.head; workerIndex = 1
-            canonicalUbuntuVersion = $Approval.canonicalUbuntuVersion; adminSshPublicKey = $Approval.adminSshPublicKey
-            flexScaleSetResourceId = 'not-set'
-            workerSubnetResourceId = 'not-set'
-            bootstrapCustomData = (New-SpikeCustomData worker $Manifest $Approval)
-        }
+        workerParameters = New-SpikeWorkerParameters $Manifest $Approval
     }
     $configBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($config | ConvertTo-Json -Depth 12 -Compress)))
     $parameters = @{
-        runId = @{ value = $Manifest.runId }; head = @{ value = $Manifest.head }
+        runId = @{ value = $Manifest.runId }; runOrdinal = @{ value = $Manifest.runOrdinal }
+        head = @{ value = $Manifest.head }
         canonicalUbuntuVersion = @{ value = $Approval.canonicalUbuntuVersion }
         adminSshPublicKey = @{ value = $Approval.adminSshPublicKey }
         controllerBootstrapCustomData = @{ value = (New-SpikeCustomData controller $Manifest $Approval $configBase64) }
@@ -324,53 +390,43 @@ function Invoke-SpikeExecution {
         } finally { $file.Dispose() }
         $parameters = $null
         $deployment = Invoke-SpikeCommand @('deployment', 'sub', 'create', '--subscription', $Manifest.subscription,
-            '--location', 'swedencentral', '--name', "dep-ghr-spike60-$($Manifest.runId)",
+            '--location', 'swedencentral', '--name', $foundationDeploymentName,
             '--template-file', (Join-Path $PSScriptRoot 'infra/subscription.bicep'),
             '--parameters', "@$parameterPath", '-o', 'json', '--only-show-errors') -Seconds 2700
     } finally {
         $parameters = $null
         if (Test-Path -LiteralPath $parameterPath) { Remove-Item -LiteralPath $parameterPath -Force }
-        [Environment]::SetEnvironmentVariable('GH_APP_PRIVATE_KEY', $null)
+        [Environment]::SetEnvironmentVariable('GHR_SPIKE60_APP_PRIVATE_KEY', $null)
     }
     $outputs = $deployment.properties.outputs
     $principal = $outputs.controllerPrincipalId.value
     $versionUri = $outputs.secretVersionUri.value
+    $outputVaultName = $outputs.keyVaultName.value
+    $outputSecretScope = $outputs.keyVaultSecretScope.value
     $flexId = $outputs.flexScaleSetResourceId.value
     $subnetId = $outputs.workerSubnetResourceId.value
-    if ($principal -cnotmatch '^[a-f0-9-]{36}$' -or
-        $versionUri -cnotmatch '^https://kv-ghr-spike60-swc\.vault\.azure\.net/secrets/github-app-private-key/[a-f0-9]{32}$' -or
+    $expectedSecretScope = $Manifest.keyVaultSecretScope
+    $versionUriPattern = '^https://' + [regex]::Escape($Manifest.keyVaultName) +
+        '\.vault\.azure\.net/secrets/github-app-private-key/[a-f0-9]{32}$'
+    if ($principal -cnotmatch '^[a-f0-9-]{36}$' -or $outputVaultName -cne $Manifest.keyVaultName -or
+        $outputSecretScope -ine $expectedSecretScope -or
+        $outputs.keyVaultSoftDeleteRetentionInDays.value -ne $Manifest.keyVaultSoftDeleteRetentionInDays -or
+        $outputs.keyVaultPurgeProtectionEnabled.value -ne $Manifest.keyVaultPurgeProtectionEnabled -or
+        $versionUri -cnotmatch $versionUriPattern -or
         $flexId -inotmatch "^$([regex]::Escape($Manifest.scope))/providers/Microsoft.Compute/virtualMachineScaleSets/[A-Za-z0-9_-]+$" -or
         $subnetId -inotmatch "^$([regex]::Escape($Manifest.scope))/providers/Microsoft.Network/virtualNetworks/[A-Za-z0-9_-]+/subnets/[A-Za-z0-9_-]+$") {
         throw 'Foundation credential metadata invalid; no controller start.'
     }
     $version = ($versionUri -split '/')[-1]
     $gateStop = [DateTimeOffset]::UtcNow.AddMinutes(20)
-    $secretScope = "$($Manifest.scope)/providers/Microsoft.KeyVault/vaults/kv-ghr-spike60-swc/secrets/github-app-private-key"
+    $secretScope = Get-SpikeSecretScope $Manifest
     Write-Information -InformationAction Continue ("Owner-only exact role prerequisite: controller principal {0}; VM/Network Contributor at {1}; Key Vault Secrets User at {2}." -f $principal, $Manifest.scope, $secretScope)
     do {
         $rgRoles = @(Invoke-SpikeCommand @('role', 'assignment', 'list', '--subscription', $Manifest.subscription,
             '--scope', $Manifest.scope, '--all', '--include-inherited', '--fill-principal-name', 'false', '-o', 'json', '--only-show-errors'))
         $secretRoles = @(Invoke-SpikeCommand @('role', 'assignment', 'list', '--subscription', $Manifest.subscription,
             '--scope', $secretScope, '--all', '--include-inherited', '--fill-principal-name', 'false', '-o', 'json', '--only-show-errors'))
-        $approved = @('9980e02c-c2be-4d73-94e8-173b1dc7cf3c', '4d97b98b-1d4f-4787-a291-c67834d212e7')
-        $controllerRoles = @($rgRoles + $secretRoles | Where-Object principalId -IEQ $principal | Sort-Object id -Unique)
-        foreach ($assignment in $controllerRoles) {
-            $id = ($assignment.roleDefinitionId -split '/')[-1]
-            if (-not ($id -in $approved -and $assignment.scope -ieq $Manifest.scope) -and
-                -not ($id -ceq '4633458b-17de-408a-b874-0445c86b69e6' -and $assignment.scope -ieq $secretScope)) {
-                throw 'Controller has an unapproved role or broader scope; refusing execution.'
-            }
-        }
-        $valid = $true
-        foreach ($role in $approved) {
-            if (@($controllerRoles | Where-Object { $_.scope -ieq $Manifest.scope -and
-                $_.roleDefinitionId.EndsWith("/$role", [StringComparison]::OrdinalIgnoreCase) }).Count -ne 1) { $valid = $false }
-        }
-        if (@($controllerRoles | Where-Object { $_.scope -ieq $secretScope -and
-            $_.roleDefinitionId.EndsWith('/4633458b-17de-408a-b874-0445c86b69e6', [StringComparison]::OrdinalIgnoreCase) }).Count -ne 1) {
-            $valid = $false
-        }
-        if ($valid) { break }
+        if (Test-SpikeControllerRoleAssignments $Manifest $principal $rgRoles $secretRoles) { break }
         if ([DateTimeOffset]::UtcNow.AddSeconds(45) -ge $gateStop) { throw 'Owner-executed exact role prerequisites absent; no grant or widening attempted.' }
         Start-Sleep -Seconds 15
     } while ($true)

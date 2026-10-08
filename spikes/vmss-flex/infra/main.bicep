@@ -5,6 +5,13 @@ targetScope = 'resourceGroup'
 @maxLength(32)
 param runId string
 
+@description('Ordinal within the immutable original spike envelope; only complete runs 1 and 2 are allowed.')
+@allowed([
+  1
+  2
+])
+param runOrdinal int
+
 @description('Reviewed 40-character source commit SHA for ownership tags.')
 @minLength(40)
 @maxLength(40)
@@ -44,7 +51,7 @@ var privateEndpointNsgName = 'nsg-ghrunners-pe'
 var natGatewayName = 'nat-ghrunners-spike60-swc'
 var natPublicIpName = 'pip-ghrunners-spike60-swc'
 var privateDnsZoneName = 'privatelink.vaultcore.azure.net'
-var keyVaultName = 'kv-ghr-spike60-swc'
+var keyVaultName = 'kv-ghr60-${substring(runId, 0, 14)}${string(runOrdinal)}'
 var keyVaultPrivateEndpointName = 'pe-kv-ghr-spike60-swc'
 var flexScaleSetName = 'vmss-ghr-spike60-swc'
 var controllerVmName = 'vm-ghr-spike60-controller'
@@ -564,10 +571,14 @@ output workerSubnetResourceId string = resourceId(
   workerSubnetName
 )
 output keyVaultId string = keyVault.outputs.resourceId
+output keyVaultName string = keyVaultName
+output keyVaultSecretScope string = '${keyVault.outputs.resourceId}/secrets/github-app-private-key'
 output keyVaultPrivateEndpointId string = keyVault.outputs.privateEndpoints[0].resourceId
 output keyVaultSecretId string = keyVault.outputs.secrets[0].resourceId
 output keyVaultSecretVersionUri string = keyVault.outputs.secrets[0].uriWithVersion
 output secretVersionUri string = keyVault.outputs.secrets[0].uriWithVersion
+output keyVaultSoftDeleteRetentionInDays int = 7
+output keyVaultPurgeProtectionEnabled bool = false
 output natGatewayId string = natGateway.outputs.resourceId
 output natPublicIpId string = natPublicIp.id
 output natPublicIpAddress string = natPublicIp.properties.ipAddress

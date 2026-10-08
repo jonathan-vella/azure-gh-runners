@@ -17,7 +17,9 @@ func validControllerConfig(now time.Time) controllerConfig {
 	return controllerConfig{
 		RunID: strings.Repeat("a", 32), Head: strings.Repeat("b", 40),
 		StartedUTC: now, WorkDeadlineUTC: now.Add(3 * time.Hour), HardDeadlineUTC: now.Add(4 * time.Hour),
-		FoundationAttempts: 1, InstallationID: 1, SecretVersion: strings.Repeat("c", 32),
+		FoundationAttempts: 1, InstallationID: 1, RunOrdinal: 1,
+		KeyVaultName: "kv-ghr60-" + strings.Repeat("a", 14) + "1",
+		SecretVersion: strings.Repeat("c", 32),
 		TemplateSHA256: strings.Repeat("d", 64),
 	}
 }
@@ -33,6 +35,16 @@ func TestControllerOriginalClock(t *testing.T) {
 		t.Fatal("worker invocation allowed after two foundation calls")
 	}
 	config.FoundationAttempts = 1
+	config.KeyVaultName = "kv-ghr60-" + strings.Repeat("e", 14) + "1"
+	if config.validate(now) == nil {
+		t.Fatal("foreign run vault accepted")
+	}
+	config.KeyVaultName = "kv-ghr60-" + strings.Repeat("a", 14) + "1"
+	config.RunOrdinal = 2
+	if config.validate(now) == nil {
+		t.Fatal("vault ordinal mismatch accepted")
+	}
+	config.RunOrdinal = 1
 	if config.validate(now.Add(2*time.Hour+11*time.Minute)) == nil {
 		t.Fatal("worker provisioning consumed cleanup reserve")
 	}

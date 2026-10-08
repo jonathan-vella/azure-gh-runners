@@ -90,12 +90,14 @@ Fixed subscription `b47d2942-f5ad-4d3c-b28e-c23e4f83d97e` (`shared`), tenant
 One `Standard_B2s`; ceiling two `Standard_D2ls_v5`; **four hours total**, final hour reserved for cleanup;
 **$10 cap**, $8 prepared envelope, $2 contingency.
 
-The literal cap is **TWO aggregate top-level deployment/create invocations**, including failed/ambiguous calls,
-not two trials. Under it, this executor supports **one foundation + one worker**, advertises capacity one and
-never dispatches slot two. Root and controller durably reserve the same worker invocation before dispatch;
-reservations are never refunded. Read/delete/cancel/run-command actions do not dispatch additional deployments.
-Workflow re-runs are denied. The exact subscription deployment's nonsecret history is retained and checked
-before creation to reject replay of an original envelope after RG deletion; it is not an extra cloud resource.
+The owner-authorized cap is **TWO complete sequential full runs** within the SAME original four-hour/$10 envelope.
+Each run has one foundation and one worker deployment, and no failed/ambiguous step may be retried or re-invoked.
+Ordinal 2 is allowed only after ordinal 1's exact RG and temporary identity/App/SP/FIC cleanup is verified.
+The original envelope run ID is immutable; `runOrdinal` (1 or 2) distinguishes per-run resources, including the
+Key Vault. This follow-up wires the vault binding only; the durable cross-run envelope/identity ledger and
+temporary identity workflow integration remain a separate gate in #81. The disabled workflow cannot authorize
+either run. The per-run executor still reserves one foundation and one worker call; there are no extra create,
+deployment, role-write, or retry paths.
 Worker names use `vm-ghr-spike60-<first-25-run-id-characters>-1` to fit Flex's 44-character limit;
 NIC is `nic-<VM-name>`, disk is `disk-<VM-name>-os`. All ownership tags retain the full run ID and exact head.
 
@@ -105,7 +107,7 @@ These are not refreshed account-specific quotes. Before execution, a reviewed US
 | Reserved category | Ceiling |
 | --- | ---: |
 | Compute, three P4 disk hourly charges, NAT, PIP, two PEs, DNS and hourly margin | $0.50/hour x 4 = $2 |
-| NAT/PE processing, outbound bytes and DNS query allowance | $1.50 |
+| NAT/PE processing, outbound bytes and DNS query allowance across both runs | $1.50 |
 | Logs contingency (no paid guest-log sink is deployed) | $1.50 |
 | Image/staging contingency (no Azure image build/staging is deployed) | $2 |
 | Disk/miscellaneous/DNS/KV contingency | $1 |
@@ -113,8 +115,9 @@ These are not refreshed account-specific quotes. Before execution, a reviewed US
 
 P4 32-GiB Premium_LRS disks avoid Standard SSD transaction charges. Root-owned IPv4 kernel quotas cap each
 guest to **2 GiB ingress + 2 GiB egress**, including bootstrap; IPv6 is denied, UDP DNS is limited to
-2 queries/second plus burst 20, TCP DNS is denied. With this invocation cap there are at most **two guests**.
-The priced maximum is 8.589934592 GB NAT traffic, 4.294967296 GB outbound and 4.294967296 GB PE traffic.
+2 queries/second plus burst 20, TCP DNS is denied. Across both complete runs there are at most **four guests**.
+The priced maximum is 17.179869184 GB NAT traffic, 8.589934592 GB outbound and
+8.589934592 GB PE traffic.
 No reboot/reset/retry to regain byte allowance is authorized. Automatic guest updates are disabled.
 The native kernel/quota modules and package/download size fit remain runtime assertions; failure stops work.
 Guest readiness also verifies the shared manifest's exact baseline jq/curl/Python package versions;
@@ -135,20 +138,33 @@ of that decision, not a substitute for it. Keep the PR draft/do-not-merge and #6
 3. Existing OIDC rights are production-RG scoped, not evidence of subscription deployment or spike RG
    creation/deletion rights. Preflight and independent supervisor require verifiable existing authority.
    Missing or conditional/uncertain permissions stop before creation. **Never broaden/recreate an identity.**
-4. **The extra secret-reader grant is NOT approved.** Proposed vault `kv-ghr-spike60-swc`,
-   secret `github-app-private-key`; controller system-MI principal is known only after approved foundation.
-   Minimal reader is Key Vault Secrets User **`4633458b-17de-408a-b874-0445c86b69e6`** at ONLY
-   `/subscriptions/b47d2942-f5ad-4d3c-b28e-c23e4f83d97e/resourceGroups/rg-ghrunners-spike-vmss-swc/providers/Microsoft.KeyVault/vaults/kv-ghr-spike60-swc/secrets/github-app-private-key`.
-   No version suffix in the RBAC scope; retrieval uses an explicit approved version.
-   Seeding is only existing `platform-prod` `GH_APP_PRIVATE_KEY` -> owner-only temporary secure parameter ->
-   nested ARM secret creation -> private KV retrieval on controller. Never retrieve it on a local checkout.
-   Owner approval must cover that exact path and **seven-day encrypted soft-delete retention**.
-   Purge protection is disabled; a tombstone can block name reuse. No purge/grant code is delivered.
+4. Each complete run in the immutable envelope has exactly one deterministic Key Vault name:
+   `kv-ghr60-<first-14-lowercase-hex-characters-of-runId><runOrdinal>` (24 characters total; ordinal 1 or 2).
+   Both full runs retain the original envelope `runId`; the ordinal distinguishes their vault names. The name,
+   ARM foundation, controller configuration, availability check, and secret URL must all match the immutable
+   manifest. If Azure
+   reports the name unavailable—including a soft-deleted tombstone—stop; never choose a fallback, recover, purge,
+   or reuse a deleted vault. Owner-approved Key Vault Secrets User **`4633458b-17de-408a-b874-0445c86b69e6`**
+   is limited to the controller system-MI at ONLY
+   `/subscriptions/b47d2942-f5ad-4d3c-b28e-c23e4f83d97e/resourceGroups/rg-ghrunners-spike-vmss-swc/providers/Microsoft.KeyVault/vaults/<manifest-vault-name>/secrets/github-app-private-key`.
+   The RBAC scope has no version suffix; controller retrieval uses the exact ARM-created secret version.
+   The credential is a **new spike-only private key for the same GitHub App**. The owner generates it and pastes
+   it into the `spike-vmss` UI as `GHR_SPIKE60_APP_PRIVATE_KEY`; never use, retrieve, copy, or transfer the
+   production `platform-prod` `GH_APP_PRIVATE_KEY`. The disabled workflow currently maps no App-key secret;
+   #81 owns the later exact spike-vmss environment integration.
+   The nonsecret approval/evidence records the owner-supplied 64-character SHA-256 fingerprint and
+   `ownerRevocationConfirmed` (initially false). Owner-only key revocation happens after resource/identity cleanup
+   and never delays it; do not claim credential cleanup until the owner confirms revocation.
+   Soft-delete retention is explicitly **seven days** and purge protection is **off**. Never purge, recover, or
+   reuse a deleted vault; its name expires naturally after seven days. Evidence records the vault name, exact
+   versionless secret scope, retention, purge-protection setting, fingerprint, and revocation status without
+   secret material.
 5. Controller VM Contributor **`9980e02c-c2be-4d73-94e8-173b1dc7cf3c`** and Network Contributor
    **`4d97b98b-1d4f-4787-a291-c67834d212e7`** are restricted to exact spike RG scope.
    Broader Contributor `b24988ac-6180-42a0-ab88-20f7382dd24c` is NOT authorized on the controller.
    This executor implements no role writes; owner completes exact bindings within its bounded gate.
-   It rejects additional/broader controller assignments rather than silently accepting them.
+   It rejects additional/broader controller assignments and stops if the existing deployment identity lacks
+   authority; it never searches for or broadens another identity.
 6. Supply a verified Marketplace image version, existing public key, immutable reviewed source archive SHA256,
    refreshed retail meters and NIC/disk/NAT/PIP/PE/DNS headroom evidence. The executor also reads actual
    registered providers, regional SKU restrictions and B-series/Dlsv5/six-vCPU usage; it requests no quota.
@@ -176,7 +192,7 @@ One queued approved smoke job creates one JIT/CSE worker; correlated completion 
 VM/NIC/disk/runner/set cleanup and nonsecret evidence capture. Controller and whole-RG cleanup remain bounded
 inside the original reserve; already-absent RG is idempotent Azure success, **not** GitHub/acceptance proof.
 
-One worker can test **allow OR reject**, not both separate one-job workers under the existing two-invocation cap.
+Each full run has one worker and can test **allow OR reject**, not both behaviors on the same worker.
 Local rejection fixtures are not live hook coverage. Full #60 acceptance still requires actual private/NAT
 job assertions, no-MI/no-sudo/no-Docker/secret-env checks, Azure boot/CSE/tool verification, exact deletion,
 Flex protection and **guest-observed** termination notifications. A configured API profile is not notification proof.

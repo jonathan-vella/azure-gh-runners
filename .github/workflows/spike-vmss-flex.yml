@@ -117,7 +117,6 @@ jobs:
         env:
           ENVELOPE: ${{ needs.prepare.outputs.manifest }}
           APPROVAL_JSON: ${{ inputs.approval_json }}
-          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
           GHR_SPIKE60_EXECUTION_ENABLED: ${{ vars.GHR_SPIKE60_EXECUTION_ENABLED }}
           GHR_SPIKE_ENVIRONMENT: platform-prod
