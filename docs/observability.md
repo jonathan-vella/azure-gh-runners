@@ -63,11 +63,11 @@ existing in Azure Monitor does not by itself mean they can be exported. Do not c
 | Standard NAT Gateway | None | `NatGatewayFlowlogsV1` is for StandardV2 NAT Gateways; NAT platform metrics are not exportable through diagnostic settings. Empty settings are not deployed. |
 | Private DNS zones | None | Published zone metrics are not exportable through diagnostic settings. No published resource-log category reference was available to verify an exportable category, so no setting is deployed without one. |
 
-The Container Apps environment adds its categories to the shared contract and wires this module behind the same live
-category gate as the network resources. The categories documented for its Azure Monitor destination are
-`ContainerAppConsoleLogs`, `ContainerAppSystemLogs`, and `AllMetrics`; the static contract is not evidence that the
-deployed environment supports them. Issues #13 and #14 must add their own categories only after verifying the actual
-resource types.
+The Container Apps environment adds its categories to the shared contract. Its diagnostic setting is deployed
+unconditionally so runner execution logs are queryable from the first deployment; the network resources stay behind
+the live category gate. The categories documented for its Azure Monitor destination are
+`ContainerAppConsoleLogs`, `ContainerAppSystemLogs`, and `AllMetrics`. Issues #13 and #14 must add their own
+categories only after verifying the actual resource types.
 
 This is the intended no-shared-key path. The live preflight checks the categories against the actual environment
 resource before enabling the settings; it does not prove capacity or successful environment provisioning.
@@ -75,23 +75,24 @@ resource before enabling the settings; it does not prove capacity or successful 
 ## Live category gate
 
 The resources do not exist until the infrastructure is deployed, so the live Azure category check cannot run before
-the foundation deployment. `infra/main.bicep` therefore defaults `enableDiagnostics` to `false`; its first deployment
+the foundation deployment. `infra/main.bicep` therefore defaults `enableDiagnostics` to `false` for the network
+resources; its first deployment
 creates the workspace, network, and ACA environment and publishes their resource IDs. Before enabling diagnostics in
 a subsequent deployment:
 
 1. Export the deployment outputs to a local JSON file (for example, `az deployment group show --resource-group
    rg-ghrunners-prod-swc --name <deployment-name> --query properties.outputs --output json > deployment-outputs.json`).
 2. Run `node tools/validate-diagnostics.mjs --live deployment-outputs.json`. The command queries Azure's live
-   diagnostic categories for both NSGs, the VNet, the NAT public IP, and the ACA environment using the explicitly
+   diagnostic categories for the ACA NSG, the VNet, the NAT public IP, and the ACA environment using the explicitly
    configured `shared` subscription ID. It accepts only the exact expected resource types, names, subscription, and
    resource group, and rejects duplicate IDs or any configured log/metric category absent from the corresponding
    resource. Azure CLI execution has a 30-second timeout, a 1 MiB output bound, and sanitized errors.
 3. Only after the check succeeds, run the protected deployment with `enableDiagnostics=true`.
 
 The outputs contain non-secret resource IDs. Do not commit the local outputs file. The live command requires an
-authenticated Azure CLI context and must be run against the approved shared subscription and resource group. This
-issue does not perform either deployment or add a production deployment workflow; the `enableDiagnostics` parameter
-is the explicit handoff between foundation creation and live-validated diagnostics.
+authenticated Azure CLI context and must be run against the approved shared subscription and resource group. The
+`platform-prod` deploy workflow does not set `enableDiagnostics`; the parameter remains the explicit handoff between
+foundation creation and live-validated network diagnostics.
 
 References:
 

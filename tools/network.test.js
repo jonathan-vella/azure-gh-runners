@@ -28,7 +28,7 @@ test('approved network configuration has required ranges, DNS zones, and tags', 
 
 test('network configuration rejects overlapping subnets', () => {
   const invalidConfig = copyConfig();
-  invalidConfig.subnets.acrAgents = invalidConfig.subnets.aca;
+  invalidConfig.subnets.privateEndpoints = invalidConfig.subnets.aca;
 
   assert.throws(() => validateNetworkConfig(invalidConfig), /overlaps/);
 });
@@ -47,17 +47,10 @@ test('VNet address space must use RFC1918 private IPv4 addresses', () => {
   assert.throws(() => validateNetworkConfig(invalidConfig), /addressSpace must be contained within one RFC1918/);
 });
 
-test('network configuration enforces ACA and ACR agent subnet sizing', () => {
+test('network configuration enforces ACA subnet sizing', () => {
   const undersizedAca = copyConfig();
   undersizedAca.subnets.aca = '10.60.0.0/28';
   assert.throws(() => validateNetworkConfig(undersizedAca), new RegExp('aca must be /27 or larger'));
-
-  const undersizedAgents = copyConfig();
-  undersizedAgents.subnets.acrAgents = '10.60.0.32/28';
-  assert.throws(
-    () => validateNetworkConfig(undersizedAgents),
-    new RegExp('acrAgents must be /27 or larger'),
-  );
 });
 
 test('all subnets reject ranges smaller than Azure minimum /29', () => {
@@ -84,7 +77,6 @@ test('ACA subnet cannot overlap Azure-reserved address ranges', () => {
   const invalidConfig = copyConfig();
   invalidConfig.addressSpace = '172.30.0.0/24';
   invalidConfig.subnets.aca = '172.30.0.0/27';
-  invalidConfig.subnets.acrAgents = '172.30.0.32/27';
   invalidConfig.subnets.privateEndpoints = '172.30.0.64/27';
   invalidConfig.subnets.consumerPrivateEndpoints = '172.30.0.128/26';
 
@@ -120,8 +112,8 @@ test('compute subnet rules allow only explicit HTTPS and required service depend
   const privateEndpointRules = rulesNamed('Allow-Private-Endpoints-HTTPS');
   const internetRules = rulesNamed('Allow-Internet-HTTPS');
 
-  assert.equal(privateEndpointRules.length, 2);
-  assert.equal(internetRules.length, 2);
+  assert.equal(privateEndpointRules.length, 1);
+  assert.equal(internetRules.length, 1);
   for (const rule of [...privateEndpointRules, ...internetRules]) {
     assert.match(rule, /destinationPortRange: '443'/);
     assert.match(rule, /direction: 'Outbound'/);
@@ -143,7 +135,7 @@ test('compute subnet rules explicitly deny RFC1918 lateral ranges', () => {
     ['Deny-RFC1918-192', '192.168.0.0/16'],
   ]) {
     const rules = rulesNamed(name);
-    assert.equal(rules.length, 2);
+    assert.equal(rules.length, 1);
     for (const rule of rules) {
       assert.match(rule, new RegExp(`destinationAddressPrefix: '${range.replaceAll('.', '\\.')}'`));
       assert.match(rule, /access: 'Deny'/);
@@ -152,20 +144,26 @@ test('compute subnet rules explicitly deny RFC1918 lateral ranges', () => {
   }
 });
 
-test('VNet subnets use the required layout and share NAT only across compute subnets', () => {
+test('VNet subnets use the required layout and NAT only the ACA subnet', () => {
   for (const [name, address] of [
     ['snet-aca', 'subnets.aca'],
-    ['snet-acr-agents', 'subnets.acrAgents'],
     ['snet-pe', 'subnets.privateEndpoints'],
     ['snet-consumer-pe', 'subnets.consumerPrivateEndpoints'],
   ]) {
     assert.match(networkBicep, new RegExp(`name: '${name}'\\s+addressPrefix: networkConfig\\.${address}`));
   }
+  assert.doesNotMatch(networkBicep, /snet-acr-agents|acrAgents/);
+  for (const name of ['snet-pe', 'snet-consumer-pe']) {
+    assert.match(
+      networkBicep,
+      new RegExp(`name: '${name}'\\s+addressPrefix: [^\\n]+\\s+privateEndpointNetworkPolicies: 'Disabled'`),
+    );
+  }
 
   assert.match(networkBicep, /delegation: 'Microsoft\.App\/environments'/);
   assert.equal(
     [...networkBicep.matchAll(/natGatewayResourceId: natGateway\.outputs\.resourceId/g)].length,
-    2,
+    1,
   );
   assert.match(networkBicep, /publicIPAllocationMethod: 'Static'/);
   assert.match(networkBicep, /skuName: 'Standard'/);
@@ -177,7 +175,7 @@ test('ACA permits only its own subnet and platform probes inbound before the den
   const probeRule = rulesNamed('Allow-ACA-Load-Balancer-Probes');
 
   assert.equal(inboundRule.length, 1);
-  assert.equal(inboundDeny.length, 2);
+  assert.equal(inboundDeny.length, 1);
   assert.equal(probeRule.length, 1);
   assert.match(inboundRule[0], /sourceAddressPrefix: networkConfig\.subnets\.aca/);
   assert.match(inboundRule[0], /destinationAddressPrefix: networkConfig\.subnets\.aca/);
@@ -210,7 +208,6 @@ test('network Bicep uses exact AVM module versions and exposes downstream resour
     moduleReferences.map(([reference]) => reference).sort(),
     [
       'br/public:avm/res/network/nat-gateway:2.1.1',
-      'br/public:avm/res/network/network-security-group:0.5.3',
       'br/public:avm/res/network/network-security-group:0.5.3',
       'br/public:avm/res/network/private-dns-zone:0.8.1',
       'br/public:avm/res/network/public-ip-address:0.13.0',

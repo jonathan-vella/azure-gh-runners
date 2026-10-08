@@ -5,7 +5,6 @@
   "addressSpace": "10.60.0.0/22",
   "subnets": {
     "aca": "10.60.0.0/27",
-    "acrAgents": "10.60.0.32/27",
     "privateEndpoints": "10.60.0.64/27",
     "consumerPrivateEndpoints": "10.60.0.128/26"
   },

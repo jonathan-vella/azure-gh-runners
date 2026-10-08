@@ -6,10 +6,10 @@
     "validate:consumers": "node --test tests/consumer-schema.test.cjs tests/consumer-registry.test.cjs tests/consumer-generator.test.cjs && node tools/validate-consumers.js",
     "generate:consumers": "node tools/generate-consumers.js",
     "validate:generator": "node tools/generate-consumers.js --check",
-    "validate:bicep": "az bicep build --file infra/main.bicep --stdout && az bicep build-params --file infra/main.bicepparam --stdout && az bicep lint --file infra/main.bicep && az bicep lint --file infra/modules/network.bicep",
+    "validate:bicep": "az bicep build --file infra/main.bicep --stdout && az bicep build-params --file infra/main.bicepparam --stdout && az bicep lint --file infra/main.bicep && az bicep lint --file infra/modules/network.bicep && az bicep lint --file infra/modules/runner-job.bicep",
     "validate:network": "node --test tools/network.test.js && node tools/validate-network.js",
     "validate:observability": "node tools/validate-diagnostics.mjs && az bicep build --file infra/modules/observability.bicep --stdout && az bicep lint --file infra/modules/observability.bicep && az bicep build --file infra/tests/observability.bicep --stdout && az bicep lint --file infra/modules/diagnostic-settings.bicep && node --test tools/diagnostics-contract.test.mjs",
-    "validate:image": "node --test tools/image.test.js",
+    "validate:image": "node --test tools/image.test.js tests/jit-init.test.mjs tests/runner-entrypoint.test.mjs",
     "validate:hook": "node tools/test-prejob.js",
     "validate:markdown": "markdownlint-cli2 \"**/*.md\""
   },

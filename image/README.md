@@ -1,10 +1,16 @@
 # Generic runner image
 
-Issues [#19](https://github.com/jonathan-vella/azure-gh-runners/issues/19) and
-[#20](https://github.com/jonathan-vella/azure-gh-runners/issues/20) supply the **linux/amd64 toolset and pre-job hook**.
-The image is not yet a deployable platform runner. JIT initialization and the main
-entrypoint belong to issues #21 and #22; identity isolation, labels, and the build path follow the default ADRs
-(0001, 0004, 0005), pending live smoke. Nothing here publishes an image, onboards a consumer, or deploys Azure resources.
+[`Dockerfile`](Dockerfile) has two linux/amd64 targets built from the same pinned runner base:
+
+- `jit-init` runs as root with only [`jit-init.mjs`](jit-init.mjs). It signs a GitHub App JWT, mints an installation
+  token, calls `generate-jitconfig` with the consumer labels and runner group 1, and writes the encoded config to
+  `/jit/config` (EmptyDir) owned by `runner` with mode `0400`. Any failure removes the file, deregisters the runner,
+  and exits nonzero.
+- `runner` is the toolset image below. Its explicit entrypoint, [`runner-entrypoint.sh`](runner-entrypoint.sh), runs as
+  `runner`, reads and deletes `/jit/config`, unsets App settings, and `exec`s `run.sh --jitconfig`.
+
+The [deploy workflow](../.github/workflows/deploy.yml) builds both targets, pushes them to GHCR, and imports them into
+the private ACR by digest. See [the smoke test](../docs/smoke.md) for end-to-end verification.
 
 ## Pins and provenance
 
@@ -41,8 +47,8 @@ removed because the base grants passwordless sudo. The inherited `/usr/bin/docke
 installed, started, or used. The upstream Docker client and other upstream utilities are preserved. Do not mount a
 Docker socket or run this image privileged. Container builds/Docker-in-Docker are not supported.
 The runner directory remains writable by `runner`; installed tools and the manifest are root-owned and not
-runner-writable. Upstream `WORKDIR`, `CMD`, runner files, and embedded action Node runtimes remain unchanged.
-The upstream image has no entrypoint and defaults to `/bin/bash`: this change deliberately does not add one.
+runner-writable. Upstream `WORKDIR`, runner files, and embedded action Node runtimes remain unchanged.
+The `runner` target sets an explicit `ENTRYPOINT` and empty `CMD` rather than relying on the upstream `/bin/bash`.
 
 ## Pre-job policy contract
 
@@ -88,7 +94,8 @@ GitHub hook invocation. These still need authorized end-to-end smoke evidence.
 From the repository root, with Linux Docker available:
 
 ```powershell
-docker build --platform linux/amd64 --progress plain -f image\Dockerfile -t ghrunners-issue19:local .
+docker build --platform linux/amd64 --progress plain --target runner -f image\Dockerfile -t ghrunners-issue19:local .
+docker build --platform linux/amd64 --target jit-init -f image\Dockerfile -t ghrunners-jit-init:local .
 docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --entrypoint bash ghrunners-issue19:local /opt/runner-image/verify-tools.sh
 node tools\test-prejob.js ghrunners-issue19:local
 Get-Content -Raw image\Dockerfile | docker run --rm -i hadolint/hadolint@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e

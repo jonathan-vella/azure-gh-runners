@@ -3,7 +3,6 @@ const path = require('node:path');
 
 const requiredSubnets = [
   'aca',
-  'acrAgents',
   'privateEndpoints',
   'consumerPrivateEndpoints',
 ];
@@ -177,11 +176,6 @@ function validateNetworkConfig(config) {
   const aca = subnetRanges.find(({ name }) => name === 'aca').range;
   if (aca.prefix > 27) {
     throw new Error('subnets.aca must be /27 or larger for an ACA workload-profiles environment.');
-  }
-
-  const acrAgents = subnetRanges.find(({ name }) => name === 'acrAgents').range;
-  if (acrAgents.prefix > 27) {
-    throw new Error('subnets.acrAgents must be /27 or larger for the planned agent pool.');
   }
 
   const consumerPrivateEndpoints = subnetRanges.find(

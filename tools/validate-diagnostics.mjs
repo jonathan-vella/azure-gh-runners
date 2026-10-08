@@ -19,12 +19,6 @@ const resourceProfiles = [
     namePrefix: 'nsg-ghrunners-aca-prod-swc-',
   },
   {
-    outputName: 'acrAgentsNetworkSecurityGroupResourceId',
-    profileName: 'networkSecurityGroup',
-    resourceType: 'Microsoft.Network/networkSecurityGroups',
-    namePrefix: 'nsg-ghrunners-acr-agents-prod-swc-',
-  },
-  {
     outputName: 'virtualNetworkResourceId',
     profileName: 'virtualNetwork',
     resourceType: 'Microsoft.Network/virtualNetworks',
