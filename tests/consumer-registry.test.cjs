@@ -34,20 +34,17 @@ test('accepts a valid public consumer with additional custom labels', () => {
   assert.deepEqual(errors, []);
 });
 
-test('rejects active VMSS consumers until backend runtime support is implemented', () => {
-  const vmss = JSON.parse(
-    fs.readFileSync(path.join(__dirname, '..', 'config', 'consumers', 'example-vmss.json.sample'), 'utf8'),
-  );
+test('rejects the VMSS backend in v1', () => {
   let metadataCalls = 0;
   const errors = validateRegistry(
-    [{ filename: 'vmss.json', consumer: { ...vmss, name: 'vmss' } }],
+    [entry({ name: 'vmss', backend: 'vmss' }, 'vmss.json')],
     () => {
       metadataCalls += 1;
       return publicMetadata;
     },
   );
 
-  assert.match(errors.join('\n'), /backend "vmss" is schema-preparation only.*cannot be used by the active registry/);
+  assert.match(errors.join('\n'), /backend "vmss" is not supported in v1/);
   assert.equal(metadataCalls, 0);
 });
 

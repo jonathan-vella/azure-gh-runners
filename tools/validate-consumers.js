@@ -163,17 +163,15 @@ function validateRegistry(entries, metadataProvider = getGitHubRepoMetadata) {
       }
     }
 
+    if (consumer && consumer.backend === 'vmss') {
+      errors.push(`${filename}: backend "vmss" is not supported in v1; only "aca" is accepted (ADR-0006).`);
+      continue;
+    }
+
     if (!validateSchema(consumer)) {
       for (const issue of validateSchema.errors || []) {
         errors.push(`${filename}: schema ${issue.instancePath || '/'} ${issue.message}.`);
       }
-      continue;
-    }
-
-    if (consumer.backend === 'vmss') {
-      errors.push(
-        `${filename}: backend "vmss" is schema-preparation only and cannot be used by the active registry until backend runtime support is implemented.`,
-      );
       continue;
     }
 

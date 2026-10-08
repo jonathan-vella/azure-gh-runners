@@ -215,18 +215,15 @@ test('refuses invalid JSON, schema violations, and policy violations without rep
   });
 });
 
-test('refuses active VMSS consumers without writing deployment parameters', () => {
+test('refuses VMSS consumers without writing deployment parameters', () => {
   withDirectory((directory) => {
     const registry = path.join(directory, 'registry');
     const output = path.join(directory, 'generated', 'consumers.json');
-    const vmss = JSON.parse(
-      fs.readFileSync(path.join(__dirname, '..', 'config', 'consumers', 'example-vmss.json.sample'), 'utf8'),
-    );
-    writeConsumers(registry, [['example.json', { ...vmss, name: 'example' }]]);
+    writeConsumers(registry, [['example.json', { ...sample, backend: 'vmss' }]]);
 
     assert.throws(
       () => generateConsumers({ directory: registry, destination: output, metadataProvider: provider }),
-      /backend "vmss" is schema-preparation only.*cannot be used by the active registry/,
+      /backend "vmss" is not supported in v1/,
     );
     assert.equal(fs.existsSync(output), false);
   });
