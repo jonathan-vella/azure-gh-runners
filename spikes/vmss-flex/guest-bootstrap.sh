@@ -50,21 +50,32 @@ cat > /etc/systemd/system/ghr-spike60-reboot-guard.service <<'UNIT'
 Description=Prevent VMSS spike traffic quotas from resetting after reboot
 DefaultDependencies=no
 After=local-fs.target
-Before=network-pre.target
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/ghr-spike60-reboot-guard
 RemainAfterExit=yes
+FailureAction=poweroff
 
-[Install]
-WantedBy=network-pre.target
 UNIT
 install -d -o root -g root -m 0700 /var/lib/ghr-spike60
 cat /proc/sys/kernel/random/boot_id > /var/lib/ghr-spike60/initial-boot-id
 chmod 0444 /var/lib/ghr-spike60/initial-boot-id
+network_units=0
+for unit in systemd-networkd.service NetworkManager.service; do
+  if systemctl cat "$unit" >/dev/null 2>&1; then
+    dropin="/etc/systemd/system/$unit.d/ghr-spike60-reboot-guard.conf"
+    install -d -o root -g root -m 0755 "${dropin%/*}"
+    cat > "$dropin" <<'UNIT'
+[Unit]
+Requires=ghr-spike60-reboot-guard.service
+After=ghr-spike60-reboot-guard.service
+UNIT
+    network_units=$((network_units + 1))
+  fi
+done
+[[ $network_units -gt 0 ]]
 systemctl daemon-reload
-systemctl enable ghr-spike60-reboot-guard.service >/dev/null
 # The regional image's patch baseline is not the local rootfs baseline. Install
 # the exact inherited minimum on both guests, inside existing byte/DNS quotas.
 manifest=/opt/ghr-source/image/versions.json
