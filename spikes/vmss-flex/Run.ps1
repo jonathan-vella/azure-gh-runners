@@ -29,6 +29,7 @@ try {
     $manifest = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable -DateKind String
     Assert-SpikeManifest $manifest
     if ($Action -eq 'Execute') {
+        throw 'Deployment disabled: runtime has no authorized durable canonical CAS adapter; a file/artifact is not ownership.'
         if (-not $ConfirmCoordinatorExecutionDirection -or -not $ApprovalPath) {
             throw 'Exact execution direction and separately approved nonsecret gate record required.'
         }
@@ -53,6 +54,7 @@ try {
             }
         }
     } elseif ($Action -eq 'Cleanup') {
+        throw 'Cleanup disabled: runtime has no canonical identity cleanup adapter; RG-only closure is not full cleanup.'
         if (-not $ConfirmCoordinatorCleanupDirection) { throw 'Exact coordinator cleanup direction required.' }
         Import-Module (Join-Path $PSScriptRoot 'Execution.psm1')
         Assert-SpikeSourceDisabled

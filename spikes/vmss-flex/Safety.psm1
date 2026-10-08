@@ -43,7 +43,7 @@ function New-SpikeManifest {
         maxWorkers = 2; maxAttempts = 2; attempts = 0
         maxHours = 4; cleanupReserveMinutes = 60; capUsd = 10
         startedUtc = $null; workDeadlineUtc = $null; hardDeadlineUtc = $null
-        phase = 'prepared'; cleanup = 'not-started'
+        phase = 'prepared'; cleanup = 'not-started'; cleanupScope = 'resource-group-only'
         cleanupDeleteReserved = $false; cleanupDeleteAcknowledged = $false
     }
     $manifest.keyVaultSecretScope = Get-SpikeSecretScope $manifest

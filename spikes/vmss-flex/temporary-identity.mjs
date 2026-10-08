@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, renameSync, unlinkSync, openSync, closeSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, unlinkSync, openSync, closeSync, fsyncSync } from 'node:fs';
+import { hostname } from 'node:os';
 import assert from 'node:assert/strict';
 
 export const scope = '/subscriptions/b47d2942-f5ad-4d3c-b28e-c23e4f83d97e/resourceGroups/rg-ghrunners-spike-vmss-swc';
@@ -86,7 +87,7 @@ export function identityNames(runId, runOrdinal) {
 export function newIdentityEnvelope(head) {
   check(sha.test(head), 'Exact reviewed source SHA required.');
   return {
-    schemaVersion: 1, issue: 81, runId: randomUUID().replaceAll('-', ''),
+    schemaVersion: 2, issue: 81, runId: randomUUID().replaceAll('-', ''), revision: 0, intents: [],
     head, startedUtc: null, workDeadlineUtc: null, hardDeadlineUtc: null,
     maxFullRuns: 2, capUsd: 10, runOrdinal: 0, runs: [],
     reservedUsage: Object.fromEntries(Object.keys(perRunTraffic).map(key => [key, 0])),
@@ -118,14 +119,34 @@ export function assertSanitizedEnvironmentClaims(claims) {
 
 export function validateIdentityEnvelope(state) {
   check(state && typeof state === 'object', 'Missing identity envelope.');
-  exact(Object.keys(state).sort(), ['schemaVersion', 'issue', 'runId', 'head',
+  exact(Object.keys(state).sort(), ['schemaVersion', 'issue', 'runId', 'head', 'revision', 'intents',
     'startedUtc', 'workDeadlineUtc', 'hardDeadlineUtc', 'maxFullRuns', 'capUsd', 'runOrdinal', 'runs', 'reservedUsage', 'reservedCostUsd'].sort(),
   'Unexpected envelope fields; secrets do not belong in state.');
-  check(state.schemaVersion === 1 && state.issue === 81 && sha.test(state.head) &&
+  check(state.schemaVersion === 2 && state.issue === 81 && sha.test(state.head) &&
     /^[a-f0-9]{32}$/.test(state.runId) &&
     state.maxFullRuns === 2 && state.capUsd === 10 && Number.isInteger(state.runOrdinal) &&
     state.runOrdinal >= 0 && state.runOrdinal <= 2 && Array.isArray(state.runs) &&
-    state.runs.length === state.runOrdinal, 'Envelope scope or limits drift.');
+    state.runs.length === state.runOrdinal && Number.isSafeInteger(state.revision) && state.revision >= 0 &&
+    Array.isArray(state.intents), 'Envelope scope or limits drift.');
+  const operationIds = new Set();
+  const intentKeys = new Set();
+  for (const intent of state.intents) {
+    exact(Object.keys(intent).sort(), ['operationId', 'ordinal', 'revision', 'kind', 'step', 'receipt'].sort(), 'Unexpected intent fields.');
+    check(uuid.test(intent.operationId) && !operationIds.has(intent.operationId) &&
+      Number.isInteger(intent.ordinal) && intent.ordinal > 0 && intent.ordinal <= state.runOrdinal &&
+      Number.isSafeInteger(intent.revision) && intent.revision > 0 && intent.revision <= state.revision &&
+      ['mutation', 'cleanup', 'delete'].includes(intent.kind) &&
+      (intent.kind === 'cleanup' ? intent.step === null :
+        (intent.kind === 'mutation' ? steps : cleanupSteps).includes(intent.step)), 'Invalid canonical operation intent.');
+    const key = `${intent.ordinal}:${intent.kind}:${intent.step}`;
+    check(!intentKeys.has(key), 'Duplicate operation intent.');
+    operationIds.add(intent.operationId);
+    intentKeys.add(key);
+    if (intent.receipt !== null) {
+      validateProviderReceipt(intent.receipt, intent.operationId);
+      check(intent.receipt.provider !== 'inventory' || intent.kind === 'delete', 'Inventory cannot acknowledge a mutation.');
+    }
+  }
   exact(state.reservedUsage, Object.fromEntries(Object.entries(perRunTraffic).map(([key, value]) =>
     [key, value * state.runOrdinal])), 'Cumulative original-envelope traffic/guest/DNS reservation drift.');
   check(state.reservedCostUsd === Math.max(0, ...state.runs.map(run => run.projectedCombinedUsd)),
@@ -207,6 +228,20 @@ export function validateIdentityEnvelope(state) {
     check((run.phase === 'closed') === (cloudGone && credentialGone), 'Closed run requires all absence and credential revocation evidence.');
     check((run.phase === 'credential-revocation') === (cloudGone && !credentialGone), 'Credential cleanup must be reported separately from paid cleanup.');
     if (run.phase === 'active') check(Object.values(run.cleanup).every(value => value === 'pending'), 'Active run contains cleanup.');
+    check((run.phase !== 'active') === intentKeys.has(`${run.ordinal}:cleanup:null`), 'Cleanup requires canonical intent.');
+    for (const step of steps) check((run.steps[step] !== 'pending') === intentKeys.has(`${run.ordinal}:mutation:${step}`), 'Mutation reservation lacks intent.');
+    for (const step of cleanupSteps) {
+      check((run.cleanup[step] !== 'pending') === intentKeys.has(`${run.ordinal}:delete:${step}`), 'Delete reservation lacks intent.');
+      if (['accepted', 'absent'].includes(run.cleanup[step])) {
+        const deletion = state.intents.find(item => item.ordinal === run.ordinal && item.kind === 'delete' && item.step === step);
+        check(deletion.receipt?.state === 'succeeded', 'Cleanup acknowledgement lacks terminal receipt.');
+      }
+    }
+    if (cloudGone) {
+      check(state.intents.filter(item => item.ordinal === run.ordinal && item.kind === 'mutation' &&
+        !['seedConfirmation', 'test'].includes(item.step)).every(item =>
+        ['succeeded', 'failed'].includes(item.receipt?.state)), 'Unsettled mutation prevents full cleanup.');
+    }
     if (index < state.runs.length - 1) check(run.phase === 'closed', 'Second run requires first full cleanup.');
   }
 }
@@ -214,8 +249,13 @@ export function validateIdentityEnvelope(state) {
 // Persist each transition before its corresponding external request. Reserved steps are never reissued.
 export function transitionIdentityEnvelope(state, action, input = {}) {
   validateIdentityEnvelope(state);
+  if (input.expectedRevision !== undefined) check(input.expectedRevision === state.revision, 'Stale canonical revision.');
   const next = structuredClone(state);
+  next.revision++;
   const run = next.runs.at(-1);
+  function intent(kind, step = null) {
+    next.intents.push({ operationId: randomUUID(), ordinal: next.runOrdinal, revision: next.revision, kind, step, receipt: null });
+  }
   if (action === 'begin') {
     const now = timestamp(input.now);
     check(next.runOrdinal < 2 && (!run || run.phase === 'closed'), 'Previous run cleanup incomplete or full-run cap exhausted.');
@@ -247,6 +287,7 @@ export function transitionIdentityEnvelope(state, action, input = {}) {
       'No step retry, bypass or work after cleanup.');
       check(now >= timestamp(next.startedUtc) && now + 30 * 1000 < timestamp(next.workDeadlineUtc), 'Work deadline exhausted.');
       run.steps[input.step] = 'reserved';
+      intent('mutation', input.step);
       if (input.step === 'seedConfirmation') run.credential.revocation = 'pending';
     } else if (action === 'verify') {
       check(run.phase === 'active' && steps.includes(input.step) && run.steps[input.step] === 'reserved', 'Unreserved verification.');
@@ -283,6 +324,15 @@ export function transitionIdentityEnvelope(state, action, input = {}) {
     } else if (action === 'cleanup') {
       check(run.phase === 'active', 'Run already entered cleanup.');
       run.phase = 'cleanup';
+      intent('cleanup');
+    } else if (action === 'receipt') {
+      const operation = next.intents.find(item => item.operationId === input.receipt?.operationId && item.ordinal === next.runOrdinal);
+      check(operation && operation.kind !== 'cleanup', 'Receipt requires exact reserved operation.');
+      validateProviderReceipt(input.receipt, operation.operationId);
+      check(operation.receipt === null || (operation.receipt.state === 'accepted' &&
+        input.receipt.provider === operation.receipt.provider && input.receipt.operationUrl === operation.receipt.operationUrl &&
+        ['succeeded', 'failed'].includes(input.receipt.state)), 'Receipt cannot be replaced or downgraded.');
+      operation.receipt = structuredClone(input.receipt);
     } else if (action === 'reserve-delete' || action === 'acknowledge-delete' || action === 'verify-absent') {
       check(run.phase === 'cleanup' && cleanupSteps.includes(input.step) &&
         cleanupSteps.slice(0, cleanupSteps.indexOf(input.step)).every(step => run.cleanup[step] === 'absent'),
@@ -290,9 +340,11 @@ export function transitionIdentityEnvelope(state, action, input = {}) {
       if (action === 'reserve-delete') {
         check(run.cleanup[input.step] === 'pending', 'No delete retry; reconcile reserved outcome read-only.');
         run.cleanup[input.step] = 'reserved';
+        intent('delete', input.step);
       } else if (action === 'acknowledge-delete') {
-        check(run.cleanup[input.step] === 'reserved' && input.accepted === true,
-          'Actual successful delete response or verified never-created evidence required.');
+        const deletion = operationIntent(next, 'delete', input.step);
+        check(run.cleanup[input.step] === 'reserved' && deletion.receipt?.state === 'succeeded',
+          'Terminal provider receipt required; accepted:true is not evidence.');
         run.cleanup[input.step] = 'accepted';
       } else {
         check(run.cleanup[input.step] === 'accepted' && input.absent === true, 'Explicit acknowledged deletion and authoritative absence required.');
@@ -315,22 +367,59 @@ export function writeIdentityEnvelope(path, initial) {
   writeFileSync(path, `${JSON.stringify(initial, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
 }
 
-export function updateIdentityEnvelope(path, action, input) {
+export function operationIntent(state, kind, step) {
+  return state.intents.find(item => item.ordinal === state.runOrdinal && item.kind === kind && item.step === step);
+}
+
+export function validateProviderReceipt(receipt, operationId) {
+  exact(Object.keys(receipt ?? {}).sort(), ['operationId', 'provider', 'state', 'operationUrl'].sort(), 'Sanitized provider receipt required.');
+  check(receipt.operationId === operationId && uuid.test(operationId) &&
+    ['arm', 'graph', 'github', 'inventory'].includes(receipt.provider) &&
+    ['accepted', 'succeeded', 'failed'].includes(receipt.state), 'Invalid provider operation receipt.');
+  if (receipt.operationUrl !== null) {
+    check(receipt.provider === 'arm' && typeof receipt.operationUrl === 'string' &&
+      /^https:\/\/management\.azure\.com\/subscriptions\/b47d2942-f5ad-4d3c-b28e-c23e4f83d97e\/providers\/Microsoft\.[A-Za-z]+\/locations\/swedencentral\/(?:operations|operationStatuses|operationResults)\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\?api-version=\d{4}-\d{2}-\d{2}$/.test(receipt.operationUrl),
+    'Unsupported provider handle; never invent or adopt an operation endpoint.');
+  }
+  check(receipt.state !== 'accepted' || receipt.operationUrl !== null, 'Accepted operation needs actual pollable provider handle.');
+}
+
+export function acquireIdentityLock(path, purpose) {
+  const fd = openSync(path, 'wx', 0o600);
+  const metadata = { ownerId: randomUUID(), host: hostname(), pid: process.pid,
+    processStartedUtc: new Date(Date.now() - process.uptime() * 1000).toISOString(), createdUtc: new Date().toISOString(), purpose };
+  try { writeFileSync(fd, JSON.stringify(metadata)); fsyncSync(fd); }
+  catch (error) { closeSync(fd); throw error; }
+  return () => {
+    closeSync(fd);
+    check(JSON.parse(readFileSync(path, 'utf8')).ownerId === metadata.ownerId, 'Lock owner changed; no unlink.');
+    unlinkSync(path);
+  };
+}
+
+export function inspectIdentityLock(path) {
+  // PID existence is not process identity, and remote host/PID reuse cannot authorize recovery.
+  return { metadata: JSON.parse(readFileSync(path, 'utf8')), recovery: 'read-only', mayUnlock: false };
+}
+
+export function updateIdentityEnvelope(path, action, input, coordination) {
   const lock = `${path}.lock`;
-  const fd = openSync(lock, 'wx', 0o600);
+  const release = acquireIdentityLock(lock, 'transition');
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     const state = JSON.parse(readFileSync(path, 'utf8'));
     const next = transitionIdentityEnvelope(state, action, input);
-    writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    if (coordination) check(coordination.compareAndSwap(state, next) === true, 'Stale canonical revision; mutation rejected.');
+    const fd = openSync(temporary, 'wx', 0o600);
+    try { writeFileSync(fd, `${JSON.stringify(next, null, 2)}\n`); fsyncSync(fd); }
+    finally { closeSync(fd); }
     renameSync(temporary, path);
     return next;
   } finally {
     try {
       try { unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     } finally {
-      closeSync(fd);
-      unlinkSync(lock);
+      release();
     }
   }
 }
