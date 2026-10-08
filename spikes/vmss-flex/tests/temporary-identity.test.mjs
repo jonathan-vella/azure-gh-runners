@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { receipt } from './recovery-fixture.mjs';
 import {
   newIdentityEnvelope, validateIdentityEnvelope, identityNames, transitionIdentityEnvelope,
   writeIdentityEnvelope, updateIdentityEnvelope, standardCredential, assertSanitizedEnvironmentClaims,
@@ -39,6 +40,7 @@ function completeStep(state, step) {
     step, id: ids[step], clientId: ids.client,
   });
   if (step === 'seedConfirmation') state = transitionIdentityEnvelope(state, 'record-key-fingerprint', { fingerprint });
+  state = transitionIdentityEnvelope(state, 'receipt', { receipt: receipt(state, 'mutation', step) });
   return transitionIdentityEnvelope(state, 'verify', { step, claims, seedConfirmed: true });
 }
 function bootstrap() {
@@ -49,9 +51,14 @@ function bootstrap() {
   return state;
 }
 function clean(state) {
+  for (const intent of state.intents.filter(item => item.ordinal === state.runOrdinal &&
+    item.kind === 'mutation' && item.receipt === null)) {
+    state = transitionIdentityEnvelope(state, 'receipt', { receipt: receipt(state, 'mutation', intent.step, 'arm', 'failed') });
+  }
   state = transitionIdentityEnvelope(state, 'cleanup');
   for (const step of ['resourceGroup', 'owner', 'federation', 'application', 'servicePrincipal', 'environment']) {
     state = transitionIdentityEnvelope(state, 'reserve-delete', { step });
+    state = transitionIdentityEnvelope(state, 'receipt', { receipt: receipt(state, 'delete', step) });
     state = transitionIdentityEnvelope(state, 'acknowledge-delete', { step, accepted: true });
     state = transitionIdentityEnvelope(state, 'verify-absent', { step, absent: true });
   }
@@ -245,12 +252,14 @@ test('cleanup order includes environment, forbids delete retry and false absence
   assert.throws(() => transitionIdentityEnvelope(state, 'verify-absent', { step: 'resourceGroup', absent: false }), /absence/);
   for (const step of ['resourceGroup', 'owner', 'federation', 'application', 'servicePrincipal']) {
     if (step !== 'resourceGroup') state = transitionIdentityEnvelope(state, 'reserve-delete', { step });
+    state = transitionIdentityEnvelope(state, 'receipt', { receipt: receipt(state, 'delete', step) });
     state = transitionIdentityEnvelope(state, 'acknowledge-delete', { step, accepted: true });
     state = transitionIdentityEnvelope(state, 'verify-absent', { step, absent: true });
   }
   assert.throws(() => begin(state), /cleanup/);
   assert.equal(state.runs[0].phase, 'cleanup');
   state = transitionIdentityEnvelope(state, 'reserve-delete', { step: 'environment' });
+  state = transitionIdentityEnvelope(state, 'receipt', { receipt: receipt(state, 'delete', 'environment') });
   state = transitionIdentityEnvelope(state, 'acknowledge-delete', { step: 'environment', accepted: true });
   state = transitionIdentityEnvelope(state, 'verify-absent', { step: 'environment', absent: true });
   assert.equal(state.runs[0].phase, 'closed');

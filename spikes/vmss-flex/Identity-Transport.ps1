@@ -15,6 +15,84 @@ function Assert-SpikeFicBody {
     }
 }
 
+function Assert-SpikeOperationUrl([string]$Url) {
+    if ($Url -cnotmatch '^https://management\.azure\.com/subscriptions/b47d2942-f5ad-4d3c-b28e-c23e4f83d97e/providers/Microsoft\.[A-Za-z]+/locations/swedencentral/(operations|operationStatuses|operationResults)/[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}\?api-version=\d{4}-\d{2}-\d{2}$') {
+        throw 'Unsupported ARM operation handle; no invented endpoint or terminal proof.'
+    }
+}
+
+function Invoke-IdentityHttp {
+    param([string]$Method, [string]$Url, [string]$Provider, $Body)
+    $token = $null
+    $client = $null
+    $message = $null
+    $response = $null
+    try {
+        if ($Provider -ceq 'github') {
+            $file = Get-Command gh -CommandType Application -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Source
+            $authentication = Invoke-BoundedProcess -FileName $file -Arguments @('auth', 'token', '--hostname', 'github.com') -TimeoutSeconds 30
+            if ($authentication.exitCode -ne 0) { throw 'GitHub authentication unavailable; no request.' }
+            $token = $authentication.stdout.Trim()
+        } else {
+            $resource = if ($Provider -ceq 'graph') { 'https://graph.microsoft.com/' } else { 'https://management.azure.com/' }
+            $authentication = Invoke-BoundedProcess -FileName $cli.fileName -Arguments @($cli.prefix + @(
+                'account', 'get-access-token', '--subscription', $subscription, '--resource', $resource, '--only-show-errors', '-o', 'json'
+            )) -TimeoutSeconds 30
+            if ($authentication.exitCode -ne 0) { throw 'Existing authentication unavailable; no request.' }
+            try { $token = ($authentication.stdout | ConvertFrom-Json -AsHashtable -ErrorAction Stop).accessToken }
+            catch { throw 'Authentication metadata invalid; output suppressed.' }
+        }
+        if ([string]::IsNullOrWhiteSpace($token)) { throw 'No authentication continuation; request blocked.' }
+        $handler = [Net.Http.HttpClientHandler]::new()
+        $handler.AllowAutoRedirect = $false
+        $client = [Net.Http.HttpClient]::new($handler)
+        $client.Timeout = [TimeSpan]::FromSeconds(30)
+        $message = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new($Method), $Url)
+        $message.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $token)
+        $message.Headers.Add('User-Agent', 'ghrunners-spike60-disabled-preparation')
+        if ($Provider -ceq 'github') {
+            $message.Headers.Add('Accept', 'application/vnd.github+json')
+            $message.Headers.Add('X-GitHub-Api-Version', '2022-11-28')
+        }
+        if ($null -ne $Body) {
+            $message.Content = [Net.Http.StringContent]::new(($Body | ConvertTo-Json -Depth 10 -Compress), [Text.Encoding]::UTF8, 'application/json')
+        }
+        try {
+            $response = $client.SendAsync($message).GetAwaiter().GetResult()
+            $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        } catch { throw 'Bounded provider HTTP response lost; no retry or terminal proof.' }
+        $status = [int]$response.StatusCode
+        if ($status -lt 200 -or $status -ge 300) { throw "Provider HTTP $status; no terminal proof from absence/auth/error." }
+        $value = @{}
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+            try { $value = ConvertFrom-Json $text -AsHashtable -ErrorAction Stop }
+            catch { throw 'Provider metadata invalid; output suppressed.' }
+        }
+        if ($value -isnot [hashtable]) { throw 'Expected provider metadata object; output suppressed.' }
+        $operationUrl = $null
+        foreach ($header in @('Azure-AsyncOperation', 'Location')) {
+            if ($Provider -cne 'arm') { break }
+            if ($response.Headers.Contains($header)) {
+                $operationUrl = @($response.Headers.GetValues($header))[0]
+                Assert-SpikeOperationUrl $operationUrl
+                break
+            }
+        }
+        if ($status -eq 202 -and -not $operationUrl) { throw 'Accepted response lacks usable provider receipt; remains unresolved.' }
+        if ($Provider -ceq 'arm' -and -not $operationUrl -and $value.ContainsKey('properties') -and
+            $value.properties.ContainsKey('provisioningState') -and $value.properties.provisioningState -cne 'Succeeded') {
+            throw 'ARM resource state is not terminal success and no usable operation handle was returned.'
+        }
+        return @{ value = $value; operationUrl = $operationUrl }
+    } finally {
+        if ($response) { $response.Dispose() }
+        if ($message) { $message.Dispose() }
+        if ($client) { $client.Dispose() }
+        $token = $null
+        $authentication = $null
+    }
+}
+
 # Code-first preparation: enabling requires a reviewed source change, not an environment flag.
 $executionEnabled = $false
 if (-not $executionEnabled) { throw 'Issue 81 authenticated transport is disabled pending exact-head execution direction.' }
@@ -37,6 +115,23 @@ function Assert-ObjectId([string]$Value) {
     )) { throw 'Unexpected or production identity ID; no request.' }
 }
 switch ($request.operation) {
+    'operation-status' {
+        $receipt = $payload.receipt
+        if ($receipt.provider -cne 'arm' -or $receipt.state -cne 'accepted') { throw 'Exact accepted ARM receipt required.' }
+        Assert-SpikeOperationUrl $receipt.operationUrl
+        $result = Invoke-IdentityHttp 'GET' $receipt.operationUrl 'arm' $null
+        $status = if ($result.value.ContainsKey('status')) { $result.value.status } else { $null }
+        $settled = switch -CaseSensitive ($status) {
+            'Succeeded' { 'succeeded' }
+            'Failed' { 'failed' }
+            'Canceled' { 'failed' }
+            'InProgress' { 'running' }
+            'Running' { 'running' }
+            default { 'unknown' }
+        }
+        @{ state = $settled } | ConvertTo-Json -Compress
+        return
+    }
     'account' { $arguments = @('account', 'show', '--subscription', $subscription, '-o', 'json') }
     'group-exists' { $arguments = @('group', 'exists', '--subscription', $subscription, '--name', 'rg-ghrunners-spike-vmss-swc', '-o', 'json') }
     'group-read' { $arguments = @('group', 'show', '--subscription', $subscription, '--name', 'rg-ghrunners-spike-vmss-swc', '-o', 'json') }
@@ -74,6 +169,15 @@ switch ($request.operation) {
             $state.runOrdinal -notin @(1, 2) -or $run.ordinal -ne $state.runOrdinal) { throw 'Invalid durable original envelope.' }
         $reserved = if ($payload.method -eq 'DELETE') { $run.cleanup[$payload.step] } else { $run.steps[$payload.step] }
         if ($reserved -cne 'reserved') { throw 'Durable reservation required before any mutation.' }
+        $kind = if ($payload.method -ceq 'DELETE') { 'delete' } else { 'mutation' }
+        $intent = @($state.intents | Where-Object {
+            $_.ordinal -eq $state.runOrdinal -and $_.kind -ceq $kind -and $_.step -ceq $payload.step
+        })
+        if ($state.revision -ne $payload.revision -or $intent.Count -ne 1 -or
+            $intent[0].operationId -cne $payload.operationId -or $null -ne $intent[0].receipt -or
+            ($kind -ceq 'mutation' -and $run.phase -cne 'active')) {
+            throw 'Stale revision or cleanup fence; no provider request.'
+        }
         $url = [uri]$payload.url
         $allowedGraph = $url.Host -ceq 'graph.microsoft.com' -and
             $url.AbsolutePath -cmatch '^/v1\.0/(applications|servicePrincipals)(/[a-f0-9-]{36}(/federatedIdentityCredentials(/[a-f0-9-]{36})?)?)?$'
@@ -117,16 +221,15 @@ switch ($request.operation) {
         $github = $allowedGithub
         $arguments = if ($github) { @('api', '--method', $payload.method, $url.PathAndQuery.TrimStart('/')) }
             else { @('rest', '--method', $payload.method, '--url', $url.AbsoluteUri) }
-        if ($allowedAzure -and $url.AbsolutePath -ceq $scope -and $payload.method -ceq 'DELETE') {
-            $seconds = 900
-            $arguments = @('group', 'delete', '--subscription', $subscription,
-                '--name', 'rg-ghrunners-spike-vmss-swc', '--yes', '-o', 'none')
-        }
-        if ($payload.ContainsKey('body')) {
-            $bodyPath = [IO.Path]::GetTempFileName()
-            [IO.File]::WriteAllText($bodyPath, ($payload.body | ConvertTo-Json -Depth 10 -Compress), [Text.UTF8Encoding]::new($false))
-            $arguments += if ($github) { @('--input', $bodyPath) } else { @('--body', "@$bodyPath") }
-        }
+        $provider = if ($allowedAzure) { 'arm' } elseif ($allowedGraph) { 'graph' } else { 'github' }
+        $body = if ($payload.ContainsKey('body')) { $payload.body } else { $null }
+        $http = Invoke-IdentityHttp $payload.method $url.AbsoluteUri $provider $body
+        $receiptState = if ($http.operationUrl) { 'accepted' } else { 'succeeded' }
+        @{ value = $http.value; receipt = @{
+            operationId = $payload.operationId; provider = $provider
+            state = $receiptState; operationUrl = $http.operationUrl
+        } } | ConvertTo-Json -Depth 20 -Compress
+        return
     }
     default { throw 'Unknown bounded identity transport operation.' }
 }

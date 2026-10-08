@@ -50,8 +50,12 @@ and approval. PKCS1/PKCS8 normalize identically; no private-key subprocess/file 
 Paid cleanup is RG first, then exact Owner assignment, FIC, app, SP and environment. Credential revocation never
 delays it, but pending revocation prevents full cleanup or another seeded run.
 The canonical adapter serializes cleanup, persists delete intent before requests and distinguishes a successful
-request acknowledgement from absence. RG DELETE uses the bounded CLI long-running-operation poller, not a bare
-202/no-wait response. Lost responses, stale crash locks and ambiguous late creation remain explicitly unresolved;
+request acknowledgement from absence. Issue [#85](https://github.com/jonathan-vella/azure-gh-runners/issues/85)
+adds revision-fenced intents and sanitized actual provider receipts, with bounded read-only terminal settling,
+not a bare 202/no-wait response. The injected shared coordinator is a mock only; without real authorized
+cross-host CAS the adapter fails closed before authentication. Local snapshots/artifacts are not ownership.
+Runtime RG-only `closed` is explicitly not full identity/environment/key cleanup.
+Lost responses, stale crash locks and ambiguous late creation remain explicitly unresolved;
 never retry deletes, force locks, infer terminal absence from an early 404 or certify full cleanup.
 
 The independent hosted cleanup backstop is retained, but all authenticated execution/cleanup paths and the

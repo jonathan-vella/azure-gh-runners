@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import {
-  newIdentityEnvelope, writeIdentityEnvelope, updateIdentityEnvelope, validateIdentityEnvelope,
+  newIdentityEnvelope, writeIdentityEnvelope, validateIdentityEnvelope, inspectIdentityLock,
 } from './temporary-identity.mjs';
 import { bootstrapTemporaryIdentity, cleanupTemporaryIdentity } from './identity-adapter.mjs';
 
-const [action, path, value, confirmation] = process.argv.slice(2);
-if (!path) throw new Error('Usage: identity-cli.mjs prepare|inspect|bootstrap|cleanup|confirm-seed|confirm-revocation <external-state-path> [head|nonsecret-approval-path|fingerprint] [--coordinator-confirmed]');
+const [action, path, value] = process.argv.slice(2);
+if (!path) throw new Error('Usage: identity-cli.mjs prepare|inspect|inspect-lock|bootstrap|cleanup <external-state-or-lock-path> [head|nonsecret-approval-path]');
 if (action === 'prepare') {
   writeIdentityEnvelope(path, newIdentityEnvelope(value));
   console.log('Offline envelope prepared. No clock or cloud call started.');
@@ -13,6 +13,8 @@ if (action === 'prepare') {
   const state = JSON.parse(readFileSync(path, 'utf8'));
   validateIdentityEnvelope(state);
   console.log(JSON.stringify(state, null, 2));
+} else if (action === 'inspect-lock') {
+  console.log(JSON.stringify(inspectIdentityLock(path), null, 2));
 } else if (action === 'bootstrap') {
   const approval = JSON.parse(readFileSync(value, 'utf8'));
   const keys = Object.keys(approval);
@@ -24,20 +26,11 @@ if (action === 'prepare') {
 } else if (action === 'cleanup') {
   console.log(JSON.stringify(await cleanupTemporaryIdentity(path)));
 } else if (action === 'confirm-seed') {
-  if (confirmation !== '--coordinator-confirmed') throw new Error('Record only actual approved coordinator seed evidence, never infer it from metadata.');
-  updateIdentityEnvelope(path, 'record-key-fingerprint', { fingerprint: value });
-  updateIdentityEnvelope(path, 'verify', { step: 'seedConfirmation', seedConfirmed: true });
-  console.log('Approved coordinator spike-key seed evidence recorded; no secret read or transfer.');
+  throw new Error('Canonical seed evidence writer unavailable; local snapshots cannot authorize writes.');
 } else if (action === 'confirm-revocation') {
-  if (confirmation !== '--coordinator-confirmed') throw new Error('Record only actual approved coordinator revocation evidence.');
-  updateIdentityEnvelope(path, 'confirm-key-revocation', {
-    fingerprint: value, noKeyCreatedConfirmed: value === 'no-key-created', revocationConfirmed: true,
-  });
-  console.log('Exact scoped spike-key revocation evidence recorded.');
+  throw new Error('Canonical revocation evidence writer unavailable; inspect state read-only.');
 } else if (action === 'reserve-foundation') {
-  if (value !== '--coordinator-confirmed') throw new Error('Reserve only an explicitly directed reviewed workflow handoff.');
-  updateIdentityEnvelope(path, 'reserve', { step: 'foundation', now: new Date().toISOString() });
-  console.log('Original full-run foundation handoff consumed; no cloud call or retry authorized.');
+  throw new Error('Canonical foundation fencing unavailable; workflow artifacts/base64 are not CAS.');
 } else {
   throw new Error('Unknown temporary identity action.');
 }
