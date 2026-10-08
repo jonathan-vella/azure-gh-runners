@@ -4,6 +4,31 @@ function Reject([scriptblock]$Operation) {
     try { & $Operation } catch { $failed = $true }
     if (-not $failed) { throw 'Unsafe identity claims fixture accepted.' }
 }
+$tokens = $null
+$parseErrors = $null
+$transportAst = [Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $PSScriptRoot 'Identity-Transport.ps1'), [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count -ne 0) { throw 'Identity transport failed to parse.' }
+$guard = $transportAst.Find({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Assert-SpikeFicBody'
+}, $true)
+if (-not $guard) { throw 'Exact FIC transport guard missing.' }
+. ([scriptblock]::Create($guard.Extent.Text))
+$state = @{ runId = ('a' * 32); runOrdinal = 1 }
+$body = @{
+    name = "spike60-$($state.runId)-1"; issuer = 'https://token.actions.githubusercontent.com'
+    audiences = @('api://AzureADTokenExchange')
+    subject = 'repo:jonathan-vella@25802147/azure-gh-runners@1408821667:environment:spike-vmss'
+}
+Assert-SpikeFicBody $body $state
+foreach ($key in @('name', 'issuer', 'subject', 'audiences')) {
+    $invalid = $body.Clone()
+    $invalid[$key] = if ($key -ceq 'audiences') { @('api://AzureADTokenExchange', 'unexpected') } else { 'unexpected' }
+    Reject { Assert-SpikeFicBody $invalid $state }
+}
+$invalid = $body.Clone()
+$invalid.claimsMatchingExpression = @{ value = 'unexpected' }
+Reject { Assert-SpikeFicBody $invalid $state }
 $names = @('GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_RUN_ATTEMPT',
     'GHR_SPIKE_ENVIRONMENT', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN')
 $saved = @{}

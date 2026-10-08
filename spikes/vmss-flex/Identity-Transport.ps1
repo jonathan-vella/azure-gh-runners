@@ -2,6 +2,19 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+function Assert-SpikeFicBody {
+    param([hashtable]$Body, [hashtable]$State)
+    if ($Body.Count -ne 4 -or
+        @($Body.Keys | Where-Object { $_ -notin @('name', 'issuer', 'audiences', 'subject') }).Count -ne 0 -or
+        $Body.name -cne "spike60-$($State.runId)-$($State.runOrdinal)" -or
+        $Body.issuer -cne 'https://token.actions.githubusercontent.com' -or
+        $Body.audiences -isnot [array] -or $Body.audiences.Count -ne 1 -or
+        $Body.audiences[0] -cne 'api://AzureADTokenExchange' -or
+        $Body.subject -cne 'repo:jonathan-vella@25802147/azure-gh-runners@1408821667:environment:spike-vmss') {
+        throw 'Only the exact approved GA environment federation body is permitted.'
+    }
+}
+
 # Code-first preparation: enabling requires a reviewed source change, not an environment flag.
 $executionEnabled = $false
 if (-not $executionEnabled) { throw 'Issue 81 authenticated transport is disabled pending exact-head execution direction.' }
@@ -75,6 +88,10 @@ switch ($request.operation) {
             $payload.method -notin @('PUT', 'POST', 'DELETE')) { throw 'Unexpected mutation target/method.' }
         if ($allowedGraph) {
             $parts = $url.AbsolutePath.Split('/', [StringSplitOptions]::RemoveEmptyEntries)
+            if ($payload.method -ceq 'POST' -and $parts.Count -eq 4 -and
+                $parts[3] -ceq 'federatedIdentityCredentials') {
+                Assert-SpikeFicBody $payload.body $state
+            }
             if ($parts.Count -ge 3) {
                 $expectedId = if ($parts[1] -ceq 'applications') { $run.ids.application } else { $run.ids.servicePrincipal }
                 if ($parts[2] -cne $expectedId) { throw 'Only captured identity object IDs may be mutated.' }
