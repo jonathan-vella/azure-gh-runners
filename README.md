@@ -28,23 +28,25 @@ flowchart LR
       PE[Private endpoints<br/>ACR, Key Vault, consumer resources]
       NAT[NAT Gateway<br/>outbound-only egress IP]
     end
-    subgraph WIN[Windows backend: ISOLATED, planned / being built]
-      VM[Ephemeral Windows VMs<br/>no identity, no secrets, no link to the ACA platform]
+    subgraph WIN[Windows backend: ISOLATED, live-verified]
+      VM[Ephemeral Trusted Launch Windows VMs<br/>no identity, no secrets, no link to the ACA platform]
     end
   end
   APP --> ACA
-  APP -.-> VM
+  APP --> VM
   ACA --> PE
   ACA --> NAT --> GH
-  VM -.->|own egress| GH
+  VM -->|own egress| GH
 ```
 
-- **Linux (v1):** Azure Container Apps jobs in an internal environment, one job per registered consumer, scaling to
+- **Linux:** Azure Container Apps jobs in an internal environment, one job per registered consumer, scaling to
   zero. Private ACR Premium and Key Vault. Consumers reach their own private resources through private endpoints in a
   shared subnet.
-- **Windows (planned, not built):** ephemeral Windows VMs on a VMSS Flex backend that is deliberately separate from the
-  ACA platform ([ADR-0007](docs/adr/0007-windows-vmss-isolated-runners.md)). A Linux VMSS backend inside the private
-  network was evaluated and rejected ([ADR-0006](docs/adr/0006-vmss-flex-spike.md)).
+- **Windows:** one ephemeral Trusted Launch Windows Server 2025 VM per job on a VMSS Flex backend that is deliberately
+  separate from the ACA platform, with its own resource group and network, no managed identity and no secrets on the
+  worker ([ADR-0007](docs/adr/0007-windows-vmss-isolated-runners.md), [guide](docs/windows-runners.md)). It cannot reach
+  your private endpoints. A Linux VMSS backend inside the private network was evaluated and rejected
+  ([ADR-0006](docs/adr/0006-vmss-flex-spike.md)).
 
 The approved design is in the [plan](docs/plan.md) and [PRD](docs/prd.md).
 
@@ -53,8 +55,9 @@ The approved design is in the [plan](docs/plan.md) and [PRD](docs/prd.md).
 - Workload PaaS resources have public network access disabled. Log Analytics is the documented exception (standard
   endpoints, local authentication disabled, Azure RBAC). The NAT Gateway IP is the only public IP and is outbound-only.
 - Public consumers may run only `workflow_dispatch`, `schedule`, and default-branch `push`. `pull_request_target`
-  and `workflow_run` are never allowed. One scoped exception is planned for the isolated Windows backend only
-  (same-repository pull requests on ephemeral, secretless workers); it is not built and does not apply to Linux.
+  and `workflow_run` are never allowed. One scoped exception exists for the isolated Windows backend only
+  (same-repository pull requests on ephemeral, secretless workers); that path has not been run live, and it does not
+  apply to Linux.
 - Consumers are onboarded only through `config/consumers/<name>.json`, validated by tooling.
 - The GitHub App key lives in Key Vault and is used only by the init and scaling path, never by job steps.
 - Deployment goes only through the protected `platform-prod` workflow on `main`.
@@ -78,10 +81,12 @@ platform** workflow, and onboard a first consumer.
 
 Rough figures, not measured guarantees:
 
-- **Fixed baseline: about USD 110 per month** for the network, private endpoints, and ACR Premium. This is incurred
-  while the platform exists, even with no jobs running.
+- **Linux fixed baseline: about USD 110 per month** for the network, private endpoints, and ACR Premium. This is
+  incurred while the platform exists, even with no jobs running.
 - **Linux jobs:** ACA bills per second of vCPU and memory, scaling to zero when idle.
-- **Windows (planned):** per job, for the VM time of each ephemeral worker.
+- **Windows:** per job, for the VM time of each ephemeral worker (a `Standard_D4ds_v5` is roughly USD 0.4 per hour).
+  The Windows backend also has its own small fixed baseline (network, NAT gateway, ACR, Log Analytics), not measured
+  separately.
 
 Tear everything down when you are not using it ([teardown](docs/adopting.md#8-teardown)).
 
@@ -89,15 +94,16 @@ Tear everything down when you are not using it ([teardown](docs/adopting.md#8-te
 
 | Area | Status |
 | --- | --- |
-| Linux ACA platform | Deployed and smoke-tested once in the maintainer's subscription (2026-10-11); see [smoke.md](docs/smoke.md). |
+| Linux ACA platform | **Live-verified** in the maintainer's subscription (2026-10-11): staged deploy, private DNS, Entra OIDC to a private resource, scale 0 to 1 to 0, and negative trigger checks. See [smoke.md](docs/smoke.md). |
+| Windows isolated backend | **Live-verified once** (2026-10-11): a smoke job ran on an ephemeral Trusted Launch VM as a non-admin account, and the VM, NIC, disk and runner registration were gone afterwards ([run](https://github.com/jonathan-vella/ghr-smoke/actions/runs/38176888808)). The `pull_request` exception and the NSG outbound deny rules were not run live. |
 | Other tenants, regions, organisations | **Not verified.** Only `swedencentral` is supported by the validators and Bicep. |
-| Windows isolated backend | **Not built.** Design only ([ADR-0007](docs/adr/0007-windows-vmss-isolated-runners.md)). |
-| Linux VMSS Flex backend | Rejected for v1. |
-| v1.0 | Not tagged yet. Architecture, onboarding, operations, and security guides are still being finalised, so some documents may lag the implementation. |
+| Linux VMSS Flex backend | Rejected ([ADR-0006](docs/adr/0006-vmss-flex-spike.md)). |
+| Release | v1.0.0. Both backends were deployed through their protected workflows in the maintainer's subscription; this is a lab-grade platform, not a hardened multi-tenant service. |
 | Support | Best effort from a single maintainer; see [SECURITY.md](SECURITY.md). |
 
-Other known limits: a fixed baseline cost even when idle, jobs share a subnet, and no multi-region or high-availability
-design. Treat this as a lab-grade platform for your own repositories, not a hardened multi-tenant service.
+Other known limits: a fixed baseline cost even when idle, Linux jobs share a subnet, a Windows worker has open
+outbound 443 and 80 to the internet, and there is no multi-region or high-availability design. Treat this as a
+lab-grade platform for your own repositories, not a hardened multi-tenant service.
 
 ## Documentation
 
@@ -111,6 +117,7 @@ design. Treat this as a lab-grade platform for your own repositories, not a hard
 | [Security model](docs/security.md) | Threats, controls, assurance limits, residual risks |
 | [Observability](docs/observability.md) | Log Analytics exception and diagnostic-settings contract |
 | [Smoke test](docs/smoke.md) | End-to-end evidence and the consumer pattern |
+| [Windows runners](docs/windows-runners.md) and [image](docs/windows-image.md) | Isolated Windows backend: operation, deployment, image build |
 | [Runner image](image/README.md) | Pinned toolset, local image checks, runtime contracts |
 | [Runbooks](docs/runbooks/) | [Identity bootstrap](docs/runbooks/bootstrap-identity.md) and [GitHub App](docs/runbooks/github-app.md) |
 | [ADRs](docs/adr/README.md) | Architecture decisions |

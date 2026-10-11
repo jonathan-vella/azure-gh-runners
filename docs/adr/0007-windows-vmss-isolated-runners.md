@@ -104,7 +104,10 @@ Built in [#98](https://github.com/jonathan-vella/azure-gh-runners/issues/98) (in
 
 ## Status
 
-Accepted (direction), 2026-10-11. Infrastructure, orchestrator, deployment workflow and bootstrap are **built and pass
-offline validation, but are not yet live-verified**: nothing has been deployed and no Windows job has run. Unverified
-assumptions are listed in [windows-runners](../windows-runners.md). The worker side (registry, hook, image) is tracked
-separately in #94 and #95.
+Accepted, and **live-verified on 2026-10-11**. The backend was deployed through the protected `deploy-windows` workflow
+and a Windows smoke job ([run 38176888808](https://github.com/jonathan-vella/ghr-smoke/actions/runs/38176888808))
+ran on a self-hosted Trusted Launch VM as a non-admin account; the VM, NIC, disk and runner registration were removed
+afterwards. The live run found and fixed real defects (scale-set orchestration mode value, Trusted Launch image
+definition, ACL handling, `az login --client-id`, the missing batch-logon right and the JIT file ACL). Not verified
+live: the scoped `pull_request` exception, the NSG outbound deny rules, and anything in other tenants. Remaining
+assumptions are in [windows-runners](../windows-runners.md).
