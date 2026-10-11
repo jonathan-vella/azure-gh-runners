@@ -14,7 +14,7 @@ const diagnosticsConfig = JSON.parse(
   readFileSync(fileURLToPath(new URL('../infra/diagnostics-config.json', import.meta.url)), 'utf8'),
 );
 const mainBicep = readFileSync(fileURLToPath(new URL('../infra/main.bicep', import.meta.url)), 'utf8');
-const subscriptionId = 'b47d2942-f5ad-4d3c-b28e-c23e4f83d97e';
+const subscriptionId = '00000000-0000-4000-8000-000000000000';
 const resourceGroup = 'rg-ghrunners-prod-swc';
 
 function makeOutputs(overrides = {}) {
@@ -304,7 +304,7 @@ test('uses a quoted Azure CLI command with the same bounds on Windows', () => {
   assert.equal(call.file, 'cmd.exe');
   assert.equal(call.args[0], '/d');
   assert.equal(call.args[1], '/s');
-  assert.match(call.args[3], /--subscription" "b47d2942-f5ad-4d3c-b28e-c23e4f83d97e"/);
+  assert.ok(call.args[3].includes(`--subscription" "${subscriptionId}"`));
   assert.equal(call.options.timeout, 30_000);
   assert.equal(call.options.maxBuffer, 1024 * 1024);
 });

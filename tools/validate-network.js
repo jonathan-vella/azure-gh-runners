@@ -16,24 +16,21 @@ const requiredDnsZones = [
   'privatelink.azurecr.io',
 ];
 
-const requiredGovernanceTags = {
-  application: 'ghrunners',
-  environment: 'prod',
-  workload: 'gh-runners',
-  owner: 'jonathan-vella',
-  costcenter: 'platform-engineering',
-  'tech-contact': 'jonathan-vella',
-  'technical-contact': 'jonathan-vella',
-  sla: 'development',
-  'backup-policy': 'none',
-  'maint-window': 'none',
-};
+const requiredGovernanceTags = [
+  'application',
+  'environment',
+  'workload',
+  'owner',
+  'costcenter',
+  'tech-contact',
+  'technical-contact',
+  'sla',
+  'backup-policy',
+  'maint-window',
+];
 
-const requiredPlatform = {
-  subscriptionId: 'b47d2942-f5ad-4d3c-b28e-c23e4f83d97e',
-  resourceGroup: 'rg-ghrunners-prod-swc',
-  location: 'swedencentral',
-};
+const approvedLocation = 'swedencentral';
+const resourceGroupName = /^[A-Za-z0-9._()-]{1,89}[A-Za-z0-9_()-]$/;
 
 const acaReservedRanges = [
   '169.254.0.0/16',
@@ -110,9 +107,9 @@ function validateGovernanceTags(tags) {
     throw new Error('governanceTags must be an object.');
   }
 
-  for (const [key, expected] of Object.entries(requiredGovernanceTags)) {
-    if (tags[key] !== expected) {
-      throw new Error(`governanceTags.${key} must be "${expected}".`);
+  for (const key of requiredGovernanceTags) {
+    if (typeof tags[key] !== 'string' || !tags[key]) {
+      throw new Error(`governanceTags.${key} must be a non-empty string.`);
     }
   }
 
@@ -128,10 +125,12 @@ function validateNetworkConfig(config) {
 
   validateGovernanceTags(config.governanceTags);
 
-  for (const [key, expected] of Object.entries(requiredPlatform)) {
-    if (config[key] !== expected) {
-      throw new Error(`${key} must be "${expected}".`);
-    }
+  if (config.location !== approvedLocation) {
+    throw new Error(`location must be "${approvedLocation}" (see docs/adopting.md before changing region).`);
+  }
+
+  if (typeof config.resourceGroup !== 'string' || !resourceGroupName.test(config.resourceGroup)) {
+    throw new Error('resourceGroup must be a valid Azure resource group name.');
   }
 
   const addressSpace = parseCidr(config.addressSpace, 'addressSpace');
