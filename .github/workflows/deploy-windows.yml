@@ -126,7 +126,7 @@ jobs:
 
           az network nsg show --ids "$nsg_id" --output json |
             check "NSG has no inbound allow and denies inbound" \
-              '[.securityRules[] | select(.direction == "Inbound" and .access == "Allow")] | length == 0
+              '([.securityRules[] | select(.direction == "Inbound" and .access == "Allow")] | length == 0)
                 and any(.securityRules[]; .name == "Deny-All-Inbound" and .direction == "Inbound" and .access == "Deny")'
           az network public-ip list --resource-group "$RESOURCE_GROUP" --output json |
             check "only public IP is the NAT Gateway IP" --arg nat "$nat_ip_id" \

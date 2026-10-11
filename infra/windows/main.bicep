@@ -71,6 +71,8 @@ var nameSuffix = 'prod-${regionShort}-${uniqueSuffix}'
 var deploymentSuffix = uniqueString(deployment().name, resourceGroup().id)
 var vmssName = 'vmss-ghrwin-prod-${regionShort}'
 
+var orchestratorIdentityName = 'id-ghrwin-orchestrator-${nameSuffix}'
+
 // Built-in role definition IDs, deliberately not Contributor.
 var virtualMachineContributorRoleId = '9980e02c-c2be-4d73-94e8-173b1dc7cf3c'
 var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
@@ -149,7 +151,7 @@ module containerAppsEnvironmentDiagnostics '../modules/diagnostic-settings.bicep
 module orchestratorIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.6.0' = {
   name: 'orchestrator-identity-${deploymentSuffix}'
   params: {
-    name: 'id-ghrwin-orchestrator-${nameSuffix}'
+    name: orchestratorIdentityName
     location: location
     tags: tags
     enableTelemetry: false
@@ -179,7 +181,7 @@ module registry 'br/public:avm/res/container-registry/registry:0.13.1' = {
 }
 
 resource virtualMachineContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, orchestratorIdentity.name, virtualMachineContributorRoleId)
+  name: guid(resourceGroup().id, orchestratorIdentityName, virtualMachineContributorRoleId)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', virtualMachineContributorRoleId)
     principalId: orchestratorIdentity.outputs.principalId
@@ -188,7 +190,7 @@ resource virtualMachineContributor 'Microsoft.Authorization/roleAssignments@2022
 }
 
 resource networkContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, orchestratorIdentity.name, networkContributorRoleId)
+  name: guid(resourceGroup().id, orchestratorIdentityName, networkContributorRoleId)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', networkContributorRoleId)
     principalId: orchestratorIdentity.outputs.principalId
