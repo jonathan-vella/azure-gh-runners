@@ -62,12 +62,11 @@ the owner accepts for this lab.
 
 ## Consequences
 
-- The Windows backend must be built: Windows image, PowerShell pre-job hook, scale-set controller, isolated
-  infrastructure and deploy identity, registry support. Work is tracked in
+- The Windows backend must be built: Windows image, PowerShell pre-job hook, orchestrator, isolated infrastructure and
+  deploy identity, registry support. Work is tracked in
   [#93](https://github.com/jonathan-vella/azure-gh-runners/issues/93) and issues #94–#99.
-- The closed VMSS spike code ([`spikes/vmss-flex/`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae/spikes/vmss-flex), removed from the tree) targeted Linux with bash bootstrap. The Go controller using
-  `actions/scaleset` is expected to be reusable; the worker bootstrap and hook are not. It stays archival and unvalidated
-  until a Windows design reuses specific parts.
+- The closed VMSS spike code ([`spikes/vmss-flex/`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae/spikes/vmss-flex), removed from the tree) targeted Linux with bash bootstrap and a Go controller. The final
+  design does **not** reuse it: the orchestrator is a small ACA event job (see below). The spike stays archival.
 - Windows workers cold-start for several minutes per job. That is negligible for a 40-minute job and poor for short ones.
 - Cost evidence from the research doc (dated background): D4s_v5 Windows about $0.388 per hour pay-as-you-go. Actual
   cost must be measured at acceptance.
@@ -76,7 +75,36 @@ the owner accepts for this lab.
 - The cheap profiling experiment (#96) is optional and non-blocking: the owner chose to build the runner regardless.
   Its numbers become the baseline and target.
 
+## Orchestrator design (final)
+
+Built in [#98](https://github.com/jonathan-vella/azure-gh-runners/issues/98) (infrastructure and deployment) and
+[#97](https://github.com/jonathan-vella/azure-gh-runners/issues/97) (orchestrator). Guide:
+[windows-runners](../windows-runners.md).
+
+- **A KEDA-triggered ACA event job is the orchestrator**, one per Windows consumer, using the `github-runner` scaler with
+  a single custom label, `noDefaultLabels`, ETags and repository scope. Concurrency is bounded by `maxRunners`
+  (`maxExecutions`); the replica timeout is the job timeout plus 20 minutes. It has no ingress and runs only platform code,
+  so it holds the App key (an ACA secret) and its managed identity (lifecycle `Main`).
+- **One execution handles one queued job:** janitor of expired tagged resources, mint a one-time JIT configuration, create
+  one VM from the latest gallery image version (attached to a VMSS Flex placement container, no public IP, no identity,
+  Premium SSD, tags `ghr-managed`, `consumer`, `runId`, `expiresUtc`), pass the JIT configuration and policy in
+  `customData`, wait for the VM to stop or the runner to deregister, and always delete the VM, NIC and disk and deregister
+  the runner. This replaces the rejected Go controller and VMSS autoscaling: there is no long-running controller and no
+  scale-set instance management.
+- **Own resource group, VNet, ACR, ACA environment, Log Analytics workspace and Compute Gallery.** The environment is
+  non-zonal; nothing is peered or linked to the Linux platform.
+- **Identities:** a dedicated deploy identity `sp-ghrunners-windows-deploy` with Owner on the Windows resource group only
+  (to create the role assignments), signing in through the `platform-prod` environment subject; the orchestrator identity
+  has exactly Virtual Machine Contributor, Network Contributor and AcrPull, plus Reader on the Compute Gallery resource only (to read image versions when creating VMs). `sp-ghrunners-platform-prod` is not used or
+  widened.
+- **Budget:** an optional Cost Management budget is an alert, not a cap. The real caps are `maxRunners`, per-VM
+  `expiresUtc`, the janitor and the worker self-shutdown.
+- **Deployment:** the protected `deploy-windows` workflow, staged like `deploy.yml`, with readbacks. Never from a local
+  checkout.
+
 ## Status
 
-Accepted (direction), 2026-10-11. Implementation not started; the platform deployment is paused pending a full plan
-review.
+Accepted (direction), 2026-10-11. Infrastructure, orchestrator, deployment workflow and bootstrap are **built and pass
+offline validation, but are not yet live-verified**: nothing has been deployed and no Windows job has run. Unverified
+assumptions are listed in [windows-runners](../windows-runners.md). The worker side (registry, hook, image) is tracked
+separately in #94 and #95.

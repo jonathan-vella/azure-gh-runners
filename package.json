@@ -3,7 +3,7 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "validate": "npm run validate:consumers && npm run validate:generator && npm run validate:bicep && npm run validate:network && npm run validate:public-access && npm run validate:observability && npm run validate:image && npm run validate:hook && npm run validate:windows && npm run validate:markdown",
+    "validate": "npm run validate:consumers && npm run validate:generator && npm run validate:bicep && npm run validate:network && npm run validate:public-access && npm run validate:observability && npm run validate:image && npm run validate:hook && npm run validate:windows && npm run validate:windows-infra && npm run validate:markdown",
     "validate:consumers": "node --test tests/consumer-schema.test.cjs tests/consumer-registry.test.cjs tests/consumer-generator.test.cjs && node tools/validate-consumers.js",
     "generate:consumers": "node tools/generate-consumers.js",
     "validate:generator": "node tools/generate-consumers.js --check",
@@ -14,6 +14,7 @@
     "validate:image": "node --test tools/image.test.js tests/jit-init.test.mjs tests/runner-entrypoint.test.mjs",
     "validate:hook": "node tools/test-prejob.js",
     "validate:windows": "node --test tests/windows-image.test.cjs && pwsh -NoProfile -File tests/windows/syntax.tests.ps1 && pwsh -NoProfile -File tests/windows/job-started.tests.ps1 && pwsh -NoProfile -File tests/windows/start-runner.tests.ps1",
+    "validate:windows-infra": "node --test tests/windows-orchestrator.test.mjs tests/windows-infra.test.mjs && az bicep build --file infra/windows/main.bicep --stdout && az bicep build-params --file infra/windows/main.bicepparam --stdout && az bicep lint --file infra/windows/main.bicep && az bicep lint --file infra/windows/modules/network.bicep && az bicep lint --file infra/windows/modules/compute.bicep && az bicep lint --file infra/windows/modules/orchestrator-job.bicep && az bicep lint --file infra/windows/modules/budget.bicep",
     "validate:markdown": "markdownlint-cli2 \"**/*.md\""
   },
   "devDependencies": {
