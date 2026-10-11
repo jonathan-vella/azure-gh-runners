@@ -81,6 +81,14 @@ test('workflow is manual, pinned, OIDC-based and scoped as specified', () => {
   }
 });
 
+test('workflow takes an optional build subnet id and resolves the windows-foundation output when empty', () => {
+  assert.match(workflow, /build-subnet-id:\r?\n(.*\r?\n)*?\s+required: false/);
+  assert.doesNotMatch(workflow, /vnet-name|subnet-name/);
+  for (const expected of ['az deployment group show', '--name windows-foundation', 'buildSubnetResourceId', 'No build subnet']) {
+    assert.ok(workflow.includes(expected), `workflow is missing ${expected}`);
+  }
+});
+
 test('workflow never gives build or test VMs an identity or a public IP', () => {
   assert.doesNotMatch(workflow, /--assign-identity|--identity|--user-assigned/);
   assert.equal((workflow.match(/--public-ip-address ""/g) || []).length, 1);

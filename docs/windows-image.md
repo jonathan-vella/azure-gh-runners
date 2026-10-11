@@ -92,12 +92,14 @@ Run **build-windows-image** manually (workflow dispatch). It uses the `platform-
 | `gallery-name` | `gal_ghrunners_win_swc` |
 | `image-definition` | `ghr-windows-2025` (created if missing: Windows, generalized, Gen2) |
 | `location` | `swedencentral` |
-| `vnet-name`, `subnet-name` | `vnet-ghrunners-win-swc`, `snet-image-build` (align with the infrastructure) |
+| `build-subnet-id` | empty: resolved from the foundation deployment output (see below) |
 | `vm-size` | `Standard_D4ds_v5` |
 
-Prerequisites provided by the infrastructure work (#98): the resource group, gallery, VNet and a build subnet with
+Prerequisites provided by the infrastructure work (#98): the resource group, gallery, and a build subnet (`snet-build` in the `vnet-ghrwin-<suffix>` VNet) with
 outbound internet through the NAT gateway and no inbound path, and an identity allowed to create VMs, NICs, disks and
 image versions in that resource group only.
+
+If `build-subnet-id` is empty, the workflow reads the `buildSubnetResourceId` output of the `windows-foundation` deployment in the resource group (`az deployment group show`). It fails with a clear message if the output is missing or empty; pass the subnet resource ID explicitly in that case.
 
 Steps: create a temporary private build VM (no public IP, no identity) from the marketplace image; run
 `install-tools.ps1` and `verify-tools.ps1` through `az vm run-command`; remove the throwaway admin account; run
