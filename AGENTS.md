@@ -117,9 +117,15 @@ local check.
   GitHub bindings. Stop on unexpected state; do not recreate or expand permissions.
 - [GitHub App runbook](docs/runbooks/github-app.md) — App permissions, installation scope, key handling, and rotation.
 - [Observability](docs/observability.md) — Log Analytics network exception and diagnostic-settings contract.
-
-Architecture, consumer onboarding, operations, and security guides are tracked as documentation issues in the backlog.
-Add links here when those files exist; do not create speculative or duplicate instructions in this guide.
+- [Architecture](docs/architecture.md) — components, trust boundaries, network/DNS flow, staged deployment.
+- [Consumer onboarding](docs/onboarding-consumer.md) — deterministic checklist to onboard a repository to the ACA backend.
+- [Operations](docs/operations.md) — deploy, image rebuild, key rotation, recovery after resource-group deletion,
+  troubleshooting.
+- [Security model](docs/security.md) — threats, controls, residual risks, scoped Windows exception.
+- [Smoke test](docs/smoke.md) — positive and negative smoke checks and how outcomes are observed.
+- [Adopting this project](docs/adopting.md) — what to replace and the bootstrap order when you fork the repository.
+- [Contributing](CONTRIBUTING.md) and [security policy](SECURITY.md) — contribution workflow and private vulnerability
+  reporting.
 
 ## Change conventions
 
