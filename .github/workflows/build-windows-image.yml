@@ -95,17 +95,16 @@ jobs:
             printf '%s\n' "$output"
             grep -q '^GHR_RESULT=OK' <<<"$output"
           }
-          # create_vm <name> <image> <vnet-subnet-id> [security-type]: private VM, explicit NIC and OS disk names, no identity,
-          # no public IP. The build VM is Standard because a TrustedLaunchSupported gallery image definition only accepts a
-          # Standard source; the test VM (and workers) launch as TrustedLaunch from the resulting version.
+          # create_vm <name> <image> <vnet-subnet-id>: private Trusted Launch VM (secure boot and vTPM), explicit NIC and OS
+          # disk names, no identity, no public IP. Every VM here, including the build VM, is Trusted Launch: the gallery image
+          # definition is TrustedLaunch-only, and the orchestrator launches workers the same way.
           create_vm() {
-            local security=(--security-type TrustedLaunch --enable-secure-boot true --enable-vtpm true)
-            [[ ${4:-TrustedLaunch} != Standard ]] || security=(--security-type Standard)
             az network nic create --resource-group "$RG" --name "$1-nic" --location "$LOCATION" --subnet "$3" --output none
             az vm create --resource-group "$RG" --name "$1" --location "$LOCATION" --image "$2" --size "$VM_SIZE" \
               --nics "$1-nic" --os-disk-name "$1-osdisk" --os-disk-delete-option Delete --nic-delete-option Delete \
               --admin-username ghradmin --admin-password "$VM_PASSWORD" --public-ip-address "" --nsg "" \
-              "${security[@]}" --tags purpose=windows-image-build --output none
+              --security-type TrustedLaunch --enable-secure-boot true --enable-vtpm true \
+              --tags purpose=windows-image-build --output none
           }
           EOF
           sed -i 's/^          //' "$RUNNER_TEMP/helpers.sh"
@@ -149,7 +148,7 @@ jobs:
           fi
           echo "SUBNET_ID=$subnet_id" >> "$GITHUB_ENV"
           base="$(jq -r '.baseImage | "\(.publisher):\(.offer):\(.sku):latest"' image/windows/versions.json)"
-          create_vm "$BUILD_VM" "$base" "$subnet_id" Standard
+          create_vm "$BUILD_VM" "$base" "$subnet_id"
 
       - name: Install tools, runner and worker files, then verify
         run: |
@@ -221,7 +220,7 @@ jobs:
             az sig image-definition create --resource-group "$RG" --gallery-name "$GALLERY" --gallery-image-definition "$DEFINITION" \
               --publisher ghrunners --offer windows-runner --sku 2025-datacenter-azure-edition \
               --os-type Windows --os-state Generalized --hyper-v-generation V2 \
-              --features SecurityType=TrustedLaunchSupported --output none
+              --features SecurityType=TrustedLaunch --output none
           fi
           vm_id="$(az vm show --resource-group "$RG" --name "$BUILD_VM" --query id --output tsv)"
           # Same-region replica only.
