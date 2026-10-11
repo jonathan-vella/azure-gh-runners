@@ -63,6 +63,8 @@ $trusted = 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators', 'NT SERVICE\TrustedI
 foreach ($path in 'C:\ghr', 'C:\ghr\start-runner.ps1', 'C:\ghr\hooks\job-started.ps1') {
     foreach ($rule in (Get-Acl -LiteralPath $path).Access) {
         if ($rule.AccessControlType -eq 'Allow' -and ($rule.FileSystemRights -band $writeRights) -and $trusted -notcontains $rule.IdentityReference.Value) {
+            Write-Host "ACL for ${path}:"
+            & icacls.exe $path | Write-Host
             throw "$path is writable by $($rule.IdentityReference.Value)"
         }
     }
