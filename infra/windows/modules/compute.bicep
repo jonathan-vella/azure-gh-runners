@@ -13,6 +13,13 @@ param vmssName string
 @description('Governance tags.')
 param tags object
 
+@description('Principal ID of the orchestrator identity, granted Reader on the gallery only.')
+param galleryReaderPrincipalId string
+
+// Reader at gallery scope (not the resource group) lets the orchestrator read image versions to create VMs from
+// them; Virtual Machine Contributor does not grant that, and Contributor must not be used.
+var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
+
 module gallery 'br/public:avm/res/compute/gallery:0.9.5' = {
   name: 'gallery-${uniqueString(galleryName)}'
   params: {
@@ -36,6 +43,23 @@ module gallery 'br/public:avm/res/compute/gallery:0.9.5' = {
     tags: tags
     enableTelemetry: false
   }
+}
+
+resource galleryScope 'Microsoft.Compute/galleries@2023-07-03' existing = {
+  name: galleryName
+}
+
+resource galleryReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceId('Microsoft.Compute/galleries', galleryName), galleryReaderPrincipalId, readerRoleId)
+  scope: galleryScope
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', readerRoleId)
+    principalId: galleryReaderPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    gallery
+  ]
 }
 
 // Flex scale set used only as a placement container: zero instances, no autoscale, no VM profile.

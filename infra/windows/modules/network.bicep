@@ -111,6 +111,20 @@ var securityRules = [
     }
   }
   {
+    name: 'Deny-Internet-Other-Outbound'
+    properties: {
+      access: 'Deny'
+      description: 'Every internet port other than 443 and 80 is blocked.'
+      destinationAddressPrefix: 'Internet'
+      destinationPortRange: '*'
+      direction: 'Outbound'
+      priority: 3900
+      protocol: '*'
+      sourceAddressPrefix: '*'
+      sourcePortRange: '*'
+    }
+  }
+  {
     name: 'Deny-RFC1918-10'
     properties: {
       access: 'Deny'

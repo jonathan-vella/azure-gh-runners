@@ -95,7 +95,7 @@ Built in [#98](https://github.com/jonathan-vella/azure-gh-runners/issues/98) (in
   non-zonal; nothing is peered or linked to the Linux platform.
 - **Identities:** a dedicated deploy identity `sp-ghrunners-windows-deploy` with Owner on the Windows resource group only
   (to create the role assignments), signing in through the `platform-prod` environment subject; the orchestrator identity
-  has exactly Virtual Machine Contributor, Network Contributor and AcrPull. `sp-ghrunners-platform-prod` is not used or
+  has exactly Virtual Machine Contributor, Network Contributor and AcrPull, plus Reader on the Compute Gallery resource only (to read image versions when creating VMs). `sp-ghrunners-platform-prod` is not used or
   widened.
 - **Budget:** an optional Cost Management budget is an alert, not a cap. The real caps are `maxRunners`, per-VM
   `expiresUtc`, the janitor and the worker self-shutdown.

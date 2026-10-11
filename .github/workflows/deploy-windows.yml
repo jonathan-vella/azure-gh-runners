@@ -97,6 +97,8 @@ jobs:
             { echo "::error::Resource group $RESOURCE_GROUP does not exist. Run the bootstrap runbook."; exit 1; }
 
       - name: Deploy foundation
+        # The stable deployment name `windows-foundation` is a contract: the image-bake workflow reads
+        # properties.outputs.buildSubnetResourceId.value from it with `az deployment group show`.
         env:
           DEPLOY_JOBS: 'false'
           GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -106,7 +108,7 @@ jobs:
           set -euo pipefail
           az deployment group create \
             --resource-group "$RESOURCE_GROUP" \
-            --name "windows-foundation-${GITHUB_RUN_ID}" \
+            --name "windows-foundation" \
             --parameters infra/windows/main.bicepparam \
             --query properties.outputs --output json > "$RUNNER_TEMP/foundation.json"
 
@@ -122,6 +124,7 @@ jobs:
           principal_id="$(out orchestratorIdentityPrincipalId)"
           registry="$(out registryName)"
           registry_id="$(az acr show --name "$registry" --resource-group "$RESOURCE_GROUP" --query id --output tsv)"
+          gallery_id="$(out galleryResourceId)"
           rg_id="$(az group show --name "$RESOURCE_GROUP" --query id --output tsv)"
 
           az network nsg show --ids "$nsg_id" --output json |
@@ -142,9 +145,11 @@ jobs:
 
           { az role assignment list --scope "$rg_id" --assignee "$principal_id" --include-inherited --output json
             az role assignment list --scope "$registry_id" --assignee "$principal_id" --include-inherited --output json
+            az role assignment list --scope "$gallery_id" --assignee "$principal_id" --include-inherited --output json
           } | jq -s 'add | unique_by(.id)' |
             check "orchestrator role assignments are exact" \
-              '(map(.roleDefinitionName) | sort) == ["AcrPull", "Network Contributor", "Virtual Machine Contributor"]'
+              '(map(.roleDefinitionName) | sort) == ["AcrPull", "Network Contributor", "Reader", "Virtual Machine Contributor"]
+                and (map(select(.roleDefinitionName == "Reader")) | all(.scope | ascii_downcase | contains("/galleries/")))'
           echo "Foundation readbacks passed."
 
       - name: Import orchestrator image into ACR
@@ -178,7 +183,7 @@ jobs:
           set -euo pipefail
           az deployment group create \
             --resource-group "$RESOURCE_GROUP" \
-            --name "windows-jobs-${GITHUB_RUN_ID}" \
+            --name "windows-jobs" \
             --parameters infra/windows/main.bicepparam \
             --query properties.outputs --output json > "$RUNNER_TEMP/jobs.json"
 
@@ -201,6 +206,7 @@ jobs:
             if [[ -f "$RUNNER_TEMP/foundation.json" ]]; then
               jq -r '"- NAT egress IP: `\(.natGatewayPublicIpAddress.value)`",
                 "- ACR: `\(.registryLoginServer.value)`",
+                "- Build subnet: `\(.buildSubnetResourceId.value)`",
                 "- Image definition: `\(.imageDefinitionResourceId.value)`"' "$RUNNER_TEMP/foundation.json"
             fi
             if [[ -f "$RUNNER_TEMP/jobs.json" ]]; then

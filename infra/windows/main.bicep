@@ -96,6 +96,7 @@ module compute './modules/compute.bicep' = {
     galleryName: galleryName
     imageDefinitionName: imageDefinitionName
     vmssName: vmssName
+    galleryReaderPrincipalId: orchestratorIdentity.outputs.principalId
     tags: tags
   }
 }

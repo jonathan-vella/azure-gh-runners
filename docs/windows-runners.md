@@ -66,8 +66,8 @@ code.
 | No identity or secrets on the worker | The VM has no managed identity. `customData` carries only the one-time JIT configuration and non-secret policy. Only the orchestrator holds the GitHub App key. |
 | No inbound | The worker NSG has an explicit deny-all inbound rule and no inbound allow. The VM has no public IP. |
 | Closed network | Own VNet (`10.61.0.0/24` by default). No peering, no private DNS zones, no private endpoints, no link to the ACA platform VNet. A readback in the deploy workflow checks this. |
-| Controlled egress | The NAT Gateway static IP is the only public IP. The NSG allows outbound 443 and 80 to the internet and DNS to Azure DNS, and denies all private ranges (`10/8`, `172.16/12`, `192.168/16`, `100.64/10`), including other workers. Other outbound internet ports are not blocked by default. |
-| Own identities and scope | The deploy identity `sp-ghrunners-windows-deploy` is scoped to the Windows resource group only. The orchestrator identity has exactly Virtual Machine Contributor, Network Contributor and AcrPull. The Linux deploy identity is not used or widened. |
+| Controlled egress | The NAT Gateway static IP is the only public IP. The NSG allows outbound 443 and 80 to the internet and DNS to Azure DNS, and denies every other internet port and all private ranges (`10/8`, `172.16/12`, `192.168/16`, `100.64/10`), including other workers. |
+| Own identities and scope | The deploy identity `sp-ghrunners-windows-deploy` is scoped to the Windows resource group only. The orchestrator identity has exactly Virtual Machine Contributor, Network Contributor and AcrPull at the resource group (the registry for AcrPull), plus Reader on the gallery only. The Linux deploy identity is not used or widened. |
 | Bounded blast radius | Concurrency is capped by the consumer's `maxRunners`; every VM has an `expiresUtc`; the janitor reaps leaks; the worker shuts itself down when the runner exits. |
 | No ingress anywhere | The ACA environment and jobs expose no ingress. The environment is public but accepts no inbound traffic and is non-zonal (`zoneRedundant: false`, the AVM default of `true` caused capacity failures in the Linux platform). |
 
@@ -120,9 +120,9 @@ from `main`. It runs in the `platform-prod` environment but signs in with `vars.
 Windows identity. Stages:
 
 1. Build the orchestrator image to GHCR (skipped with `foundation_only`).
-2. Deploy the foundation with `deployJobs=false`, then read back: NSG has no inbound allow, the NAT IP is the only public
+2. Deploy the foundation with `deployJobs=false` (stable deployment name `windows-foundation`; its outputs, such as `buildSubnetResourceId`, are read by the image-bake workflow with `az deployment group show`), then read back: NSG has no inbound allow, the NAT IP is the only public
    IP, no peerings, no private DNS zones or private endpoints, the environment is non-zonal, and the orchestrator
-   identity's role assignments are exactly Virtual Machine Contributor, Network Contributor and AcrPull.
+   identity's role assignments are exactly Virtual Machine Contributor, Network Contributor, AcrPull and Reader on the gallery.
 3. `az acr import` the orchestrator image by digest.
 4. Deploy the jobs with `deployJobs=true` and read back that they have no ingress, run as `Main`, and receive only the
    App key as a secret environment variable.
@@ -136,9 +136,10 @@ creating resources. The runbook shows the command; it is not run by CI.
 
 ### Known assumptions to check at acceptance
 
-- VM Contributor and Network Contributor may not include read access to Compute Gallery image versions. If worker
-  creation fails with an authorization error on the gallery, the fix needs an explicit owner decision (for example Reader
-  scoped to the gallery only). The role set is intentionally not widened ahead of evidence.
+- Creating a VM from a Compute Gallery image needs read access to the image version, which Virtual Machine Contributor
+  and Network Contributor do not reliably provide. The orchestrator identity therefore also has the built-in **Reader**
+  role on the gallery resource only (not the resource group), which grants read of the gallery and its image versions and
+  nothing else. Confirm at acceptance that worker creation succeeds with exactly this set.
 - The orchestrator logs in with `az login --identity` inside ACA; this is expected to work but is unverified.
 - `az vm create --vmss` for a profile-less Flex scale set with a TrustedLaunch gallery image is unverified here.
 

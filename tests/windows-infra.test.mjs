@@ -49,7 +49,8 @@ test("worker NSG denies all inbound, allows no inbound, and denies private range
   }
   assert.match(network, /Allow-Internet-HTTPS[\s\S]*?destinationPortRange: '443'/);
   assert.match(network, /Allow-Internet-HTTP'[\s\S]*?destinationPortRange: '80'/);
-  assert.match(network, /Allow-Azure-DNS[\s\S]*?destinationPortRange: '53'/);
+  assert.match(network, /Allow-Azure-DNS[\s\S]*?destinationAddressPrefix: '168\.63\.129\.16'[\s\S]*?destinationPortRange: '53'/);
+  assert.match(network, /Deny-Internet-Other-Outbound[\s\S]*?access: 'Deny'[\s\S]*?destinationAddressPrefix: 'Internet'[\s\S]*?destinationPortRange: '\*'[\s\S]*?direction: 'Outbound'[\s\S]*?priority: 3900/);
 });
 
 test("NAT Gateway public IP is the only public IP and subnets use it without default outbound", () => {
@@ -77,10 +78,13 @@ test("ACA environment is non-zonal Consumption and no job or app has ingress", (
   assert.doesNotMatch(allBicep.map(([, text]) => text).join("\n"), /ingress|Microsoft\.App\/containerApps/);
 });
 
-test("orchestrator identity has exactly VM Contributor, Network Contributor and AcrPull", () => {
+test("orchestrator identity has exactly VM Contributor, Network Contributor, AcrPull and gallery-scoped Reader", () => {
   assert.match(main, /virtualMachineContributorRoleId = '9980e02c-c2be-4d73-94e8-173b1dc7cf3c'/);
   assert.match(main, /networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'/);
   assert.equal([...main.matchAll(/Microsoft\.Authorization\/roleAssignments@/g)].length, 2);
+  assert.match(compute, /readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'/);
+  assert.match(compute, /resource galleryReader [^\n]*roleAssignments@[\s\S]*?scope: galleryScope/);
+  assert.equal([...compute.matchAll(/Microsoft\.Authorization\/roleAssignments@/g)].length, 1);
   assert.equal([...main.matchAll(/roleDefinitionIdOrName: '(\w+)'/g)].map((m) => m[1]).join(), "AcrPull");
   const everything = allBicep.map(([, text]) => text).join("\n");
   assert.doesNotMatch(everything, /b24988ac-6180-42a0-ab88-20f7382dd24c|8e3af657-a8ff-443c-a75c-2fe8c4bcb635|'Contributor'|'Owner'/);
@@ -116,7 +120,7 @@ test("no personal identifiers, secrets or keys are hard-coded in the Windows bac
   for (const path of files) {
     const text = read(path);
     assert.doesNotMatch(text, /jonathan-vella|b47d2942-f5ad-4d3c|30bac921-1547|5ee406c4|BEGIN [A-Z ]*PRIVATE KEY/i, path);
-    assert.doesNotMatch(text, /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b(?<!9980e02c-c2be-4d73-94e8-173b1dc7cf3c|4d97b98b-1d4f-4787-a291-c67834d212e7|8e3af657-a8ff-443c-a75c-2fe8c4bcb635)/, `${path} contains a GUID`);
+    assert.doesNotMatch(text, /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b(?<!9980e02c-c2be-4d73-94e8-173b1dc7cf3c|4d97b98b-1d4f-4787-a291-c67834d212e7|8e3af657-a8ff-443c-a75c-2fe8c4bcb635|acdd72a7-3385-48ef-bd42-f606fba81ae7)/, `${path} contains a GUID`);
   }
 });
 
@@ -151,6 +155,8 @@ test("deploy workflow: dispatch only, main-only, dedicated identity, staged, SHA
   for (const readbackCheck of ["Deny-All-Inbound", "only public IP", "no peerings", "non-zonal", "role assignments are exact"]) {
     assert.ok(workflow.includes(readbackCheck), readbackCheck);
   }
+  assert.match(workflow, /--name "windows-foundation"/);
+  assert.match(workflow, /buildSubnetResourceId/);
   assert.doesNotMatch(workflow, /set -x|echo .*GH_APP_PRIVATE_KEY/);
 });
 
