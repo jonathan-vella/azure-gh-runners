@@ -8,6 +8,7 @@ const samplePath = path.join(__dirname, '..', 'config', 'consumers', 'example.js
 const sample = JSON.parse(fs.readFileSync(samplePath, 'utf8'));
 const {
   buildParameters,
+  buildWindowsConsumers,
   generateConsumers,
 } = require('../tools/generate-consumers.js');
 
@@ -215,7 +216,65 @@ test('refuses invalid JSON, schema violations, and policy violations without rep
   });
 });
 
-test('refuses VMSS consumers without writing deployment parameters', () => {
+const windowsSample = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', 'config', 'consumers', 'smoke-windows.json'), 'utf8'),
+);
+const windowsMetadata = { full_name: windowsSample.repo, private: false, default_branch: 'main' };
+
+test('Windows entries generate their own file and never reach the ACA parameters', () => {
+  withDirectory((directory) => {
+    const registry = path.join(directory, 'registry');
+    const output = path.join(directory, 'generated', 'consumers.json');
+    const windowsOutput = path.join(directory, 'generated', 'windows-consumers.json');
+    const acaOnly = (repo) => (repo === windowsSample.repo ? windowsMetadata : metadata);
+    writeConsumers(registry, [['example.json', sample]]);
+    generateConsumers({ directory: registry, destination: output, metadataProvider: acaOnly });
+    const acaBefore = fs.readFileSync(output, 'utf8');
+    assert.equal(fs.readFileSync(windowsOutput, 'utf8'), '[]\n');
+
+    writeConsumers(registry, [['example.json', sample], ['smoke-windows.json', windowsSample]]);
+    generateConsumers({ directory: registry, destination: output, metadataProvider: acaOnly });
+    assert.equal(fs.readFileSync(output, 'utf8'), acaBefore);
+    generateConsumers({
+      check: true, directory: registry, destination: output, metadataProvider: acaOnly,
+    });
+
+    const [worker] = JSON.parse(fs.readFileSync(windowsOutput, 'utf8'));
+    assert.deepEqual(Object.keys(worker), [
+      'name', 'owner', 'repo', 'label', 'vmSize', 'maxRunners', 'jobTimeoutMinutes', 'policy',
+    ]);
+    assert.deepEqual(
+      [worker.name, worker.owner, worker.repo, worker.label, worker.vmSize, worker.maxRunners, worker.jobTimeoutMinutes],
+      ['smoke-windows', 'jonathan-vella', 'ghr-smoke', 'ghr-smoke-windows', 'Standard_D4ds_v5', 1, 30],
+    );
+    assert.deepEqual(worker.policy, {
+      repository: windowsSample.repo,
+      visibility: 'public',
+      allowedEvents: ['workflow_dispatch'],
+      allowedRefs: ['refs/heads/main'],
+      allowedWorkflows: windowsSample.allowedWorkflows,
+    });
+
+    fs.writeFileSync(windowsOutput, '[]\n', 'utf8');
+    assert.throws(
+      () => generateConsumers({
+        check: true, directory: registry, destination: output, metadataProvider: acaOnly,
+      }),
+      /Windows consumers file is stale/,
+    );
+  });
+});
+
+test('Windows defaults the VM size and keeps ACA entries out of the Windows file', () => {
+  const [worker] = buildWindowsConsumers([
+    { filename: 'smoke-windows.json', consumer: { ...windowsSample, vmSize: undefined } },
+    { filename: 'example.json', consumer: sample },
+  ]);
+  assert.equal(worker.vmSize, 'Standard_D4ds_v5');
+  assert.equal(buildWindowsConsumers([{ filename: 'example.json', consumer: sample }]).length, 0);
+});
+
+test('refuses an invalid Windows entry without writing deployment files', () => {
   withDirectory((directory) => {
     const registry = path.join(directory, 'registry');
     const output = path.join(directory, 'generated', 'consumers.json');
@@ -223,7 +282,7 @@ test('refuses VMSS consumers without writing deployment parameters', () => {
 
     assert.throws(
       () => generateConsumers({ directory: registry, destination: output, metadataProvider: provider }),
-      /backend "vmss" is not supported in v1/,
+      /backend "vmss" is supported only with os "windows"/,
     );
     assert.equal(fs.existsSync(output), false);
   });

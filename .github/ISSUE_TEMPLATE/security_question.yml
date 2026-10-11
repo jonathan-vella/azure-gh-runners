@@ -1,0 +1,25 @@
+name: Security question
+description: General question about the security model (not a vulnerability report)
+labels: [security-question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not use this form to report a vulnerability.** Report those privately via the
+        [Security tab](https://github.com/jonathan-vella/azure-gh-runners/security/advisories/new) as described in
+        [SECURITY.md](https://github.com/jonathan-vella/azure-gh-runners/blob/main/SECURITY.md).
+
+        Use this form for questions such as how the policy floor works or whether a setup is safe to adopt.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: This is a question, not an undisclosed vulnerability, and it contains no secrets.
+          required: true

@@ -65,7 +65,7 @@ the owner accepts for this lab.
 - The Windows backend must be built: Windows image, PowerShell pre-job hook, orchestrator, isolated infrastructure and
   deploy identity, registry support. Work is tracked in
   [#93](https://github.com/jonathan-vella/azure-gh-runners/issues/93) and issues #94–#99.
-- The closed VMSS spike code (`spikes/vmss-flex/`) targeted Linux with bash bootstrap and a Go controller. The final
+- The closed VMSS spike code ([`spikes/vmss-flex/`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae/spikes/vmss-flex), removed from the tree) targeted Linux with bash bootstrap and a Go controller. The final
   design does **not** reuse it: the orchestrator is a small ACA event job (see below). The spike stays archival.
 - Windows workers cold-start for several minutes per job. That is negligible for a 40-minute job and poor for short ones.
 - Cost evidence from the research doc (dated background): D4s_v5 Windows about $0.388 per hour pay-as-you-go. Actual

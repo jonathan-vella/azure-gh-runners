@@ -4,18 +4,8 @@
 param location string = 'swedencentral'
 param workspaceName string = 'law-ghrunners-prod-swc'
 
-var governanceTags = {
-  application: 'ghrunners'
-  environment: 'prod'
-  workload: 'gh-runners'
-  owner: 'jonathan-vella'
-  costcenter: 'platform-engineering'
-  'tech-contact': 'jonathan-vella'
-  'technical-contact': 'jonathan-vella'
-  sla: 'development'
-  'backup-policy': 'none'
-  'maint-window': 'none'
-}
+@description('Governance tags, sourced from infra/network-config.json.')
+param governanceTags object
 
 module logAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.16.1' = {
   name: 'log-analytics-workspace'

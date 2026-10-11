@@ -1,4 +1,10 @@
+# The maintainer reviews every change. The last matching pattern wins.
+* @jonathan-vella
 /.github/ @jonathan-vella
 /infra/ @jonathan-vella
 /image/ @jonathan-vella
 /config/ @jonathan-vella
+/tools/ @jonathan-vella
+/tests/ @jonathan-vella
+/SECURITY.md @jonathan-vella
+/AGENTS.md @jonathan-vella

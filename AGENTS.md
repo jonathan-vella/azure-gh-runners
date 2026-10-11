@@ -33,7 +33,7 @@ below applies to consumer jobs that target this platform's self-hosted runners.
 | `image/` | Runner image definition, initialization/entrypoint scripts, and pre-job policy hook. |
 | `infra/` | Resource-group Bicep entrypoint and parameter file; reusable Bicep modules belong in `infra/modules/`. |
 | `tools/` | Registry validation and generation tooling. |
-| `spikes/`, `infra/spike7/`, `tools/spike*`, `tools/spikes/`, spike workflows | Archival spike harnesses only; not part of `npm run validate` and not to be run or extended. |
+| Removed spikes | The archival spike harnesses (`spikes/`, `infra/spike7/`, `tools/spike*`, `tools/spikes/`, spike workflows) no longer exist in the tree. They remain in git history at commit [`25c0519`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae); do not restore or extend them. |
 | Root config and manifests | `package.json` defines validation commands; `package-lock.json` pins Node dependencies; `bicepconfig.json`, `.markdownlint-cli2.jsonc`, `.editorconfig`, and `.gitignore` define repository tooling and conventions. |
 
 Some directories currently contain only placeholders. Implement functionality in its assigned area as the related
@@ -120,9 +120,15 @@ local check.
   GitHub bindings. Stop on unexpected state; do not recreate or expand permissions.
 - [GitHub App runbook](docs/runbooks/github-app.md) — App permissions, installation scope, key handling, and rotation.
 - [Observability](docs/observability.md) — Log Analytics network exception and diagnostic-settings contract.
-
-Architecture, consumer onboarding, operations, and security guides are tracked as documentation issues in the backlog.
-Add links here when those files exist; do not create speculative or duplicate instructions in this guide.
+- [Architecture](docs/architecture.md) — components, trust boundaries, network/DNS flow, staged deployment.
+- [Consumer onboarding](docs/onboarding-consumer.md) — deterministic checklist to onboard a repository to the ACA backend.
+- [Operations](docs/operations.md) — deploy, image rebuild, key rotation, recovery after resource-group deletion,
+  troubleshooting.
+- [Security model](docs/security.md) — threats, controls, residual risks, scoped Windows exception.
+- [Smoke test](docs/smoke.md) — positive and negative smoke checks and how outcomes are observed.
+- [Adopting this project](docs/adopting.md) — what to replace and the bootstrap order when you fork the repository.
+- [Contributing](CONTRIBUTING.md) and [security policy](SECURITY.md) — contribution workflow and private vulnerability
+  reporting.
 
 ## Change conventions
 

@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "name": "smoke-windows",
+    "owner": "jonathan-vella",
+    "repo": "ghr-smoke",
+    "label": "ghr-smoke-windows",
+    "vmSize": "Standard_D4ds_v5",
+    "maxRunners": 1,
+    "jobTimeoutMinutes": 30,
+    "policy": {
+      "repository": "jonathan-vella/ghr-smoke",
+      "visibility": "public",
+      "allowedEvents": [
+        "workflow_dispatch"
+      ],
+      "allowedRefs": [
+        "refs/heads/main"
+      ],
+      "allowedWorkflows": [
+        "jonathan-vella/ghr-smoke/.github/workflows/smoke-windows.yml@refs/heads/main"
+      ]
+    }
+  }
+]

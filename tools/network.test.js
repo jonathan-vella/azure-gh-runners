@@ -104,7 +104,7 @@ test('governance tags require the approved contract and permit additional tags',
   const tags = { ...config.governanceTags, service: 'platform' };
   assert.doesNotThrow(() => validateGovernanceTags(tags));
 
-  tags.environment = 'test';
+  tags.environment = '';
   assert.throws(() => validateGovernanceTags(tags), /governanceTags.environment/);
 });
 

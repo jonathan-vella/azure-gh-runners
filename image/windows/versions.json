@@ -1,0 +1,59 @@
+{
+  "platform": "windows/amd64",
+  "baseImage": {
+    "publisher": "MicrosoftWindowsServer",
+    "offer": "WindowsServer",
+    "sku": "2025-datacenter-azure-edition",
+    "hyperVGeneration": "V2"
+  },
+  "runner": {
+    "version": "2.338.0",
+    "url": "https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-win-x64-2.338.0.zip",
+    "sha256": "f48e0750a21812bca5f82de5f7f5aeae71abee647fab5a582f1742d07eba455f",
+    "kind": "zip"
+  },
+  "downloads": {
+    "node": {
+      "version": "24.21.0",
+      "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-x64.zip",
+      "sha256": "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
+      "kind": "zip"
+    },
+    "git": {
+      "version": "2.56.0",
+      "url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/Git-2.56.0.2-64-bit.exe",
+      "sha256": "52188f917b378f00c70ec136bcf090005f30d44fbc4eba0bce759cc6592d60f6",
+      "kind": "exe"
+    },
+    "python": {
+      "version": "3.13.16",
+      "url": "https://www.python.org/ftp/python/3.13.16/python-3.13.16-amd64.exe",
+      "sha256": "fb4f9f5d438b2396da0086dc70b935c530cb578e37adc6d354f7ad2037fee83b",
+      "kind": "exe"
+    },
+    "pwsh": {
+      "version": "7.6.6",
+      "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.6/PowerShell-7.6.6-win-x64.msi",
+      "sha256": "958838ff55091e1c8705d89efed0cc7e8245a3a6ef6c0ccfae20015227108ad8",
+      "kind": "msi"
+    },
+    "azureCli": {
+      "version": "2.91.0",
+      "url": "https://azcliprod.blob.core.windows.net/msi/azure-cli-2.91.0-x64.msi",
+      "sha256": "e9f512d127a9bc6c3832b928ccbf04ab9467a199bca63a1155f9d533ceb9f461",
+      "kind": "msi"
+    },
+    "bicep": {
+      "version": "0.48.1",
+      "url": "https://github.com/Azure/bicep/releases/download/v0.48.1/bicep-win-x64.exe",
+      "sha256": "398af294cf16ac4becdbd008a77d148d0e8e91492309a6b60ec911b7e1cab082",
+      "kind": "binary"
+    },
+    "terraform": {
+      "version": "1.16.5",
+      "url": "https://releases.hashicorp.com/terraform/1.16.5/terraform_1.16.5_windows_amd64.zip",
+      "sha256": "01700102b7291f95c0ab61394b55bfd5f57a12ac65632c2c1958691c8cf438ef",
+      "kind": "zip"
+    }
+  }
+}

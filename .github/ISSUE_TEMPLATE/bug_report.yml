@@ -1,0 +1,41 @@
+name: Bug report
+description: Something in the platform, docs, or tooling does not behave as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste secrets, tokens, private keys, or subscription/tenant IDs you consider sensitive.
+        For vulnerabilities, use the private reporting link in SECURITY.md instead of this form.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Registry / consumer validation
+        - Pre-job hook / policy floor
+        - Runner image
+        - Infrastructure (Bicep)
+        - Deployment workflow
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps or logs
+      description: Relevant command output or workflow run excerpt, with secrets removed.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Commit SHA
+      description: The commit of this repository you are using.

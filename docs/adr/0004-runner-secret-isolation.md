@@ -7,7 +7,7 @@ give the GitHub App key to an init container, hand off only a JIT configuration 
 managed identity unavailable with `identitySettings` lifecycle `None`, and keep a scale-rule-only secret out of both
 containers.
 
-The 2026-10-07 spike harness (`tools/spike-job-identity-init/`, now archival) stopped at Container Apps environment
+The 2026-10-07 spike harness ([`tools/spike-job-identity-init/`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae/tools/spike-job-identity-init), since removed from the tree; see git history at commit [`25c0519`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae)) stopped at Container Apps environment
 provisioning with `ManagedEnvironmentCapacityHeavyUsageError` / `AKSCapacityHeavyUsage` in `swedencentral`. No job ran;
 its resource groups were deleted and verified absent. No further spikes will run.
 
