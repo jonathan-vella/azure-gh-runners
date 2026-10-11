@@ -4,7 +4,8 @@ Record significant decisions as `NNNN-short-title.md`, using sections Context, D
 
 v1 is Azure Container Apps (ACA) jobs for Linux, and no further spikes are planned. ADR-0001 to ADR-0005 record default
 decisions; the real `platform-prod` deployment and the `ghr-smoke` smoke test provide the live evidence. Windows
-runners use a separate, isolated VMSS Flex backend ([ADR-0007](0007-windows-vmss-isolated-runners.md)).
+runners are planned on a separate, isolated VMSS Flex backend ([ADR-0007](0007-windows-vmss-isolated-runners.md), not yet
+built).
 
 | ADR | Topic | Status | Backlog item |
 | --- | --- | --- | --- |

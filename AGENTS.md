@@ -9,10 +9,10 @@ below applies to consumer jobs that target this platform's self-hosted runners.
 
 1. Read the [PRD](docs/prd.md), [plan](docs/plan.md), [roadmap](docs/roadmap.md), and [backlog](docs/backlog.md).
 2. Work on an issue only after its dependencies are closed. Keep each branch and pull request scoped to one issue.
-3. v1 is Azure Container Apps (ACA) jobs for Linux. Windows runners use a separate, isolated VMSS Flex backend
-   ([ADR-0007](docs/adr/0007-windows-vmss-isolated-runners.md), tracked in #93); a Linux VMSS Flex backend in the
-   private network stays rejected. No further spikes are planned. Follow the default decisions in `docs/adr/`; the real
-   `platform-prod` deployment and the `ghr-smoke` smoke test prove them.
+3. v1 is Azure Container Apps (ACA) jobs for Linux. Windows runners are planned on a separate, isolated VMSS Flex
+   backend ([ADR-0007](docs/adr/0007-windows-vmss-isolated-runners.md), tracked in #93, not yet built); a Linux VMSS
+   Flex backend in the private network stays rejected. No further spikes are planned. Follow the default decisions in
+   `docs/adr/`; the real `platform-prod` deployment and the `ghr-smoke` smoke test prove them.
 4. Check the relevant runbook before touching identity or GitHub App setup. These describe existing production resources;
    do not recreate them or change Azure/GitHub settings as part of ordinary repository work.
 5. Run `npm run validate` after repository changes. Do not deploy the platform from a local checkout.
@@ -75,11 +75,11 @@ local check.
   `pull_request` only where the documented policy permits it. Registry entries may narrow, never widen, the floor.
   Enforce policy in both registry validation and the runner's pre-job hook. These restrictions do not prohibit ordinary
   GitHub-hosted platform PR validation. **The only authorized exception** (owner decision 2026-10-11, ADR-0007, PRD
-  SR-9) applies to the isolated Windows backend alone: a public consumer may opt into `pull_request` when workers are
-  ephemeral with no identity or secrets and no link to the ACA platform, the entry sets an explicit acknowledgement
-  flag, and fork-PR approval for all outside collaborators is enabled and verified. `pull_request_target` and
-  `workflow_run` stay rejected everywhere, and the floor is unchanged for ACA. Any other relaxation needs an explicit
-  owner decision.
+  SR-9) is planned for the isolated Windows backend alone: a public consumer may opt into `pull_request` when workers
+  are ephemeral with no identity or secrets and no link to the ACA platform, the entry sets an explicit acknowledgement
+  flag, the hook accepts only open same-repository (non-fork) pull requests, and fork-PR approval for all outside
+  collaborators is enabled and verified. `pull_request_target` and `workflow_run` stay rejected everywhere, and the
+  floor is unchanged for ACA. Any other relaxation needs an explicit owner decision.
 - **Keep runner job code unprivileged.** The main runner container must receive no secret environment variables and no
   usable managed identity. GitHub App credentials are for the init/scaling path, not job steps.
 - **Never commit or print secrets, keys, or tokens.** Do not put credentials in source, generated artifacts, logs, or
