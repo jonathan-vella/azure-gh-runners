@@ -44,4 +44,5 @@ test will prove it. If the deployed KEDA version behaves differently, update thi
 
 ## Status
 
-Accepted (default, pending live smoke), 2026-10-08.
+Accepted, live-verified 2026-10-11: `runs-on: ghr-smoke` (single custom label, `noDefaultLabels: true`) matched the
+scaler, started an execution, and ran the job on the generated JIT runner.

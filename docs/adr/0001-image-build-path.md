@@ -30,4 +30,6 @@ and the `ghr-smoke` smoke test will prove it.
 
 ## Status
 
-Accepted (default, pending live smoke), 2026-10-08.
+Accepted, live-verified 2026-10-11: the staged deploy built both images on a GitHub-hosted runner, pushed them to private
+GHCR, `az acr import` copied them into the private ACR by digest, and the ACA job pulled and ran them. The ACR agent pool
+was not needed.

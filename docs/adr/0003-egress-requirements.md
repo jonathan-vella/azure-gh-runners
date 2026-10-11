@@ -48,7 +48,9 @@ smoke test will prove that the scaler wakes the job and the runner reaches GitHu
 
 ## Status
 
-Accepted (default, pending live smoke), 2026-10-08.
+Accepted, live-verified 2026-10-11 for function: with the NAT-egress, outbound-443 design, KEDA scaled the job from zero
+and the runner reached GitHub and ran a job. The exact network origin of the KEDA polling is still not determined and
+is not an acceptance criterion.
 
 ## References
 
