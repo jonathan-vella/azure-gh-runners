@@ -20,10 +20,31 @@ const resourcePairs = Array.from({ length: 16 }, (_, index) => {
   return [`${cpu} vCPU / ${memory}`, consumer({ cpu, memory })];
 });
 
+const windowsSample = JSON.parse(fs.readFileSync(path.join(root, "config", "consumers", "smoke-windows.json"), "utf8"));
+
+function windows(overrides) {
+  return { ...windowsSample, ...overrides };
+}
+
 const validFixtures = [
   ["documented sample", sample],
   ["legacy sample without a backend", sample],
   ["explicit ACA backend", acaSample],
+  ["Windows VMSS consumer", windowsSample],
+  ["Windows VMSS consumer with default VM size", windows({ vmSize: undefined })],
+  ["Windows VMSS limits at their bounds", windows({ maxRunners: 5, jobTimeoutMinutes: 360 })],
+  ["Windows VMSS minimum limits", windows({ maxRunners: 1, jobTimeoutMinutes: 1 })],
+  [
+    "Windows VMSS acknowledged public pull request",
+    windows({
+      allowedEvents: ["workflow_dispatch", "pull_request"],
+      acknowledgePublicPullRequestRisk: true
+    })
+  ],
+  [
+    "Windows VMSS private pull request without acknowledgement",
+    windows({ visibility: "private", allowedEvents: ["workflow_dispatch", "pull_request"] })
+  ],
   ...resourcePairs,
   ["minimum integer values", consumer({ maxExecutions: 1, replicaTimeoutSeconds: 1 })],
   [
@@ -42,7 +63,28 @@ const invalidFixtures = [
   ["zero concurrent executions", consumer({ maxExecutions: 0 })],
   ["zero replica timeout", consumer({ replicaTimeoutSeconds: 0 })],
   ["unknown backend", consumer({ backend: "container-apps" })],
-  ["VMSS backend", consumer({ backend: "vmss" })],
+  ["VMSS backend without os", consumer({ backend: "vmss", cpu: undefined, memory: undefined, maxExecutions: undefined, replicaTimeoutSeconds: undefined, maxRunners: 1, jobTimeoutMinutes: 30 })],
+  ["VMSS backend with ACA sizing fields", windows({ cpu: 1, memory: "2Gi" })],
+  ["VMSS backend with ACA execution fields", windows({ maxExecutions: 1, replicaTimeoutSeconds: 60 })],
+  ["VMSS backend with linux os", windows({ os: "linux" })],
+  ["VMSS backend without maxRunners", windows({ maxRunners: undefined })],
+  ["VMSS backend without jobTimeoutMinutes", windows({ jobTimeoutMinutes: undefined })],
+  ["VMSS maxRunners of zero", windows({ maxRunners: 0 })],
+  ["VMSS maxRunners above the cap", windows({ maxRunners: 6 })],
+  ["VMSS timeout of zero", windows({ jobTimeoutMinutes: 0 })],
+  ["VMSS timeout above the cap", windows({ jobTimeoutMinutes: 361 })],
+  ["VMSS VM size outside the allowlist", windows({ vmSize: "Standard_E64s_v5" })],
+  ["os windows without the VMSS backend", consumer({ os: "windows" })],
+  ["os windows with explicit ACA backend", { ...acaSample, os: "windows" }],
+  ["VMSS VM size on ACA", consumer({ vmSize: "Standard_D4ds_v5" })],
+  ["VMSS acknowledgement on ACA", consumer({ allowedEvents: ["workflow_dispatch", "pull_request"], acknowledgePublicPullRequestRisk: true })],
+  ["Windows VMSS public pull request without acknowledgement", windows({ allowedEvents: ["workflow_dispatch", "pull_request"] })],
+  ["acknowledgement set to false", windows({ allowedEvents: ["pull_request"], acknowledgePublicPullRequestRisk: false })],
+  ["acknowledgement without pull_request", windows({ acknowledgePublicPullRequestRisk: true })],
+  ["acknowledgement on a private consumer", windows({ visibility: "private", allowedEvents: ["pull_request"], acknowledgePublicPullRequestRisk: true })],
+  ["Windows VMSS pull_request_target", windows({ allowedEvents: ["pull_request_target"], acknowledgePublicPullRequestRisk: true })],
+  ["Windows VMSS workflow_run", windows({ allowedEvents: ["workflow_run"], acknowledgePublicPullRequestRisk: true })],
+  ["Windows VMSS public multiple refs", windows({ allowedRefs: ["refs/heads/main", "refs/heads/release"] })],
   ["VMSS SKU field", consumer({ vmSku: "Standard_D2ls_v5" })],
   ["VMSS runner limit field", consumer({ maxRunners: 1 })],
   ["VMSS job timeout field", consumer({ jobTimeoutMinutes: 60 })],

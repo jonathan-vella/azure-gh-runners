@@ -482,9 +482,12 @@ deploy identity that never widens `sp-ghrunners-platform-prod`.
   `backend: vmss` with `os: windows` only; ACA output stays byte-identical. Scoped exception: a public consumer may opt
   into `pull_request` on this backend with an explicit acknowledgement flag; the hook accepts only open
   same-repository (non-fork) pull requests; `pull_request_target`/`workflow_run` still rejected; PowerShell pre-job hook
-  enforces it, fail closed.
+  enforces it, fail closed. Worker side implemented: schema, validator, generator (`infra/generated/windows-consumers.json`),
+  `config/consumers/smoke-windows.json`, `image/windows/hooks/job-started.ps1`; offline-tested only.
 - `win-image` ([#95](https://github.com/jonathan-vella/azure-gh-runners/issues/95)): Windows Server 2025 image in a
   Compute Gallery with the runner agent, pinned Node LTS and tools, plus the hook. No identity or secrets baked in.
+  Implemented in `image/windows/`, `.github/workflows/build-windows-image.yml` and
+  [`docs/windows-image.md`](windows-image.md); not live-verified until the first workflow run.
 - `win-iac` ([#98](https://github.com/jonathan-vella/azure-gh-runners/issues/98)): VMSS Flex Bicep (AVM at exact
   versions), controller host, dedicated deploy identity and GitHub environment, cost estimate.
 - `win-controller` ([#97](https://github.com/jonathan-vella/azure-gh-runners/issues/97)): scales from the queue, mints

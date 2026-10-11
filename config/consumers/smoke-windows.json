@@ -1,0 +1,23 @@
+{
+  "name": "smoke-windows",
+  "repo": "jonathan-vella/ghr-smoke",
+  "visibility": "public",
+  "backend": "vmss",
+  "os": "windows",
+  "labels": [
+    "ghr-smoke-windows"
+  ],
+  "vmSize": "Standard_D4ds_v5",
+  "maxRunners": 1,
+  "jobTimeoutMinutes": 30,
+  "allowedEvents": [
+    "workflow_dispatch"
+  ],
+  "allowedRefs": [
+    "refs/heads/main"
+  ],
+  "allowedWorkflows": [
+    "jonathan-vella/ghr-smoke/.github/workflows/smoke-windows.yml@refs/heads/main"
+  ],
+  "notes": "Windows backend smoke test on the isolated VMSS Flex runner. See ADR-0007."
+}

@@ -106,8 +106,8 @@ function isValidBranchRef(ref) {
   }
 }
 
-function rememberUnique(map, value, filename, label, errors) {
-  const normalized = value.toLowerCase();
+function rememberUnique(map, value, filename, label, errors, scope = '') {
+  const normalized = `${value.toLowerCase()}${scope}`;
   const previous = map.get(normalized);
   if (previous) {
     errors.push(`${filename}: ${label} "${value}" duplicates ${previous}.`);
@@ -151,20 +151,23 @@ function validateRegistry(entries, metadataProvider = getGitHubRepoMetadata) {
 
   for (const { filename, consumer } of entries) {
     if (consumer && Array.isArray(consumer.allowedEvents)) {
+      const publicPullRequestAcknowledged = consumer.backend === 'vmss'
+        && consumer.acknowledgePublicPullRequestRisk === true;
       for (const event of consumer.allowedEvents) {
         if (forbiddenEvents.has(event)) {
           errors.push(`${filename}: event "${event}" is never allowed.`);
         } else if (
           consumer.visibility === 'public'
           && !publicEvents.has(event)
+          && !(event === 'pull_request' && publicPullRequestAcknowledged)
         ) {
           errors.push(`${filename}: public repositories cannot allow event "${event}".`);
         }
       }
     }
 
-    if (consumer && consumer.backend === 'vmss') {
-      errors.push(`${filename}: backend "vmss" is not supported in v1; only "aca" is accepted (ADR-0006).`);
+    if (consumer && consumer.backend === 'vmss' && consumer.os !== 'windows') {
+      errors.push(`${filename}: backend "vmss" is supported only with os "windows" (ADR-0007).`);
       continue;
     }
 
@@ -180,7 +183,15 @@ function validateRegistry(entries, metadataProvider = getGitHubRepoMetadata) {
     }
 
     rememberUnique(names, consumer.name, filename, 'consumer name', errors);
-    rememberUnique(repositories, consumer.repo, filename, 'repository', errors);
+    // One repository may have one ACA (Linux) and one Windows entry; each needs its own runner label.
+    rememberUnique(
+      repositories,
+      consumer.repo,
+      filename,
+      'repository',
+      errors,
+      consumer.os === 'windows' ? '#windows' : '#linux',
+    );
 
     const localLabels = new Set();
     for (const label of consumer.labels) {
