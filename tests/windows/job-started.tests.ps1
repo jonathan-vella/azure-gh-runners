@@ -264,6 +264,7 @@ try {
         Assert-Rejected (Invoke-PullRequest -PayloadText '{not json')
         Assert-Rejected (Invoke-PullRequest -PayloadText '[]') 'invalid pull request payload'
         Assert-Rejected (Invoke-PullRequest -PayloadText '{"number":17}') 'pull request is not open'
+        Assert-Rejected (Invoke-PullRequest -PayloadText ((Get-Json (New-Payload)).Replace('"state":"open"', '"state":["open"]'))) 'pull request is not open'
         Assert-Rejected (Invoke-PullRequest -PayloadText ((Get-Json (New-Payload)).Replace('"state":"open"', '"state":"open","state":"closed"'))) 'duplicate JSON key'
     }
     Test-Case 'rejects pull_request when the policy does not list it' {

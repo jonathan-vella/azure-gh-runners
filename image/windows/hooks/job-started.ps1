@@ -221,7 +221,8 @@ function Invoke-PolicyCheck {
         $payload = ConvertFrom-StrictJson $payloadText
         Assert-Policy (Test-Dict $payload) 'invalid pull request payload'
         $pr = Get-Field $payload 'pull_request'
-        Assert-Policy ((Test-Dict $pr) -and ((Get-Field $pr 'state') -ceq 'open')) 'pull request is not open'
+        $state = Get-Field $pr 'state'
+        Assert-Policy ((Test-Dict $pr) -and ($state -is [string]) -and ($state -ceq 'open')) 'pull request is not open'
         $number = Get-Field $payload 'number'
         $prNumber = Get-Field $pr 'number'
         Assert-Policy (($number -is [long]) -and $number -gt 0 -and ($prNumber -is [long]) -and $prNumber -eq $number) 'invalid pull request number'
