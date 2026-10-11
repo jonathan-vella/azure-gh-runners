@@ -127,6 +127,6 @@ masked and discarded; the account is removed before sysprep, so no identity or s
 ## First-run checks (not yet performed)
 
 These cannot be proven offline, so the first live build and job must confirm them: the `ghr-runner` account can run a
-scheduled task created from SYSTEM with a password (batch logon right); `az bicep version` uses the pinned binary; the
+scheduled task created from SYSTEM with a password (batch logon right: the live smoke showed Windows Server 2025 does not grant it, so boot now grants `SeBatchLogonRight` to that account only, and job-mode errors go to `C:\ghr\logs\job.log`); `az bicep version` uses the pinned binary; the
 sysprep step shuts the VM down cleanly; and customData arrives at `C:\AzureData\CustomData.bin` before the 15-minute
 wait ends. Treat any deviation as a defect in this change, not as an operational detail.

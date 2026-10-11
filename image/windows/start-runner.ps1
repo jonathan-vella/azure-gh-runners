@@ -28,6 +28,7 @@ $script:PolicyPath = 'C:\ghr\policy.json'
 $script:JitPath = 'C:\ghr\work\jit.cfg'
 $script:HookPath = 'C:\ghr\hooks\job-started.ps1'
 $script:LogPath = 'C:\ghr\logs\start-runner.log'
+$script:JobLogPath = 'C:\ghr\logs\job.log'
 $script:RunnerUser = 'ghr-runner'
 $script:TaskName = 'ghr-runner-job'
 $script:MaxConfigBytes = 131072
@@ -157,6 +158,31 @@ function New-RunnerAccount {
     return $password
 }
 
+# Windows Server grants "Log on as a batch job" only to Administrators and a few service groups, so the scheduled task
+# for the non-admin runner account would be refused (logon failure 0xC000015B). Add the right for this account only.
+function Grant-BatchLogonRight {
+    $sid = (Get-LocalUser -Name $script:RunnerUser).SID.Value
+    $inf = Join-Path $env:TEMP 'ghr-rights.inf'
+    $db = Join-Path $env:TEMP 'ghr-rights.sdb'
+    & secedit.exe /export /cfg $inf /areas USER_RIGHTS | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'secedit export failed' }
+    $lines = @(Get-Content -LiteralPath $inf)
+    $found = $false
+    $updated = foreach ($line in $lines) {
+        if ($line -match '^SeBatchLogonRight\s*=') { $found = $true; '{0},*{1}' -f $line, $sid } else { $line }
+    }
+    if (-not $found) {
+        $updated = foreach ($line in $lines) {
+            $line
+            if ($line -match '^\[Privilege Rights\]') { 'SeBatchLogonRight = *{0}' -f $sid }
+        }
+    }
+    Set-Content -LiteralPath $inf -Value $updated -Encoding Unicode
+    & secedit.exe /configure /db $db /cfg $inf /areas USER_RIGHTS | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'secedit configure failed' }
+    Remove-Item -LiteralPath $inf, $db -Force -ErrorAction SilentlyContinue
+}
+
 function Start-RunnerTask {
     param([string]$Password)
     $pwsh = (Get-Process -Id $PID).Path
@@ -165,18 +191,23 @@ function Start-RunnerTask {
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $script:TaskName -Action $action -Settings $settings `
         -User "$($env:COMPUTERNAME)\$($script:RunnerUser)" -Password $Password -RunLevel Limited | Out-Null
-    Start-ScheduledTask -TaskName $script:TaskName
-    Start-Sleep -Seconds 5
-    $deadline = [DateTime]::UtcNow.AddMinutes($script:MaxRunMinutes)
-    while ((Get-ScheduledTask -TaskName $script:TaskName).State -eq 'Running') {
-        if ([DateTime]::UtcNow -ge $deadline) {
-            Write-Log 'runner exceeded the maximum run time'
-            Stop-ScheduledTask -TaskName $script:TaskName
-            break
+    # The JIT file is deleted as soon as job mode reads it, so a leftover file means the task failed before reaching the runner.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Start-ScheduledTask -TaskName $script:TaskName
+        Start-Sleep -Seconds 5
+        $deadline = [DateTime]::UtcNow.AddMinutes($script:MaxRunMinutes)
+        while ((Get-ScheduledTask -TaskName $script:TaskName).State -eq 'Running') {
+            if ([DateTime]::UtcNow -ge $deadline) {
+                Write-Log 'runner exceeded the maximum run time'
+                Stop-ScheduledTask -TaskName $script:TaskName
+                break
+            }
+            Start-Sleep -Seconds 5
         }
+        Write-Log ('runner task attempt {0} finished with result {1}' -f $attempt, (Get-ScheduledTaskInfo -TaskName $script:TaskName).LastTaskResult)
+        if (-not (Test-Path -LiteralPath $script:JitPath)) { break }
         Start-Sleep -Seconds 5
     }
-    Write-Log ('runner task finished with result {0}' -f (Get-ScheduledTaskInfo -TaskName $script:TaskName).LastTaskResult)
 }
 
 function Invoke-Shutdown {
@@ -193,6 +224,10 @@ function Invoke-Boot {
         $config = Read-WorkerConfig
         Write-Log 'boot: worker config accepted'
         $password = New-RunnerAccount
+        Grant-BatchLogonRight
+        # The runner account cannot write the SYSTEM-owned boot log, so job mode logs to its own file.
+        Write-SecretFile -Path $script:JobLogPath -Content ''
+        Set-FileAcl -Path $script:JobLogPath -RunnerRights 'M'
         Write-SecretFile -Path $script:PolicyPath -Content $config.PolicyJson
         Set-FileAcl -Path $script:PolicyPath -RunnerRights 'R'
         Write-SecretFile -Path $script:JitPath -Content $config.JitConfig
@@ -215,6 +250,7 @@ function Invoke-Boot {
 }
 
 function Invoke-Job {
+    $script:LogPath = $script:JobLogPath
     $jit = [System.IO.File]::ReadAllText($script:JitPath).Trim()
     Remove-Item -LiteralPath $script:JitPath -Force
     if (-not [regex]::IsMatch($jit, '\A[A-Za-z0-9+/_-]+={0,2}\z')) {
@@ -231,7 +267,7 @@ if ($MyInvocation.InvocationName -ne '.') {
             Invoke-Job
         }
         catch {
-            Write-Log ('job failed: {0}' -f $_.Exception.GetType().Name)
+            Write-Log ('job failed: {0}: {1}' -f $_.Exception.GetType().Name, $_.Exception.Message)
             exit 1
         }
     }
