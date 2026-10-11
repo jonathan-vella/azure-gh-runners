@@ -73,8 +73,11 @@ function Add-MachinePath {
 function Set-DirectoryAcl {
     param([string]$Path)
     # Administrators and SYSTEM only can write; the dedicated job account reads and executes.
-    & icacls.exe $Path /inheritance:r /grant:r 'NT AUTHORITY\SYSTEM:(OI)(CI)F' 'BUILTIN\Administrators:(OI)(CI)F' 'BUILTIN\Users:(OI)(CI)RX' | Out-Null
+    # Well-known SIDs avoid account-name resolution differences between images.
+    & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "icacls failed for $Path" }
+    Write-Host "ACL for ${Path}:"
+    & icacls.exe $Path | Write-Host
 }
 
 try {
