@@ -101,7 +101,7 @@ jobs:
           create_vm() {
             az network nic create --resource-group "$RG" --name "$1-nic" --location "$LOCATION" --subnet "$3" --output none
             az vm create --resource-group "$RG" --name "$1" --location "$LOCATION" --image "$2" --size "$VM_SIZE" \
-              --nics "$1-nic" --os-disk-name "$1-osdisk" --os-disk-delete-option Delete --nic-delete-option Delete \
+              --nics "$1-nic" --os-disk-name "$1-osdisk"               --os-disk-delete-option Delete --nic-delete-option Delete --storage-sku Premium_LRS \
               --admin-username ghradmin --admin-password "$VM_PASSWORD" --public-ip-address "" --nsg "" \
               --security-type TrustedLaunch --enable-secure-boot true --enable-vtpm true \
               --tags purpose=windows-image-build --output none
@@ -223,11 +223,11 @@ jobs:
               --features SecurityType=TrustedLaunch --output none
           fi
           vm_id="$(az vm show --resource-group "$RG" --name "$BUILD_VM" --query id --output tsv)"
-          # Same-region replica only.
+          # Same-region replica only, on Premium SSD (Premium SSD v2 is not supported for OS disks) so VM creation is fast.
           version_id="$(az sig image-version create --resource-group "$RG" --gallery-name "$GALLERY" \
             --gallery-image-definition "$DEFINITION" --gallery-image-version "$IMAGE_VERSION" \
             --virtual-machine "$vm_id" --target-regions "$LOCATION" --replica-count 1 \
-            --storage-account-type Standard_LRS --query id --output tsv)"
+            --storage-account-type Premium_LRS --query id --output tsv)"
           echo "VERSION_ID=$version_id" >> "$GITHUB_ENV"
           echo "version-id=$version_id" >> "$GITHUB_OUTPUT"
 
