@@ -1,7 +1,7 @@
 # Agent operating guide
 
 This public repository defines a shared Azure platform for ephemeral, private-network GitHub Actions runners. The
-platform is still being built; use the accepted design and issue dependencies rather than assuming planned components
+platform is live-verified on both backends (see the [README](README.md) status table); use the accepted design and issue dependencies rather than assuming planned components
 already exist. Ordinary platform pull-request validation runs on GitHub-hosted runners. The stricter trigger policy
 below applies to consumer jobs that target this platform's self-hosted runners.
 
@@ -10,7 +10,7 @@ below applies to consumer jobs that target this platform's self-hosted runners.
 1. Read the [PRD](docs/prd.md), [plan](docs/plan.md), [roadmap](docs/roadmap.md), and [backlog](docs/backlog.md).
 2. Work on an issue only after its dependencies are closed. Keep each branch and pull request scoped to one issue.
 3. v1 is Azure Container Apps (ACA) jobs for Linux. Windows runners use a separate, isolated VMSS Flex
-   backend ([ADR-0007](docs/adr/0007-windows-vmss-isolated-runners.md), tracked in #93; built, not yet live-verified); a Linux VMSS
+   backend ([ADR-0007](docs/adr/0007-windows-vmss-isolated-runners.md), tracked in #93; live-verified 2026-10-11); a Linux VMSS
    Flex backend in the private network stays rejected. No further spikes are planned. Follow the default decisions in
    `docs/adr/`; the real `platform-prod` deployment and the `ghr-smoke` smoke test prove them.
 4. Check the relevant runbook before touching identity or GitHub App setup. These describe existing production resources;
@@ -75,7 +75,7 @@ local check.
   `pull_request` only where the documented policy permits it. Registry entries may narrow, never widen, the floor.
   Enforce policy in both registry validation and the runner's pre-job hook. These restrictions do not prohibit ordinary
   GitHub-hosted platform PR validation. **The only authorized exception** (owner decision 2026-10-11, ADR-0007, PRD
-  SR-9) applies to the isolated Windows backend alone (built, not yet live-verified): a public consumer may opt into `pull_request` when workers
+  SR-9) applies to the isolated Windows backend alone (live-verified for `workflow_dispatch` only; the `pull_request` path has not been run live): a public consumer may opt into `pull_request` when workers
   are ephemeral with no identity or secrets and no link to the ACA platform, the entry sets an explicit acknowledgement
   flag, the hook accepts only open same-repository (non-fork) pull requests, and fork-PR approval for all outside
   collaborators is enabled and verified. `pull_request_target` and `workflow_run` stay rejected everywhere, and the

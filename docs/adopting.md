@@ -134,5 +134,5 @@ The optional network diagnostic settings stay off until you check the live categ
 
 The Linux ACA path has been deployed and smoke-tested in the maintainer's subscription (evidence in
 [smoke.md](smoke.md)). Nothing here has been validated in another tenant, so expect to fix issues the first time, and
-please report them. The Windows backend ([ADR-0007](adr/0007-windows-vmss-isolated-runners.md)) is not built yet and has
-no adoption steps.
+please report them. The Windows backend ([ADR-0007](adr/0007-windows-vmss-isolated-runners.md)) was also deployed and
+smoke-tested once; its steps are in [windows-runners](windows-runners.md) and [windows-image](windows-image.md).

@@ -4,9 +4,10 @@ Operator and adopter guide for the Windows backend. Decision record:
 [ADR-0007](adr/0007-windows-vmss-isolated-runners.md). Tracking issue:
 [#93](https://github.com/jonathan-vella/azure-gh-runners/issues/93).
 
-**Status: built, not yet live-verified.** The infrastructure, orchestrator and deployment workflow exist and pass offline
-validation. They have not been deployed, and no Windows job has run on them. Nothing here is proof of runtime behavior
-until the acceptance run ([#99](https://github.com/jonathan-vella/azure-gh-runners/issues/99)) records it.
+**Status: live-verified once (2026-10-11).** A Windows smoke job
+([run 38176888808](https://github.com/jonathan-vella/ghr-smoke/actions/runs/38176888808)) ran on an ephemeral Trusted
+Launch VM created by the orchestrator, and the VM, NIC, disk and runner registration were removed afterwards. The
+`pull_request` exception and the NSG outbound deny rules have not been exercised live.
 
 ## Why a second backend
 

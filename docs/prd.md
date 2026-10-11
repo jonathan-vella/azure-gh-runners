@@ -12,8 +12,8 @@
 A single, private-endpoint-only Azure platform that runs ephemeral self-hosted GitHub Actions runners for any of the
 owner's GitHub repositories. Linux runners execute as Azure Container Apps (ACA) event-driven jobs inside a dedicated
 VNet so consumer workflows can reach Azure resources that expose **only private endpoints**. Windows runners, which ACA
-cannot run, are planned on a separate **isolated** VMSS Flex backend with no link to that network
-([ADR-0007](adr/0007-windows-vmss-isolated-runners.md), not yet built). Repositories opt in through a typed consumer
+cannot run, run on a separate **isolated** VMSS Flex backend with no link to that network
+([ADR-0007](adr/0007-windows-vmss-isolated-runners.md), live-verified 2026-10-11). Repositories opt in through a typed consumer
 registry in this repo; nothing is project-specific.
 
 ## 2. Problem
@@ -90,7 +90,7 @@ runner/workload endpoints; this explicit exception is part of the architecture.
 | SR-6 | Least-privilege RBAC; `Microsoft.App/jobs/start/action` never granted broadly. |
 | SR-7 | All actions pinned by SHA; images pinned by digest; diagnostic logs for all resources. |
 | SR-8 | Consumers must use GitHub Environments restricted to the default branch and exact-subject Entra federated credentials. |
-| SR-9 | Scoped exception, planned for the isolated Windows backend only (owner decision 2026-10-11): a public consumer may opt into `pull_request` only when the worker is ephemeral, has no managed identity and no secrets, has no network link to the ACA platform, the entry sets an explicit acknowledgement flag, the hook accepts only open same-repository (non-fork) pull requests, and fork-PR approval for all outside collaborators is enabled and verified. `pull_request_target` and `workflow_run` stay rejected on every backend; SR-2 is unchanged for ACA. Validator and Windows hook both enforce it, fail closed ([ADR-0007](adr/0007-windows-vmss-isolated-runners.md)). |
+| SR-9 | Scoped exception for the isolated Windows backend only (owner decision 2026-10-11; backend live-verified for `workflow_dispatch`, the `pull_request` path not yet run live): a public consumer may opt into `pull_request` only when the worker is ephemeral, has no managed identity and no secrets, has no network link to the ACA platform, the entry sets an explicit acknowledgement flag, the hook accepts only open same-repository (non-fork) pull requests, and fork-PR approval for all outside collaborators is enabled and verified. `pull_request_target` and `workflow_run` stay rejected on every backend; SR-2 is unchanged for ACA. Validator and Windows hook both enforce it, fail closed ([ADR-0007](adr/0007-windows-vmss-isolated-runners.md)). |
 | SR-10 | Windows deployment uses its own identity and GitHub environment scoped to its own resource group; `sp-ghrunners-platform-prod` is never widened for it. |
 
 ## 8. Non-functional requirements
