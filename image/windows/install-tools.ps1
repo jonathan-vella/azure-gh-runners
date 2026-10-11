@@ -72,10 +72,27 @@ function Add-MachinePath {
 
 function Set-DirectoryAcl {
     param([string]$Path)
-    # Administrators and SYSTEM only can write; the dedicated job account reads and executes.
-    # Well-known SIDs avoid account-name resolution differences between images.
-    & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "icacls failed for $Path" }
+    # SYSTEM and Administrators may change the files; the dedicated job account reads and executes.
+    # The ACL is rebuilt explicitly with well-known SIDs: icacls /inheritance:r left explicit Authenticated Users
+    # entries on the first live image build.
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($identity in @($acl.Access | ForEach-Object { $_.IdentityReference } | Sort-Object -Property Value -Unique)) {
+        $acl.PurgeAccessRules($identity)
+    }
+    $inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    $propagation = [System.Security.AccessControl.PropagationFlags]::None
+    foreach ($entry in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @('S-1-5-32-545', 'ReadAndExecute'))) {
+        $sid = [System.Security.Principal.SecurityIdentifier]::new($entry[0])
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $entry[1], $inherit, $propagation, 'Allow')
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+    # Children created before this ACL existed keep stale inherited entries; reset them to inherit from the parent.
+    foreach ($child in @(Get-ChildItem -LiteralPath $Path -Recurse -Force)) {
+        & icacls.exe $child.FullName /reset | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls /reset failed for $($child.FullName)" }
+    }
     Write-Host "ACL for ${Path}:"
     & icacls.exe $Path | Write-Host
 }
