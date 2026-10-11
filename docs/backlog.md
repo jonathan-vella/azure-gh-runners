@@ -5,11 +5,15 @@ See [Roadmap](roadmap.md) for milestone exit criteria and [PRD](prd.md) for requ
 
 ## v1 scope (2026-10-08)
 
-v1 uses Azure Container Apps (ACA) jobs only and deploys directly into the existing `rg-ghrunners-prod-swc` through
+v1 uses Azure Container Apps (ACA) jobs for Linux and deploys directly into the existing `rg-ghrunners-prod-swc` through
 the `platform-prod` workflow. No further spikes are planned; ADR-0001 to ADR-0005 record default decisions proven by
 the real deployment and the `ghr-smoke` smoke test. **Historical:** the dual-backend/VMSS Flex plan (tracker #59,
 issues #60–#72, #81, #84) and the D4 evidence rule are superseded ([ADR-0006](adr/0006-vmss-flex-spike.md)); those
-issues will be closed and are omitted from the tables below.
+issues are closed and are omitted from the tables below.
+
+**Windows runners (2026-10-11):** ACA cannot run Windows. A separate, isolated VMSS Flex backend serves Windows jobs
+([ADR-0007](adr/0007-windows-vmss-isolated-runners.md)); work is in milestone M7 below, tracked by
+[#93](https://github.com/jonathan-vella/azure-gh-runners/issues/93). It does not gate v1.0.
 
 ## M0 - Foundation
 
@@ -95,6 +99,20 @@ Smoke-test consumer proves the platform end to end; v1.0 declared.
 | --- | --- | --- | --- | --- |
 | [#33](https://github.com/jonathan-vella/azure-gh-runners/issues/33) | `smoke-consumer` | Smoke-test consumer repo end to end | test, security | [#27](https://github.com/jonathan-vella/azure-gh-runners/issues/27), [#30](https://github.com/jonathan-vella/azure-gh-runners/issues/30) |
 | [#34](https://github.com/jonathan-vella/azure-gh-runners/issues/34) | `acceptance` | v1.0 acceptance and release | test | [#33](https://github.com/jonathan-vella/azure-gh-runners/issues/33), [#29](https://github.com/jonathan-vella/azure-gh-runners/issues/29), [#31](https://github.com/jonathan-vella/azure-gh-runners/issues/31), [#32](https://github.com/jonathan-vella/azure-gh-runners/issues/32), [#3](https://github.com/jonathan-vella/azure-gh-runners/issues/3) |
+
+## M7 - Isolated Windows runners (VMSS Flex)
+
+Ephemeral Windows workers in their own resource group and VNet, with no link to the ACA platform. Tracker:
+[#93](https://github.com/jonathan-vella/azure-gh-runners/issues/93). Does not gate v1.0.
+
+| Issue | ID | Title | Labels | Depends on |
+| --- | --- | --- | --- | --- |
+| [#96](https://github.com/jonathan-vella/azure-gh-runners/issues/96) | `win-profile` | Profile the slow apex-vnext Windows test step (optional baseline) | docs | — |
+| [#94](https://github.com/jonathan-vella/azure-gh-runners/issues/94) | `win-policy` | Registry support and scoped PR policy exception | registry, security | [#17](https://github.com/jonathan-vella/azure-gh-runners/issues/17) |
+| [#95](https://github.com/jonathan-vella/azure-gh-runners/issues/95) | `win-image` | Windows image in Compute Gallery | image | — |
+| [#98](https://github.com/jonathan-vella/azure-gh-runners/issues/98) | `win-iac` | Isolated infrastructure and deploy identity | infra, security | [#95](https://github.com/jonathan-vella/azure-gh-runners/issues/95) |
+| [#97](https://github.com/jonathan-vella/azure-gh-runners/issues/97) | `win-controller` | Scale-set controller and ephemeral worker lifecycle | infra | [#98](https://github.com/jonathan-vella/azure-gh-runners/issues/98), [#94](https://github.com/jonathan-vella/azure-gh-runners/issues/94) |
+| [#99](https://github.com/jonathan-vella/azure-gh-runners/issues/99) | `win-acceptance` | apex-vnext acceptance run | docs | [#97](https://github.com/jonathan-vella/azure-gh-runners/issues/97), [#95](https://github.com/jonathan-vella/azure-gh-runners/issues/95) |
 
 ## Item details
 
@@ -425,3 +443,26 @@ Acceptance criteria:
 - Automated check: no PaaS resource with public network access enabled; only public IP is the NAT egress IP
 - An agent onboarded the smoke repo from docs alone (evidence linked)
 - All M0-M5 issues closed; tag `v1.0.0` with release notes
+
+### M7 isolated Windows runners — details ([#93](https://github.com/jonathan-vella/azure-gh-runners/issues/93))
+
+Decision record: [ADR-0007](adr/0007-windows-vmss-isolated-runners.md). Isolation invariants for every M7 item: ephemeral
+worker (one job, then deleted), no managed identity and no secrets on the worker, own resource group and VNet with no
+peering or private DNS link to the ACA platform, NAT Gateway as the only public IP, small budget cap, and a dedicated
+deploy identity that never widens `sp-ghrunners-platform-prod`.
+
+- `win-profile` ([#96](https://github.com/jonathan-vella/azure-gh-runners/issues/96)): optional, non-blocking. Time each
+  `node --test` file on `windows-2025`; try a Defender exclusion and a faster drive; record baseline and target.
+- `win-policy` ([#94](https://github.com/jonathan-vella/azure-gh-runners/issues/94)): schema/validator/generator accept
+  `backend: vmss` with `os: windows` only; ACA output stays byte-identical. Scoped exception: a public consumer may opt
+  into `pull_request` on this backend with an explicit acknowledgement flag; `pull_request_target`/`workflow_run` still
+  rejected; PowerShell pre-job hook enforces it, fail closed.
+- `win-image` ([#95](https://github.com/jonathan-vella/azure-gh-runners/issues/95)): Windows Server 2025 image in a
+  Compute Gallery with the runner agent, pinned Node LTS and tools, plus the hook. No identity or secrets baked in.
+- `win-iac` ([#98](https://github.com/jonathan-vella/azure-gh-runners/issues/98)): VMSS Flex Bicep (AVM at exact
+  versions), controller host, dedicated deploy identity and GitHub environment, cost estimate.
+- `win-controller` ([#97](https://github.com/jonathan-vella/azure-gh-runners/issues/97)): scales from the queue, mints
+  one JIT config per worker, deletes the VM after one job, exact-owned cleanup of VM/NIC/disk/runner registration.
+- `win-acceptance` ([#99](https://github.com/jonathan-vella/azure-gh-runners/issues/99)): `apex-vnext`
+  `windows-package-tests` passes on the runner; wall time and cost recorded against the ~46-minute hosted baseline;
+  fork-PR approval for all outside collaborators verified; teardown leaves nothing behind.

@@ -10,9 +10,11 @@
 ## 1. Summary
 
 A single, private-endpoint-only Azure platform that runs ephemeral self-hosted GitHub Actions runners for any of the
-owner's GitHub repositories. Runners execute as Azure Container Apps (ACA) event-driven jobs inside a dedicated VNet so
-consumer workflows can reach Azure resources that expose **only private endpoints**. Repositories opt in through a typed
-consumer registry in this repo; nothing is project-specific.
+owner's GitHub repositories. Linux runners execute as Azure Container Apps (ACA) event-driven jobs inside a dedicated
+VNet so consumer workflows can reach Azure resources that expose **only private endpoints**. Windows runners, which ACA
+cannot run, use a separate **isolated** VMSS Flex backend with no link to that network
+([ADR-0007](adr/0007-windows-vmss-isolated-runners.md)). Repositories opt in through a typed consumer registry in this
+repo; nothing is project-specific.
 
 ## 2. Problem
 
@@ -23,6 +25,8 @@ consumer registry in this repo; nothing is project-specific.
 - GitHub-hosted larger runners with Azure VNet injection require a GitHub organization (Team or Enterprise Cloud).
 - Personal accounts cannot share self-hosted runners across repositories; each runner registers to exactly one repo.
 - GitHub warns that self-hosted runners on public repositories can be abused by fork pull requests.
+- ACA runs only Linux (`linux/amd64`) containers, and some jobs need Windows or faster Windows execution: the
+  `apex-vnext` `windows-2025 package tests` job takes about 46 minutes on a GitHub-hosted runner.
 
 ## 3. Goals
 
@@ -32,11 +36,14 @@ consumer registry in this repo; nothing is project-specific.
 4. Enforce a platform policy floor that makes public-repository use safe against fork pull requests.
 5. Make onboarding deterministic and documented well enough for an AI agent to execute it end to end.
 6. Keep idle cost near the fixed network and registry baseline (scale to zero).
+7. Provide ephemeral Windows runners, isolated from the private-endpoint platform, for jobs that need Windows or
+   faster Windows execution.
 
 ## 4. Non-goals
 
 - Replacing GitHub-hosted runners for ordinary CI (lint, test, PR checks) — those stay free on GitHub.
-- Windows runners, Docker-in-Docker, GPU, or jobs above 4 vCPU / 8 GiB.
+- Windows runners on the ACA platform, Docker-in-Docker, GPU, or jobs above 4 vCPU / 8 GiB. Windows is handled by the
+  separate isolated VMSS Flex backend (FR-11).
 - npm trusted publishing / provenance (unsupported on self-hosted runners).
 - Hosting consumer application infrastructure; consumers own their own private endpoints and resources.
 - Onboarding any specific consumer (for example `apex-vnext`) — tracked separately in that consumer's repo.
@@ -64,6 +71,7 @@ consumer registry in this repo; nothing is project-specific.
 | FR-8 | Platform deployed from this repo by GitHub-hosted workflows using OIDC: validation on PR, staged deploy (foundation with `deployJobs=false`, image import, then jobs with `deployJobs=true`) only through the main-only `platform-prod` workflow into the existing `rg-ghrunners-prod-swc`. |
 | FR-9 | Weekly image rebuild and scheduled GitHub App key rotation reminders. |
 | FR-10 | Platform outputs (subnet IDs, DNS zone IDs, labels) published for consumers. |
+| FR-11 | Windows backend: ephemeral Windows Server 2025 workers on VMSS Flex in their own resource group and VNet, one JIT runner and one job per VM, scaled from zero by a controller, using a pre-baked image from an Azure Compute Gallery and a PowerShell pre-job hook ([ADR-0007](adr/0007-windows-vmss-isolated-runners.md)). Selected per consumer in the registry (`backend: vmss`, `os: windows`). |
 
 **Observability network exception:** The Log Analytics workspace uses standard Azure Monitor endpoints with
 `publicNetworkAccessForIngestion` and `publicNetworkAccessForQuery` enabled; no AMPLS is deployed. Workspace local
@@ -82,6 +90,8 @@ runner/workload endpoints; this explicit exception is part of the architecture.
 | SR-6 | Least-privilege RBAC; `Microsoft.App/jobs/start/action` never granted broadly. |
 | SR-7 | All actions pinned by SHA; images pinned by digest; diagnostic logs for all resources. |
 | SR-8 | Consumers must use GitHub Environments restricted to the default branch and exact-subject Entra federated credentials. |
+| SR-9 | Scoped exception, isolated Windows backend only (owner decision 2026-10-11): a public consumer may opt into `pull_request` only when the worker is ephemeral, has no managed identity and no secrets, has no network link to the ACA platform, the entry sets an explicit acknowledgement flag, and fork-PR approval for all outside collaborators is enabled and verified. `pull_request_target` and `workflow_run` stay rejected on every backend; SR-2 is unchanged for ACA. Validator and Windows hook both enforce it, fail closed ([ADR-0007](adr/0007-windows-vmss-isolated-runners.md)). |
+| SR-10 | Windows deployment uses its own identity and GitHub environment scoped to its own resource group; `sp-ghrunners-platform-prod` is never widened for it. |
 
 ## 8. Non-functional requirements
 
@@ -95,8 +105,9 @@ runner/workload endpoints; this explicit exception is part of the architecture.
 
 ## 9. Constraints and assumptions
 
-- v1 uses ACA jobs only; VMSS Flex is rejected for v1 ([ADR-0006](adr/0006-vmss-flex-spike.md)). No further spikes are
-  planned.
+- ACA jobs (Linux) are the v1 backend. VMSS Flex is rejected as a Linux backend in the private network
+  ([ADR-0006](adr/0006-vmss-flex-spike.md)) and adopted only for isolated Windows runners
+  ([ADR-0007](adr/0007-windows-vmss-isolated-runners.md)). No further spikes are planned.
 - ADR-0001 to ADR-0005 record default decisions (GHCR → `az acr import` image path, Key Vault references, NAT egress,
   init-container isolation, custom-label routing). They are proven by the real deployment and the smoke test, not by
   separate spikes; each ADR names its fallback.
@@ -111,6 +122,8 @@ runner/workload endpoints; this explicit exception is part of the architecture.
 - Zero PaaS resources with public network access enabled (automated post-deploy check).
 - An agent onboards a new repo using only `docs/onboarding-consumer.md`.
 - No runner registration persists after its job completes.
+- Windows acceptance (backlog M7): `apex-vnext` `windows-package-tests` runs and passes on the isolated Windows runner,
+  with wall time recorded against the ~46-minute hosted baseline and no leftover worker VMs or registrations.
 
 ## 11. Risks
 
@@ -120,8 +133,10 @@ runner/workload endpoints; this explicit exception is part of the architecture.
 | App key compromise grants repo admin on all installed repos | Key only in KV + init container, selected-repo installation, rotation cadence. |
 | Image import into private ACR fails | ADR-0001: GHCR digest import with ACR trusted-services bypass; failures stop the staged deploy before jobs. |
 | Cross-consumer lateral movement | NSG lateral deny, RBAC; escalation path to per-consumer subnet/environment. |
+| Fork PR code runs on an isolated Windows worker (SR-9 exception) | Ephemeral workers, no identity or secrets, no link to the ACA platform, own resource group, budget cap, fork-PR approval for all outside collaborators. Residual: compute abuse and egress in a throwaway resource group. |
 | Undocumented platform behaviour | Default ADRs with recorded fallbacks, proven by the real deploy and `ghr-smoke` smoke test. |
 
 ## 12. Release criteria (v1.0)
 
-See [Roadmap](roadmap.md) milestone M6 and backlog item `acceptance`.
+See [Roadmap](roadmap.md) milestone M6 and backlog item `acceptance`. Windows runner work is tracked separately in
+milestone M7 and does not gate v1.0 ACA acceptance.
