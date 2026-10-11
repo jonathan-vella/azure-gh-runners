@@ -6,3 +6,5 @@ image/Dockerfile text eol=lf
 spikes/vmss-flex/*.sh text eol=lf
 spikes/vmss-flex/tests/*.sh text eol=lf
 spikes/vmss-flex/*.Dockerfile text eol=lf
+image/windows-orchestrator/*.mjs text eol=lf
+image/windows-orchestrator/Dockerfile text eol=lf

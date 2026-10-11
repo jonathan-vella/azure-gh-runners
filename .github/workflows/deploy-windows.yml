@@ -1,0 +1,209 @@
+name: Deploy Windows backend
+
+# Deploys the isolated Windows runner backend (ADR-0007) into its own resource group with its own Entra identity.
+# It never uses the Linux platform identity and is never run from a local checkout.
+on:
+  workflow_dispatch:
+    inputs:
+      foundation_only:
+        description: Deploy only the foundation; skip image build, import and orchestrator jobs
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-windows
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: rg-ghrunners-win-swc
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' && !inputs.foundation_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      orchestrator_digest: ${{ steps.push.outputs.orchestrator_digest }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and push orchestrator image
+        id: push
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DOCKER_BUILDKIT: '1'
+        run: |
+          set -euo pipefail
+          prefix="ghcr.io/${GITHUB_REPOSITORY,,}"
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null' EXIT
+          ref="${prefix}/windows-orchestrator:${GITHUB_SHA}"
+          docker build --platform linux/amd64 --file image/windows-orchestrator/Dockerfile --tag "$ref" .
+          docker push "$ref"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$ref")"
+          digest="${digest##*@}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "No digest for the orchestrator image." >&2; exit 1; }
+          echo "orchestrator_digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "windows-orchestrator: ${prefix}/windows-orchestrator@${digest}"
+
+  deploy:
+    needs: build
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      (needs.build.result == 'success' || (inputs.foundation_only && needs.build.result == 'skipped'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: platform-prod
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
+    env:
+      GHR_TAG_OWNER: ${{ github.repository_owner }}
+      WINDOWS_BUDGET_AMOUNT: ${{ vars.WINDOWS_BUDGET_AMOUNT || '0' }}
+      WINDOWS_BUDGET_EMAILS: ${{ vars.WINDOWS_BUDGET_EMAILS }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Require the dedicated Windows deploy identity
+        env:
+          WINDOWS_AZURE_CLIENT_ID: ${{ vars.WINDOWS_AZURE_CLIENT_ID }}
+        run: |
+          [[ -n "$WINDOWS_AZURE_CLIENT_ID" ]] || { echo "::error::Variable WINDOWS_AZURE_CLIENT_ID is not set. Run docs/runbooks/bootstrap-windows.md first."; exit 1; }
+
+      - name: Azure login (OIDC, Windows deploy identity)
+        uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.WINDOWS_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Require the existing resource group
+        run: |
+          set -euo pipefail
+          az group show --name "$RESOURCE_GROUP" --query name --output tsv >/dev/null ||
+            { echo "::error::Resource group $RESOURCE_GROUP does not exist. Run the bootstrap runbook."; exit 1; }
+
+      - name: Deploy foundation
+        env:
+          DEPLOY_JOBS: 'false'
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          GH_APP_ID: ${{ secrets.GH_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "windows-foundation-${GITHUB_RUN_ID}" \
+            --parameters infra/windows/main.bicepparam \
+            --query properties.outputs --output json > "$RUNNER_TEMP/foundation.json"
+
+      - name: Read back foundation
+        run: |
+          set -euo pipefail
+          out() { jq -er --arg name "$1" '.[$name].value' "$RUNNER_TEMP/foundation.json"; }
+          check() { local label="$1"; shift; jq -e "$@" >/dev/null || { echo "::error::Readback failed: $label"; exit 1; }; }
+          nsg_id="$(out networkSecurityGroupResourceId)"
+          vnet_id="$(out virtualNetworkResourceId)"
+          nat_ip_id="$(out natGatewayPublicIpResourceId)"
+          cae_id="$(out containerAppsEnvironmentResourceId)"
+          principal_id="$(out orchestratorIdentityPrincipalId)"
+          registry="$(out registryName)"
+          registry_id="$(az acr show --name "$registry" --resource-group "$RESOURCE_GROUP" --query id --output tsv)"
+          rg_id="$(az group show --name "$RESOURCE_GROUP" --query id --output tsv)"
+
+          az network nsg show --ids "$nsg_id" --output json |
+            check "NSG has no inbound allow and denies inbound" \
+              '[.securityRules[] | select(.direction == "Inbound" and .access == "Allow")] | length == 0
+                and any(.securityRules[]; .name == "Deny-All-Inbound" and .direction == "Inbound" and .access == "Deny")'
+          az network public-ip list --resource-group "$RESOURCE_GROUP" --output json |
+            check "only public IP is the NAT Gateway IP" --arg nat "$nat_ip_id" \
+              'length == 1 and (.[0].id | ascii_downcase) == ($nat | ascii_downcase)'
+          az network vnet show --ids "$vnet_id" --output json |
+            check "VNet has no peerings" '(.virtualNetworkPeerings // []) | length == 0'
+          az network private-dns zone list --resource-group "$RESOURCE_GROUP" --output json |
+            check "no private DNS zones or links" 'length == 0'
+          az network private-endpoint list --resource-group "$RESOURCE_GROUP" --output json |
+            check "no private endpoints" 'length == 0'
+          az resource show --ids "$cae_id" --output json |
+            check "ACA environment is non-zonal" '.properties.zoneRedundant == false'
+
+          { az role assignment list --scope "$rg_id" --assignee "$principal_id" --include-inherited --output json
+            az role assignment list --scope "$registry_id" --assignee "$principal_id" --include-inherited --output json
+          } | jq -s 'add | unique_by(.id)' |
+            check "orchestrator role assignments are exact" \
+              '(map(.roleDefinitionName) | sort) == ["AcrPull", "Network Contributor", "Virtual Machine Contributor"]'
+          echo "Foundation readbacks passed."
+
+      - name: Import orchestrator image into ACR
+        if: ${{ !inputs.foundation_only }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ORCHESTRATOR_IMAGE_DIGEST: ${{ needs.build.outputs.orchestrator_digest }}
+        run: |
+          set -euo pipefail
+          acr="$(jq -er '.registryName.value' "$RUNNER_TEMP/foundation.json")"
+          [[ "$ORCHESTRATOR_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::Invalid orchestrator digest."; exit 1; }
+          az acr import \
+            --name "$acr" \
+            --source "ghcr.io/${GITHUB_REPOSITORY,,}/windows-orchestrator@${ORCHESTRATOR_IMAGE_DIGEST}" \
+            --image "windows-orchestrator:${GITHUB_SHA}" \
+            --username "$GITHUB_ACTOR" \
+            --password "$GITHUB_TOKEN" \
+            --force \
+            --output none
+          echo "Imported windows-orchestrator@$ORCHESTRATOR_IMAGE_DIGEST"
+
+      - name: Deploy orchestrator jobs
+        if: ${{ !inputs.foundation_only }}
+        env:
+          DEPLOY_JOBS: 'true'
+          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          GH_APP_ID: ${{ secrets.GH_APP_ID }}
+          GH_APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          ORCHESTRATOR_IMAGE_DIGEST: ${{ needs.build.outputs.orchestrator_digest }}
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "windows-jobs-${GITHUB_RUN_ID}" \
+            --parameters infra/windows/main.bicepparam \
+            --query properties.outputs --output json > "$RUNNER_TEMP/jobs.json"
+
+          for job in $(jq -r '.windowsJobNames.value[]' "$RUNNER_TEMP/jobs.json"); do
+            az resource show --resource-group "$RESOURCE_GROUP" --name "$job" \
+              --resource-type Microsoft.App/jobs --output json |
+              jq -e '.properties.provisioningState == "Succeeded"
+                and (.properties.configuration.ingress == null)
+                and ([.properties.template.containers[].env[]? | select(.secretRef != null) | .name] == ["GH_APP_PRIVATE_KEY"])
+                and (.properties.configuration.identitySettings | all(.lifecycle == "Main"))' >/dev/null ||
+              { echo "::error::Readback failed for $job"; exit 1; }
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Windows backend deployment"
+            if [[ -f "$RUNNER_TEMP/foundation.json" ]]; then
+              jq -r '"- NAT egress IP: `\(.natGatewayPublicIpAddress.value)`",
+                "- ACR: `\(.registryLoginServer.value)`",
+                "- Image definition: `\(.imageDefinitionResourceId.value)`"' "$RUNNER_TEMP/foundation.json"
+            fi
+            if [[ -f "$RUNNER_TEMP/jobs.json" ]]; then
+              jq -r '.windowsJobNames.value[] | "- ACA orchestrator job: `\(.)`"' "$RUNNER_TEMP/jobs.json"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -460,10 +460,18 @@ deploy identity that never widens `sp-ghrunners-platform-prod`.
   enforces it, fail closed.
 - `win-image` ([#95](https://github.com/jonathan-vella/azure-gh-runners/issues/95)): Windows Server 2025 image in a
   Compute Gallery with the runner agent, pinned Node LTS and tools, plus the hook. No identity or secrets baked in.
-- `win-iac` ([#98](https://github.com/jonathan-vella/azure-gh-runners/issues/98)): VMSS Flex Bicep (AVM at exact
-  versions), controller host, dedicated deploy identity and GitHub environment, cost estimate.
-- `win-controller` ([#97](https://github.com/jonathan-vella/azure-gh-runners/issues/97)): scales from the queue, mints
-  one JIT config per worker, deletes the VM after one job, exact-owned cleanup of VM/NIC/disk/runner registration.
+- `win-iac` ([#98](https://github.com/jonathan-vella/azure-gh-runners/issues/98)): **built, not yet live-verified.**
+  `infra/windows/` (AVM at exact versions): isolated VNet, worker NSG, NAT Gateway, Compute Gallery
+  `gal_ghrunners_win_swc` with image definition `ghr-windows-2025`, VMSS Flex, Log Analytics, non-zonal ACA environment,
+  ACR Basic, orchestrator identity (Virtual Machine Contributor, Network Contributor, AcrPull), optional alert-only
+  budget. Deployed only by `deploy-windows.yml` with the dedicated identity `sp-ghrunners-windows-deploy`; one-time setup
+  in [bootstrap-windows](runbooks/bootstrap-windows.md) (owner-approved, not yet run). Cost and operations:
+  [windows-runners](windows-runners.md).
+- `win-controller` ([#97](https://github.com/jonathan-vella/azure-gh-runners/issues/97)): **built, not yet
+  live-verified.** The controller is a KEDA-triggered ACA event job per consumer (`image/windows-orchestrator/`), not a
+  long-running service: janitor of expired tagged resources, one JIT mint, one worker VM with `customData`, wait, then
+  always delete VM/NIC/disk and deregister the runner. Offline tests cover janitor selection, expiry, the customData
+  contract, failure cleanup and redaction (`npm run validate:windows-infra`).
 - `win-acceptance` ([#99](https://github.com/jonathan-vella/azure-gh-runners/issues/99)): `apex-vnext`
   `windows-package-tests` passes on the runner; wall time and cost recorded against the ~46-minute hosted baseline;
   fork-PR approval for all outside collaborators verified; teardown leaves nothing behind.
