@@ -12,18 +12,7 @@ var virtualNetworkName = 'vnet-ghrunners-prod-swc-${uniqueSuffix}'
 var acaNsgName = 'nsg-ghrunners-aca-prod-swc-${uniqueSuffix}'
 var natGatewayName = 'nat-ghrunners-prod-swc-${uniqueSuffix}'
 var natGatewayPublicIpName = 'pip-ghrunners-prod-swc-${uniqueSuffix}'
-var tags = union(networkConfig.governanceTags, {
-  application: 'ghrunners'
-  environment: 'prod'
-  workload: 'gh-runners'
-  owner: 'jonathan-vella'
-  costcenter: 'platform-engineering'
-  'tech-contact': 'jonathan-vella'
-  'technical-contact': 'jonathan-vella'
-  sla: 'development'
-  'backup-policy': 'none'
-  'maint-window': 'none'
-})
+var tags = networkConfig.governanceTags
 
 var acaSecurityRules = [
   {
@@ -337,6 +326,5 @@ type networkConfigType = {
   }
   privateDnsZones: string[]
   governanceTags: object
-  subscriptionId: string
   resourceGroup: string
 }

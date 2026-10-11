@@ -1,5 +1,4 @@
 {
-  "subscriptionId": "b47d2942-f5ad-4d3c-b28e-c23e4f83d97e",
   "resourceGroup": "rg-ghrunners-prod-swc",
   "location": "swedencentral",
   "addressSpace": "10.60.0.0/22",

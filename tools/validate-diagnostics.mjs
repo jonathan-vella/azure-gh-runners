@@ -179,9 +179,13 @@ export function validateLiveConfiguration(outputs, {
   executor = execFileSync,
   platform = process.platform,
   comSpec = process.env.ComSpec ?? 'cmd.exe',
-  subscriptionId = networkConfig.subscriptionId,
+  subscriptionId = process.env.AZURE_SUBSCRIPTION_ID,
   resourceGroup = networkConfig.resourceGroup,
 } = {}) {
+  if (!subscriptionId) {
+    throw new Error('Set AZURE_SUBSCRIPTION_ID to the target subscription ID before running the live check.');
+  }
+
   const rawResourceIds = resourceProfiles.map((resource) => {
     const resourceId = outputs?.[resource.outputName]?.value;
     if (typeof resourceId !== 'string') {

@@ -65,7 +65,7 @@ the owner accepts for this lab.
 - The Windows backend must be built: Windows image, PowerShell pre-job hook, scale-set controller, isolated
   infrastructure and deploy identity, registry support. Work is tracked in
   [#93](https://github.com/jonathan-vella/azure-gh-runners/issues/93) and issues #94–#99.
-- The closed VMSS spike code (`spikes/vmss-flex/`) targeted Linux with bash bootstrap. The Go controller using
+- The closed VMSS spike code ([`spikes/vmss-flex/`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae/spikes/vmss-flex), removed from the tree) targeted Linux with bash bootstrap. The Go controller using
   `actions/scaleset` is expected to be reusable; the worker bootstrap and hook are not. It stays archival and unvalidated
   until a Windows design reuses specific parts.
 - Windows workers cold-start for several minutes per job. That is negligible for a 40-minute job and poor for short ones.

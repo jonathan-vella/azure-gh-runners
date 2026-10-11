@@ -45,6 +45,7 @@ module observability './modules/observability.bicep' = {
   name: 'observability-${deploymentSuffix}'
   params: {
     location: location
+    governanceTags: tags
   }
 }
 
