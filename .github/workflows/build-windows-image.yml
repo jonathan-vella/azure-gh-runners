@@ -109,6 +109,29 @@ jobs:
           }
           EOF
           sed -i 's/^          //' "$RUNNER_TEMP/helpers.sh"
+          # The hosted runner's Azure CLI (Python 3.14) intermittently dies with an import DeadlockError while polling a
+          # long-running operation. Retry only that error; every other failure passes through unchanged. The shim covers
+          # every later step, including cleanup.
+          real_az="$(command -v az)"
+          mkdir -p "$RUNNER_TEMP/bin"
+          {
+            printf '#!/usr/bin/env bash\nREAL_AZ=%q\n' "$real_az"
+            cat <<'EOF'
+          err="$(mktemp)"
+          trap 'rm -f "$err"' EXIT
+          for attempt in 1 2 3 4; do
+            rc=0
+            "$REAL_AZ" "$@" 2>"$err" || rc=$?
+            cat "$err" >&2
+            if [[ $rc -eq 0 ]] || ! grep -q 'DeadlockError' "$err"; then exit "$rc"; fi
+            echo "::warning::az hit the known requests import deadlock (attempt $attempt of 4); retrying" >&2
+            sleep 5
+          done
+          exit "$rc"
+          EOF
+          } > "$RUNNER_TEMP/bin/az"
+          chmod +x "$RUNNER_TEMP/bin/az"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Create the build VM
         run: |
