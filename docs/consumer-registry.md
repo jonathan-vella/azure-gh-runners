@@ -30,10 +30,18 @@ allows it. The runner pre-job hook remains responsible for enforcing the policy 
 
 ## Runner backend
 
-v1 runs every consumer as an Azure Container Apps job. [`example.json.sample`](../config/consumers/example.json.sample)
-omits `backend`; [`example-aca.json.sample`](../config/consumers/example-aca.json.sample) sets `backend: "aca"`
-explicitly. Both are equivalent. The schema rejects `vmss` and the former VMSS fields (`vmSku`, `maxRunners`,
-`jobTimeoutMinutes`); VMSS Flex is deferred ([ADR-0006](adr/0006-vmss-flex-spike.md)).
+Every consumer currently runs as an Azure Container Apps (ACA) job.
+[`example.json.sample`](../config/consumers/example.json.sample) omits `backend`;
+[`example-aca.json.sample`](../config/consumers/example-aca.json.sample) sets `backend: "aca"` explicitly. Both are
+equivalent. Today the schema rejects `vmss` and the former VMSS fields (`vmSku`, `maxRunners`, `jobTimeoutMinutes`);
+VMSS Flex as a Linux backend stays deferred ([ADR-0006](adr/0006-vmss-flex-spike.md)).
+
+**Planned (not yet implemented):** the isolated Windows backend ([ADR-0007](adr/0007-windows-vmss-isolated-runners.md),
+issue [#94](https://github.com/jonathan-vella/azure-gh-runners/issues/94)) will accept `backend: "vmss"` together with
+`os: "windows"` and nothing else, with backend-specific sizing fields and no cross-backend fields. For that backend
+only, a public consumer may opt into `pull_request` through an explicit acknowledgement flag; the hook then accepts only
+open same-repository (non-fork) pull requests. `pull_request_target` and `workflow_run` stay rejected everywhere, and
+ACA behavior and generated output are unchanged.
 
 ## Generated deployment parameters
 

@@ -10,7 +10,7 @@ The GitHub repos are public, are owned by a personal account, and need jobs that
 - **One shared Azure platform**: VNet, internal ACA workload-profiles environment, ACR Premium, Key Vault, Log Analytics, NAT Gateway. Plus **one ACA event-driven runner job per onboarded repo**, generated from a typed consumer registry.
 - **Location**: approved subscription `shared` (`b47d2942-f5ad-4d3c-b28e-c23e4f83d97e`, replacing the planned `apex-shared` name), region `swedencentral`, RG `rg-ghrunners-prod-swc`.
 - **IaC**: Bicep with AVM modules (exact version pins), following apex conventions (CAF naming, governance tags, a single `uniqueSuffix`).
-- **Backend**: Azure Container Apps (ACA) jobs only for v1. VMSS Flex is rejected/deferred ([ADR-0006](adr/0006-vmss-flex-spike.md)); no further spikes are planned.
+- **Backends**: Azure Container Apps (ACA) jobs for Linux (v1). Windows runners, which ACA cannot run, are planned on a separate **isolated VMSS Flex** backend with its own resource group and VNet and no link to the ACA platform ([ADR-0007](adr/0007-windows-vmss-isolated-runners.md), not yet built). VMSS Flex as a Linux backend in the private network stays rejected/deferred ([ADR-0006](adr/0006-vmss-flex-spike.md)); no further spikes are planned.
 - **Image**: one generic image built on a GitHub-hosted runner, pushed to private GHCR, then imported by digest into private ACR Premium with `az acr import` (ACR trusted-services bypass on). No ACR agent pool in v1 ([ADR-0001](adr/0001-image-build-path.md)).
 - **Auth to GitHub**: one GitHub App owned by the personal account and installed on selected repos. Its key is deployed to Key Vault through ARM (a Bicep secure param).
 - **Platform CI**: GitHub-hosted runners. `.github/workflows/validate.yml` runs `npm run validate` on PRs. `.github/workflows/deploy.yml` deploys with OIDC on `workflow_dispatch` through the protected, main-only `platform-prod` environment (no required human reviewer) directly into the existing empty `rg-ghrunners-prod-swc`, in stages: image build → private GHCR → foundation with `deployJobs=false` → `az acr import` by digest → jobs with `deployJobs=true`. This is all ARM, so no VNet is needed.
@@ -123,12 +123,29 @@ The M1 spikes are closed without further runs. ADR-0001 to ADR-0005 record defau
   - scale goes 0→1→0
 - **acceptance**: all resources show `publicNetworkAccess` disabled (except the NAT PIP). Docs are verified by having an agent onboard the smoke repo from `docs/onboarding-consumer.md` alone.
 
+### 9. Isolated Windows runners (VMSS Flex, [ADR-0007](adr/0007-windows-vmss-isolated-runners.md))
+
+Tracked in [#93](https://github.com/jonathan-vella/azure-gh-runners/issues/93). Does not gate v1.0 ACA acceptance.
+
+Motivation: ACA cannot run Windows, and `apex-vnext` `windows-package-tests` takes about 46 minutes on a GitHub-hosted runner (about 42 minutes in one `node --test` step). That job needs no private Azure access, so the Windows backend is deliberately **not** part of the private-endpoint network.
+
+- **Isolation**: own resource group and VNet, no peering or private DNS link to the ACA platform; ephemeral worker (one JIT runner, one job, then deleted); no managed identity and no secrets on the worker; NAT Gateway only public IP; small budget cap. Only the controller holds the GitHub App credential.
+- **Identity**: dedicated deploy identity and GitHub environment for the Windows resource group. `sp-ghrunners-platform-prod` is never widened.
+- **Policy**: floor unchanged for ACA. Scoped exception for the isolated Windows backend only: a public consumer may opt into `pull_request` with an explicit acknowledgement flag, the hook accepting only open same-repository (non-fork) pull requests, fork-PR approval for all outside collaborators enabled and verified, `pull_request_target`/`workflow_run` still rejected. Validator and Windows hook both enforce it.
+- **win-profile** (#96, optional): time the slow test step on a hosted runner (Defender exclusion, faster drive) to set a baseline and target.
+- **win-policy** (#94): registry schema/validator/generator for `backend: vmss`, `os: windows`; PowerShell pre-job hook.
+- **win-image** (#95): Windows Server 2025 image in an Azure Compute Gallery with the runner agent, pinned Node LTS and tools.
+- **win-iac** (#98): isolated VMSS Flex infrastructure and deploy identity/workflow.
+- **win-controller** (#97): scale-set controller (reuse `actions/scaleset` where it fits), exact-owned cleanup.
+- **win-acceptance** (#99): `apex-vnext` `windows-package-tests` passes on it; wall time and cost recorded against the hosted baseline; no leftover VMs or registrations.
+- Windows workers cold-start for several minutes per job; negligible for a 40-minute job, poor for short ones.
+
 ## Notes & considerations
 
 - **Cross-consumer isolation**: all jobs share `snet-aca` and `snet-consumer-pe`. Network reachability between one consumer's job and another's PEs exists, and is mitigated only by Azure RBAC and data-plane auth. This is documented as a residual risk. A per-consumer subnet or environment is the future escalation path.
 - **App key**: one App key gives Administration RW on every installed repo, which is high value. Keep it only in Key Vault and the init container, and rotate it on a schedule.
 - `Microsoft.App/jobs/start/action` must not be granted broadly, because it exposes job secrets.
-- ACA consumption limits are 4 vCPU / 8 GiB per replica, Linux only, with no Docker-in-Docker. Document these as platform constraints for consumers.
+- ACA consumption limits are 4 vCPU / 8 GiB per replica, Linux only, with no Docker-in-Docker. Document these as platform constraints for consumers. Windows jobs use the isolated VMSS Flex backend (workstream 9).
 - npm trusted publishing does not work on self-hosted runners, so consumers must keep publish jobs on GitHub-hosted runners.
 - Fixed cost is roughly $110/month for the network and ACR Premium.
 - vnext follow-up (separate plan): consumer entry, a backend storage PE in `snet-consumer-pe`, workflow/validator changes, retiring the firewall exception, and the maintainer workstation access question.

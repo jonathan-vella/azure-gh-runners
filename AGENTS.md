@@ -9,8 +9,10 @@ below applies to consumer jobs that target this platform's self-hosted runners.
 
 1. Read the [PRD](docs/prd.md), [plan](docs/plan.md), [roadmap](docs/roadmap.md), and [backlog](docs/backlog.md).
 2. Work on an issue only after its dependencies are closed. Keep each branch and pull request scoped to one issue.
-3. v1 is Azure Container Apps (ACA) jobs only; VMSS Flex is rejected for v1. No further spikes are planned. Follow
-   the default decisions in `docs/adr/`; the real `platform-prod` deployment and the `ghr-smoke` smoke test prove them.
+3. v1 is Azure Container Apps (ACA) jobs for Linux. Windows runners are planned on a separate, isolated VMSS Flex
+   backend ([ADR-0007](docs/adr/0007-windows-vmss-isolated-runners.md), tracked in #93, not yet built); a Linux VMSS
+   Flex backend in the private network stays rejected. No further spikes are planned. Follow the default decisions in
+   `docs/adr/`; the real `platform-prod` deployment and the `ghr-smoke` smoke test prove them.
 4. Check the relevant runbook before touching identity or GitHub App setup. These describe existing production resources;
    do not recreate them or change Azure/GitHub settings as part of ordinary repository work.
 5. Run `npm run validate` after repository changes. Do not deploy the platform from a local checkout.
@@ -26,7 +28,7 @@ below applies to consumer jobs that target this platform's self-hosted runners.
 | `config/consumers/` | The sole source of consumer onboarding declarations, one `<name>.json` per repository. |
 | `config/schema/` | Schema for validating consumer declarations. |
 | `docs/` | Product requirements, implementation plan, roadmap, backlog, research, architecture and operational guidance. |
-| `docs/adr/` | Architecture decisions for v1 (ACA-only defaults; ADR-0006 VMSS rejected). |
+| `docs/adr/` | Architecture decisions (ACA-only defaults for Linux; ADR-0006 Linux VMSS rejected; ADR-0007 isolated Windows VMSS). |
 | `docs/runbooks/` | Carefully scoped bootstrap procedures for Azure OIDC identities and the GitHub App. |
 | `image/` | Runner image definition, initialization/entrypoint scripts, and pre-job policy hook. |
 | `infra/` | Resource-group Bicep entrypoint and parameter file; reusable Bicep modules belong in `infra/modules/`. |
@@ -72,7 +74,12 @@ local check.
   consumers; `pull_request_target` and `workflow_run` are never allowed. Private consumers may opt into
   `pull_request` only where the documented policy permits it. Registry entries may narrow, never widen, the floor.
   Enforce policy in both registry validation and the runner's pre-job hook. These restrictions do not prohibit ordinary
-  GitHub-hosted platform PR validation.
+  GitHub-hosted platform PR validation. **The only authorized exception** (owner decision 2026-10-11, ADR-0007, PRD
+  SR-9) is planned for the isolated Windows backend alone: a public consumer may opt into `pull_request` when workers
+  are ephemeral with no identity or secrets and no link to the ACA platform, the entry sets an explicit acknowledgement
+  flag, the hook accepts only open same-repository (non-fork) pull requests, and fork-PR approval for all outside
+  collaborators is enabled and verified. `pull_request_target` and `workflow_run` stay rejected everywhere, and the
+  floor is unchanged for ACA. Any other relaxation needs an explicit owner decision.
 - **Keep runner job code unprivileged.** The main runner container must receive no secret environment variables and no
   usable managed identity. GitHub App credentials are for the init/scaling path, not job steps.
 - **Never commit or print secrets, keys, or tokens.** Do not put credentials in source, generated artifacts, logs, or
@@ -86,10 +93,13 @@ local check.
   deploy from a local checkout or another workflow. The workflow is restricted to `main`; its environment does not
   require a human reviewer. It deploys directly into the existing `rg-ghrunners-prod-swc` in stages: GitHub-hosted
   image build to private GHCR, foundation with `deployJobs=false`, `az acr import` by digest into ACR, then jobs with
-  `deployJobs=true`. There is no spike-resource-group exception.
+  `deployJobs=true`. There is no spike-resource-group exception. The isolated Windows backend (ADR-0007) deploys only
+  through its own protected workflow and GitHub environment, scoped to its own resource group; never through
+  `platform-prod`, and never from a local checkout.
 - **Keep RBAC changes exact.** Preserve the existing `AcrPull`, `AcrPush`, and Key Vault Secrets User role-assignment
   allowlist for `sp-ghrunners-platform-prod` at `rg-ghrunners-prod-swc`; stop on any unexpected state. The VMSS
-  controller-RBAC authorization (issue #69) is withdrawn with ADR-0006. Do not change scopes, roles, identities, or
+  controller-RBAC authorization (issue #69) is withdrawn with ADR-0006. The Windows backend gets its own identity scoped
+  to its own resource group; do not widen `sp-ghrunners-platform-prod` for it. Do not change scopes, roles, identities, or
   conditions without an explicit decision.
 - **Protect job-start permissions.** Never grant `Microsoft.App/jobs/start/action` broadly; it can expose job secrets.
 

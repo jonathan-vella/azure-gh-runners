@@ -66,3 +66,8 @@ Rejected (deferred for v1), 2026-10-08.
 bounded VMSS protocol was never executed in the cloud, and the VMSS issues (#59–#72, #81, #84) are being closed. The
 context and protocol above are kept as a historical record only; `spikes/vmss-flex/` and its workflow are archival
 and not part of validation. A VMSS Flex backend may be revisited after v1 if ACA proves insufficient.
+
+**2026-10-11 note:** this ADR's rejection stands for a Linux VMSS backend inside the private-endpoint network.
+[ADR-0007](0007-windows-vmss-isolated-runners.md) separately adopts VMSS Flex for **Windows** runners in an isolated
+resource group with no link to the ACA platform. Nothing in this ADR's protocol, envelope or cleanup design is
+reinstated.
