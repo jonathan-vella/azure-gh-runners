@@ -155,7 +155,7 @@ Create the resource group and two separate Entra applications/service principals
 
 Acceptance criteria:
 
-- Resource group `rg-ghrunners-prod-swc` in `swedencentral` in approved subscription `shared` (`b47d2942-f5ad-4d3c-b28e-c23e4f83d97e`, replacing the planned `apex-shared` name), tagged per governance contract
+- Resource group `rg-ghrunners-prod-swc` in `swedencentral` in approved subscription `shared` (replacing the planned `apex-shared` name), tagged per governance contract
 - Federated credential `repo:jonathan-vella/azure-gh-runners:environment:platform-prod` on `sp-ghrunners-platform-prod` with least-privilege deploy rights on the RG (Contributor + role-assignment write and delete constrained to AcrPull, AcrPush, and Key Vault Secrets User). The controller role additions are a separate, one-time condition update only after the issue #69 runbook PR is merged; no other roles or scope changes are authorized.
 - Separate federated credential `repo:jonathan-vella/azure-gh-runners:pull_request` on `sp-ghrunners-whatif`, mapped only to Reader for what-if; repository variable `AZURE_WHATIF_CLIENT_ID`, no GitHub environment on the PR job
 - GitHub environment `platform-prod`: deployment branch `main` only, no required human reviewer; holds `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`. [#74](https://github.com/jonathan-vella/azure-gh-runners/issues/74) is an owner reminder without a restoration deadline and is not a v1.0 gate or dependency.

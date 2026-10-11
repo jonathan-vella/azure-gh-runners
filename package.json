@@ -1,6 +1,7 @@
 {
   "name": "azure-gh-runners",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "validate": "npm run validate:consumers && npm run validate:generator && npm run validate:bicep && npm run validate:network && npm run validate:public-access && npm run validate:observability && npm run validate:image && npm run validate:hook && npm run validate:markdown",
     "validate:consumers": "node --test tests/consumer-schema.test.cjs tests/consumer-registry.test.cjs tests/consumer-generator.test.cjs && node tools/validate-consumers.js",

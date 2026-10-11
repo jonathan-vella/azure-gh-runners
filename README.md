@@ -1,38 +1,128 @@
 # azure-gh-runners
 
-Shared, private-endpoint-only Azure platform that runs **ephemeral self-hosted GitHub Actions runners** as Azure
-Container Apps jobs for any onboarded repository.
+Ephemeral, private-endpoint-only **self-hosted GitHub Actions runners on Azure**, shared by any repository you
+onboard. Built for personal-account GitHub repositories (no GitHub Enterprise Cloud private networking) whose
+workflows need to reach Azure resources that have **no public endpoint**.
 
-> Status: implementation in progress (ACA-only v1). Work is tracked in [GitHub issues](https://github.com/jonathan-vella/azure-gh-runners/issues)
-> grouped by [milestones](https://github.com/jonathan-vella/azure-gh-runners/milestones). v1 is done when the
-> `jonathan-vella/ghr-smoke` smoke workflow, running on the deployed ACA runner, lists a private-endpoint-only blob
-> container.
+## Why
 
-## Start here
+GitHub-hosted runners cannot reach private-endpoint-only Azure services, and a personal account has no hosted
+private networking. Self-hosted runners solve that, but on public repositories they are risky: anyone who can run a
+workflow executes code inside your network. This project makes that tradeoff explicit and constrained:
+
+- Runners are single-use (JIT), run in a private VNet, and have no inbound endpoints.
+- A **policy floor** limits what public repositories may trigger, and it is enforced twice: at onboarding (registry
+  validation) and on the runner (pre-job hook).
+- The job container gets no secrets and no usable managed identity.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  GH[GitHub repository<br/>workflow queued] -->|KEDA poll / JIT config| APP[GitHub App]
+  subgraph AZ[Azure subscription, one region]
+    subgraph VNET[Private VNet, no inbound endpoints]
+      subgraph LIN[Linux backend: ACA jobs, live-verified]
+        ACA[Internal ACA environment<br/>one event-driven job per consumer]
+      end
+      PE[Private endpoints<br/>ACR, Key Vault, consumer resources]
+      NAT[NAT Gateway<br/>outbound-only egress IP]
+    end
+    subgraph WIN[Windows backend: ISOLATED, planned / being built]
+      VM[Ephemeral Windows VMs<br/>no identity, no secrets, no link to the ACA platform]
+    end
+  end
+  APP --> ACA
+  APP -.-> VM
+  ACA --> PE
+  ACA --> NAT --> GH
+  VM -.->|own egress| GH
+```
+
+- **Linux (v1):** Azure Container Apps jobs in an internal environment, one job per registered consumer, scaling to
+  zero. Private ACR Premium and Key Vault. Consumers reach their own private resources through private endpoints in a
+  shared subnet.
+- **Windows (planned, not built):** ephemeral Windows VMs on a VMSS Flex backend that is deliberately separate from the
+  ACA platform ([ADR-0007](docs/adr/0007-windows-vmss-isolated-runners.md)). A Linux VMSS backend inside the private
+  network was evaluated and rejected ([ADR-0006](docs/adr/0006-vmss-flex-spike.md)).
+
+The approved design is in the [plan](docs/plan.md) and [PRD](docs/prd.md).
+
+## Security model in brief
+
+- Workload PaaS resources have public network access disabled. Log Analytics is the documented exception (standard
+  endpoints, local authentication disabled, Azure RBAC). The NAT Gateway IP is the only public IP and is outbound-only.
+- Public consumers may run only `workflow_dispatch`, `schedule`, and default-branch `push`. `pull_request_target`
+  and `workflow_run` are never allowed. One scoped exception is planned for the isolated Windows backend only
+  (same-repository pull requests on ephemeral, secretless workers); it is not built and does not apply to Linux.
+- Consumers are onboarded only through `config/consumers/<name>.json`, validated by tooling.
+- The GitHub App key lives in Key Vault and is used only by the init and scaling path, never by job steps.
+- Deployment goes only through the protected `platform-prod` workflow on `main`.
+
+Self-hosted runners on public repositories carry inherent risk; read [SECURITY.md](SECURITY.md) and the
+[security model](docs/security.md) before adopting, and understand the residual risks (shared subnet, privileged
+operator credentials).
+
+## Prerequisites
+
+An Azure subscription, a GitHub account with a fork of this repository, Node.js/npm, Azure CLI with Bicep, GitHub
+CLI, and PowerShell 7. Details are in [docs/adopting.md](docs/adopting.md).
+
+## Quickstart
+
+Follow **[docs/adopting.md](docs/adopting.md)**: replace the values that are specific to the maintainer, bootstrap the
+Azure identities and the GitHub App ([runbooks](docs/runbooks/)), set the environment secrets, run the **Deploy
+platform** workflow, and onboard a first consumer.
+
+## Cost
+
+Rough figures, not measured guarantees:
+
+- **Fixed baseline: about USD 110 per month** for the network, private endpoints, and ACR Premium. This is incurred
+  while the platform exists, even with no jobs running.
+- **Linux jobs:** ACA bills per second of vCPU and memory, scaling to zero when idle.
+- **Windows (planned):** per job, for the VM time of each ephemeral worker.
+
+Tear everything down when you are not using it ([teardown](docs/adopting.md#8-teardown)).
+
+## Status and limitations
+
+| Area | Status |
+| --- | --- |
+| Linux ACA platform | Deployed and smoke-tested once in the maintainer's subscription (2026-10-11); see [smoke.md](docs/smoke.md). |
+| Other tenants, regions, organisations | **Not verified.** Only `swedencentral` is supported by the validators and Bicep. |
+| Windows isolated backend | **Not built.** Design only ([ADR-0007](docs/adr/0007-windows-vmss-isolated-runners.md)). |
+| Linux VMSS Flex backend | Rejected for v1. |
+| v1.0 | Not tagged yet. Architecture, onboarding, operations, and security guides are still being finalised, so some documents may lag the implementation. |
+| Support | Best effort from a single maintainer; see [SECURITY.md](SECURITY.md). |
+
+Other known limits: a fixed baseline cost even when idle, jobs share a subnet, and no multi-region or high-availability
+design. Treat this as a lab-grade platform for your own repositories, not a hardened multi-tenant service.
+
+## Documentation
 
 | Document | Purpose |
 | --- | --- |
-| [PRD](docs/prd.md) | What and why: goals, requirements, security floor, success metrics |
-| [Roadmap](docs/roadmap.md) | Milestones M0–M6 and exit criteria |
-| [Backlog](docs/backlog.md) | Every work item with acceptance criteria and linked issue |
+| [Adopting](docs/adopting.md) | Fork, configure, deploy, onboard, tear down |
+| [PRD](docs/prd.md) | Goals, requirements, security floor, success metrics |
 | [Plan](docs/plan.md) | Approved implementation plan and target architecture |
-| [Consumer registry](docs/consumer-registry.md) | Consumer JSON contract, resource limits, and validation boundary |
-| [Security model](docs/security.md) | Threats, implemented controls, assurance limits, and residual risks |
-| [Observability](docs/observability.md) | Log Analytics network exception and diagnostic-settings contract |
-| [Runner image](image/README.md) | Pinned generic toolset, local image checks, and remaining runtime contracts |
-| [Identity bootstrap](docs/runbooks/bootstrap-identity.md) | Approved Azure identities, constrained RBAC, and GitHub OIDC configuration |
-| [ADRs](docs/adr/README.md) | v1 decisions (ACA-only) |
-| [AGENTS.md](AGENTS.md) | Rules for AI agents working in this repo |
+| [Roadmap](docs/roadmap.md) and [backlog](docs/backlog.md) | Milestones, work items, and acceptance criteria |
+| [Consumer registry](docs/consumer-registry.md) | Consumer JSON contract, resource limits, validation boundary |
+| [Security model](docs/security.md) | Threats, controls, assurance limits, residual risks |
+| [Observability](docs/observability.md) | Log Analytics exception and diagnostic-settings contract |
+| [Smoke test](docs/smoke.md) | End-to-end evidence and the consumer pattern |
+| [Runner image](image/README.md) | Pinned toolset, local image checks, runtime contracts |
+| [Runbooks](docs/runbooks/) | [Identity bootstrap](docs/runbooks/bootstrap-identity.md) and [GitHub App](docs/runbooks/github-app.md) |
+| [ADRs](docs/adr/README.md) | Architecture decisions |
+| [AGENTS.md](AGENTS.md) | Rules for AI agents (and humans) working in this repo |
 
 Background research: [runner options on Azure](docs/research-azure-runner-options.md) and
 [public repo + private-endpoint-only constraints](docs/research-public-repo-private-endpoints.md).
-Both were written while evaluating `apex-vnext` as the first consumer.
 
 ## Local validation
 
 Install Node.js/npm and the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) with Bicep.
-Hook tests additionally require Bash, git, jq, and curl on Linux, or Linux Docker on Windows.
-Then run:
+Hook tests additionally require Bash, git, jq, and curl on Linux, or Linux Docker on Windows. Then run:
 
 ```powershell
 npm ci
@@ -41,21 +131,15 @@ npm run validate
 
 `npm run validate` runs consumer schema, registry, and generator tests; validates active `config/consumers/*.json`
 entries against GitHub repository visibility and default-branch metadata; checks generated consumer parameters for
-drift; builds and lints `infra/main.bicep`, `infra/main.bicepparam`, and `infra/modules/network.bicep`; runs network
-tests and observability/diagnostic-category checks; checks the offline image contract and executes the Bats
-policy-hook fixtures; and lints Markdown with `.markdownlint-cli2.jsonc`. The PR workflow
-`.github/workflows/validate.yml` runs it on GitHub-hosted runners.
-Run `npm run generate:consumers` after editing the registry to update `infra/generated/consumers.json`. The registry
-currently has no active consumers, so validation does not need GitHub access; when entries are added, install GitHub
-CLI and authenticate with access to each registered repository. Files ending in `.sample` are examples, not active
-entries. Validation does not deploy resources. Spike harnesses under `spikes/` and related `spike*` paths are archival
-and not validated.
+drift; builds and lints the Bicep; runs network, observability, and diagnostic-category checks; checks the offline
+image contract and executes the policy-hook fixtures; and lints Markdown. The PR workflow
+`.github/workflows/validate.yml` runs the same command on GitHub-hosted runners.
 
-## At a glance
+Run `npm run generate:consumers` after editing the registry to update `infra/generated/consumers.json`. An empty
+registry needs no GitHub access; active entries require GitHub CLI access to each registered repository. Files ending
+in `.sample` are examples, not active entries. Validation never deploys resources.
 
-- One shared VNet, internal ACA environment, private ACR Premium and Key Vault, NAT Gateway egress in `swedencentral`.
-- Log Analytics uses standard Azure Monitor ingestion/query endpoints with local authentication disabled; this is the documented exception to public-network-disabled workload endpoints.
-- One event-driven ACA job per consumer repo, declared in `config/consumers/<name>.json`.
-- Single-use JIT runners. A GitHub App key is used only in an init container, and job code gets no managed identity.
-- A pre-job hook enforces the policy floor. Public repos may only run `workflow_dispatch`, `schedule`, and default-branch `push`.
-- Consumers reach their own private resources through private endpoints in the shared `snet-consumer-pe` subnet.
+## Contributing and license
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). Licensed under the [MIT License](LICENSE).

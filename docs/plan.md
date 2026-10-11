@@ -8,7 +8,7 @@ The GitHub repos are public, are owned by a personal account, and need jobs that
 
 - **New private repo** `jonathan-vella/azure-gh-runners`, cloned to `~/repos/azure-gh-runners`. It is project-agnostic, and vnext is just one consumer.
 - **One shared Azure platform**: VNet, internal ACA workload-profiles environment, ACR Premium, Key Vault, Log Analytics, NAT Gateway. Plus **one ACA event-driven runner job per onboarded repo**, generated from a typed consumer registry.
-- **Location**: approved subscription `shared` (`b47d2942-f5ad-4d3c-b28e-c23e4f83d97e`, replacing the planned `apex-shared` name), region `swedencentral`, RG `rg-ghrunners-prod-swc`.
+- **Location**: approved subscription `shared` (replacing the planned `apex-shared` name), region `swedencentral`, RG `rg-ghrunners-prod-swc`.
 - **IaC**: Bicep with AVM modules (exact version pins), following apex conventions (CAF naming, governance tags, a single `uniqueSuffix`).
 - **Backends**: Azure Container Apps (ACA) jobs for Linux (v1). Windows runners, which ACA cannot run, are planned on a separate **isolated VMSS Flex** backend with its own resource group and VNet and no link to the ACA platform ([ADR-0007](adr/0007-windows-vmss-isolated-runners.md), not yet built). VMSS Flex as a Linux backend in the private network stays rejected/deferred ([ADR-0006](adr/0006-vmss-flex-spike.md)); no further spikes are planned.
 - **Image**: one generic image built on a GitHub-hosted runner, pushed to private GHCR, then imported by digest into private ACR Premium with `az acr import` (ACR trusted-services bypass on). No ACR agent pool in v1 ([ADR-0001](adr/0001-image-build-path.md)).

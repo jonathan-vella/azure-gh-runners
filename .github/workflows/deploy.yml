@@ -16,8 +16,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RESOURCE_GROUP: rg-ghrunners-prod-swc
-  IMAGE_PREFIX: ghcr.io/jonathan-vella/azure-gh-runners
+  # Set the RESOURCE_GROUP repository variable to override; keep it equal to resourceGroup in infra/network-config.json.
+  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP || 'rg-ghrunners-prod-swc' }}
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
 
 jobs:
   build:
@@ -43,6 +44,7 @@ jobs:
           DOCKER_BUILDKIT: '1'
         run: |
           set -euo pipefail
+          IMAGE_PREFIX="${IMAGE_PREFIX,,}"
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           trap 'docker logout ghcr.io >/dev/null' EXIT
           for target in jit-init runner; do
@@ -134,6 +136,7 @@ jobs:
           RUNNER_IMAGE_DIGEST: ${{ needs.build.outputs.runner_digest }}
         run: |
           set -euo pipefail
+          IMAGE_PREFIX="${IMAGE_PREFIX,,}"
           acr="$(jq -er '.registryName.value' "$RUNNER_TEMP/foundation.json")"
           for pair in "jit-init:$JIT_INIT_IMAGE_DIGEST" "runner:$RUNNER_IMAGE_DIGEST"; do
             repo="${pair%%:*}"
