@@ -140,6 +140,8 @@ try {
     Copy-Item -LiteralPath (Join-Path $SourceDir 'start-runner.ps1') -Destination (Join-Path $ghrRoot 'start-runner.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $SourceDir 'hooks\job-started.ps1') -Destination (Join-Path $ghrRoot 'hooks\job-started.ps1') -Force
     Copy-Item -LiteralPath $ManifestPath -Destination (Join-Path $ghrRoot 'versions.json') -Force
+    # Kept on the image so a booted VM can be re-verified (the image build's test boot does exactly that).
+    Copy-Item -LiteralPath (Join-Path $SourceDir 'verify-tools.ps1') -Destination (Join-Path $ghrRoot 'verify-tools.ps1') -Force
     Set-DirectoryAcl $ghrRoot
 
     $pwsh = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
