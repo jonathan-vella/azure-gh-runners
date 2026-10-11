@@ -40,7 +40,7 @@ test will prove it. If the deployed KEDA version behaves differently, update thi
 - Consumer documentation and examples use `runs-on: ghr-<name>` only.
 - The JIT API's required `runner_group_id` uses the default group `1`; the smoke test confirms it for the personal
   account.
-- No further spike runs. The archival harness under `spikes/jit-labels/` and its workflows are not part of validation.
+- No further spike runs. The harness ([`spikes/jit-labels/`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae/spikes/jit-labels) and its workflows) was removed from the tree and is preserved in git history at commit [`25c0519`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae).
 
 ## Status
 

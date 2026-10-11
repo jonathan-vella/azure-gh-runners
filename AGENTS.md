@@ -33,7 +33,7 @@ below applies to consumer jobs that target this platform's self-hosted runners.
 | `image/` | Runner image definition, initialization/entrypoint scripts, and pre-job policy hook. |
 | `infra/` | Resource-group Bicep entrypoint and parameter file; reusable Bicep modules belong in `infra/modules/`. |
 | `tools/` | Registry validation and generation tooling. |
-| `spikes/`, `infra/spike7/`, `tools/spike*`, `tools/spikes/`, spike workflows | Archival spike harnesses only; not part of `npm run validate` and not to be run or extended. |
+| Removed spikes | The archival spike harnesses (`spikes/`, `infra/spike7/`, `tools/spike*`, `tools/spikes/`, spike workflows) no longer exist in the tree. They remain in git history at commit [`25c0519`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae); do not restore or extend them. |
 | Root config and manifests | `package.json` defines validation commands; `package-lock.json` pins Node dependencies; `bicepconfig.json`, `.markdownlint-cli2.jsonc`, `.editorconfig`, and `.gitignore` define repository tooling and conventions. |
 
 Some directories currently contain only placeholders. Implement functionality in its assigned area as the related

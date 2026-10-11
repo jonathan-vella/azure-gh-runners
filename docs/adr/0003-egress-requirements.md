@@ -43,7 +43,7 @@ smoke test will prove that the scaler wakes the job and the runner reaches GitHu
 
 - The NAT Gateway public IP remains the only public IP resource and is outbound-only; no inbound endpoint is added.
 - Tightening egress to an FQDN allowlist (for example, Azure Firewall) is a later option, not a v1 requirement.
-- No further spike runs. The archival harness (`.github/workflows/spike-keda-egress.yml`, `tools/spikes/keda-egress/`)
+- No further spike runs. The archival harness ([`.github/workflows/spike-keda-egress.yml`](https://github.com/jonathan-vella/azure-gh-runners/blob/25c0519b2a5cf9bf718091b18d0451b52af79aae/.github/workflows/spike-keda-egress.yml), [`tools/spikes/keda-egress/`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae/tools/spikes/keda-egress)) was removed from the tree and is preserved in git history at commit [`25c0519`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae)
   is not part of validation.
 
 ## Status

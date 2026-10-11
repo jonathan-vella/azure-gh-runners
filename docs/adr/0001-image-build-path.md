@@ -26,7 +26,7 @@ and the `ghr-smoke` smoke test will prove it.
 - No preview dependency or agent-pool quota; image builds use standard GitHub-hosted runners.
 - GHCR credentials for the import are used only by the deployment workflow, never by runner jobs.
 - If the import fails, the staged deployment stops before jobs are deployed.
-- The spike harness (`tools/spike-acr-agentpool.ps1`, `.github/workflows/spike-acr-agentpool.yml`) is archival only.
+- The spike harness ([`tools/spike-acr-agentpool.ps1`](https://github.com/jonathan-vella/azure-gh-runners/blob/25c0519b2a5cf9bf718091b18d0451b52af79aae/tools/spike-acr-agentpool.ps1), [`.github/workflows/spike-acr-agentpool.yml`](https://github.com/jonathan-vella/azure-gh-runners/blob/25c0519b2a5cf9bf718091b18d0451b52af79aae/.github/workflows/spike-acr-agentpool.yml)) was removed from the tree and is preserved in git history at commit [`25c0519`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae).
 
 ## Status
 

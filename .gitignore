@@ -1,8 +1,6 @@
 node_modules/
 .DS_Store
 Thumbs.db
-tools/spike-job-identity-init/prepared.json
-tools/spike-job-identity-init/evidence.json
 
 # Local scratch, state, and secret material; never commit these.
 *.pem
