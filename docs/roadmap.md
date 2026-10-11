@@ -34,7 +34,7 @@ graph LR
 - v1 uses Azure Container Apps jobs only. Deploy directly into the existing empty `rg-ghrunners-prod-swc` through the
   `platform-prod` OIDC workflow: GitHub-hosted image build → private GHCR → foundation (`deployJobs=false`) →
   `az acr import` by digest into ACR (trusted-services bypass on) → jobs (`deployJobs=true`).
-- No further spikes. Archival spike harnesses stay on disk but are not part of `npm run validate`.
+- No further spikes. The spike harnesses were removed from the tree and remain in git history (last present at commit [`25c0519`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae)).
 - Merge bar: CI build, `npm run validate`, and one agent code review with no blocking findings, then agent merge.
 
 **Historical (superseded):** the dual-backend plan (tracker #59, VMSS issues #60–#72, #81, #84), the D4 evidence rule,

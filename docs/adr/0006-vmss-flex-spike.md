@@ -9,7 +9,7 @@ Existing PRD/plan/defaults remain unchanged until real evidence and a separately
 
 ## Decision
 
-**Historical; superseded by the rejection below.** The proposal was to prepare the [bounded protocol](../../spikes/vmss-flex/README.md) at the exact owner limits:
+**Historical; superseded by the rejection below.** The proposal was to prepare the [bounded protocol](https://github.com/jonathan-vella/azure-gh-runners/blob/25c0519b2a5cf9bf718091b18d0451b52af79aae/spikes/vmss-flex/README.md) at the exact owner limits:
 shared subscription/tenant, Sweden Central, `rg-ghrunners-spike-vmss-swc`, one B2s, at most two D2ls v5,
 two attempts, four hours and $10 total. Reserve the final hour for cleanup.
 Workers must run one job as nonroot with no Docker/sudo/MI. A new spike-only key for the same GitHub App belongs
@@ -64,8 +64,8 @@ Rejected (deferred for v1), 2026-10-08.
 
 **2026-10-08 note:** the owner chose Azure Container Apps jobs as the only v1 backend and ended further spikes. The
 bounded VMSS protocol was never executed in the cloud, and the VMSS issues (#59–#72, #81, #84) are being closed. The
-context and protocol above are kept as a historical record only; `spikes/vmss-flex/` and its workflow are archival
-and not part of validation. A VMSS Flex backend may be revisited after v1 if ACA proves insufficient.
+context and protocol above are kept as a historical record only; [`spikes/vmss-flex/`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae/spikes/vmss-flex) and its workflow were removed from the tree and are preserved in git history at commit [`25c0519`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae).
+A VMSS Flex backend may be revisited after v1 if ACA proves insufficient.
 
 **2026-10-11 note:** this ADR's rejection stands for a Linux VMSS backend inside the private-endpoint network.
 [ADR-0007](0007-windows-vmss-isolated-runners.md) separately adopts VMSS Flex for **Windows** runners in an isolated

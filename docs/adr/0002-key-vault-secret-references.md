@@ -40,7 +40,7 @@ test will prove it, including whether the Key Vault trusted-services bypass is n
 
 - One identity for image pull and secret resolution keeps RBAC minimal and matches the existing deployment allowlist.
 - Never enable Key Vault public network access to work around a failed reference; use the fallback.
-- The archival spike harness under `infra/spike7/` and `tools/validate-spike7.mjs` is not part of validation.
+- The spike harness ([`infra/spike7/`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae/infra/spike7) and [`tools/validate-spike7.mjs`](https://github.com/jonathan-vella/azure-gh-runners/blob/25c0519b2a5cf9bf718091b18d0451b52af79aae/tools/validate-spike7.mjs)) was removed from the tree and is preserved in git history at commit [`25c0519`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae).
 
 ## Status
 

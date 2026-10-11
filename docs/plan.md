@@ -52,7 +52,7 @@ Per-consumer ACA job (`caj-ghr-<consumer>`):
 
 ### 0. Decisions (spikes closed)
 
-The M1 spikes are closed without further runs. ADR-0001 to ADR-0005 record default decisions that the real deployment and the `ghr-smoke` smoke test prove; see the [ADR index](adr/README.md). Archival spike harnesses remain on disk but are not validated or run.
+The M1 spikes are closed without further runs. ADR-0001 to ADR-0005 record default decisions that the real deployment and the `ghr-smoke` smoke test prove; see the [ADR index](adr/README.md). The spike harnesses were removed from the tree and remain in git history (last present at commit [`25c0519`](https://github.com/jonathan-vella/azure-gh-runners/tree/25c0519b2a5cf9bf718091b18d0451b52af79aae)).
 
 ### 1. Repo bootstrap
 
