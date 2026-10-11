@@ -108,7 +108,7 @@ export function createWorkerOps({ az, resourceGroup, vmssName, imageId, subnetId
 
   return {
     async login() {
-      await az(["login", "--identity", "--username", clientId], { parse: false });
+      await az(["login", "--identity", "--client-id", clientId], { parse: false });
     },
 
     async listManaged() {
