@@ -196,7 +196,8 @@ function Invoke-Boot {
         Write-SecretFile -Path $script:PolicyPath -Content $config.PolicyJson
         Set-FileAcl -Path $script:PolicyPath -RunnerRights 'R'
         Write-SecretFile -Path $script:JitPath -Content $config.JitConfig
-        Set-FileAcl -Path $script:JitPath -RunnerRights 'R,D'
+        # Remove-Item needs write-attributes as well as delete (it clears the read-only flag first).
+        Set-FileAcl -Path $script:JitPath -RunnerRights 'R,D,WA'
         & icacls.exe $script:RunnerRoot /grant "$($env:COMPUTERNAME)\$($script:RunnerUser):(OI)(CI)M" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'icacls failed' }
         $config = $null
