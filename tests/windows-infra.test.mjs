@@ -66,7 +66,7 @@ test("gallery image definition is Windows, Gen2, generalized and TrustedLaunch-c
   assert.match(compute, /osType: 'Windows'/);
   assert.match(compute, /osState: 'Generalized'/);
   assert.match(compute, /hyperVGeneration: 'V2'/);
-  assert.match(compute, /securityType: 'TrustedLaunchSupported'/);
+  assert.match(compute, /securityType: 'TrustedLaunch'/);
   assert.match(compute, /orchestrationMode: 'Flexible'/);
   assert.match(compute, /platformFaultDomainCount: 1/);
   assert.doesNotMatch(compute, /capacity|autoscale|virtualMachineProfile/i);

@@ -142,6 +142,10 @@ creating resources. The runbook shows the command; it is not run by CI.
   nothing else. Confirm at acceptance that worker creation succeeds with exactly this set.
 - The orchestrator logs in with `az login --identity` inside ACA; this is expected to work but is unverified.
 - `az vm create --vmss` for a profile-less Flex scale set with a TrustedLaunch gallery image is unverified here.
+- **Trusted Launch everywhere.** The gallery image definition is `TrustedLaunch`-only (secure boot and vTPM), so the image
+  build VM, its test VM and every worker are Trusted Launch. This was changed from `TrustedLaunchSupported` after the
+  first live builds; an existing definition's security type cannot be changed, so it is deleted and recreated by the
+  foundation deployment (no versions may exist at that point).
 
 ## Adding a Windows consumer
 

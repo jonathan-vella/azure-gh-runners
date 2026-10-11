@@ -37,7 +37,7 @@ module gallery 'br/public:avm/res/compute/gallery:0.9.5' = {
           offer: 'windows-runner'
           sku: '2025'
         }
-        securityType: 'TrustedLaunchSupported'
+        securityType: 'TrustedLaunch'
       }
     ]
     tags: tags
