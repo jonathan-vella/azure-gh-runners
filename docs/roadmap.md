@@ -69,6 +69,10 @@ run the negative smoke checks, one deploy with the public-access check green, a 
 ## After v1.0 (not scheduled)
 
 - Onboard `apex-vnext` as the first real consumer (separate plan in that repository).
+- **Template repository (decided 2026-10-11):** after the final teardown, enable the "Template repository" flag so
+  adopters can create a clean private copy (see [`docs/adopting.md`](adopting.md)). Do it after teardown so the evidence
+  documents that cite deleted resources do not confuse adopters. A longer-term fix for the config-and-code-in-one-repo
+  conflict problem is publishing the Bicep modules and workflows for reuse; not scheduled.
 - Optional per-consumer subnet or environment isolation for high-sensitivity consumers.
 - Optional additional image variants if consumers need tools beyond the generic set.
 - Revisit a Linux VMSS Flex backend in the private network only if ACA proves insufficient ([ADR-0006](adr/0006-vmss-flex-spike.md)).

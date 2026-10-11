@@ -1,8 +1,8 @@
 # Adopting this platform
 
-A step-by-step guide for running your own copy of the platform from a fork. Read the [README](../README.md) first for
-what it is, its security model, and what is and is not live-verified. The platform deploys real Azure resources (about
-USD 110 per month fixed), so read [Cost](../README.md#cost) too.
+A step-by-step guide for running your own copy of the platform, from a **template copy** or a **fork**. Read the
+[README](../README.md) first for what it is, its security model, and what is and is not live-verified. The platform
+deploys real Azure resources (about USD 110 per month fixed), so read [Cost](../README.md#cost) too.
 
 > The maintainer's own identifiers (subscription, tenant, App and client IDs, owner IDs) appear only in evidence and
 > history documents: `docs/adr/*`, `docs/research-*`, and `docs/smoke.md`. They are not configuration. Never copy
@@ -12,12 +12,27 @@ USD 110 per month fixed), so read [Cost](../README.md#cost) too.
 
 - An Azure subscription where you can create resource groups, Entra applications, and role assignments (Owner, or
   Contributor plus User Access Administrator, on the subscription, and permission to create Entra apps).
-- A GitHub account or organisation, a fork of this repository (public or private), and the repositories you will run
-  jobs for. The platform targets personal-account repositories; organisation use is untested.
+- A GitHub account or organisation, your own copy of this repository (a template copy or a fork; see step 1), and the
+  repositories you will run jobs for. The platform targets personal-account repositories; organisation use is untested.
 - Local tools: Node.js/npm, Azure CLI with Bicep, GitHub CLI, PowerShell 7 (the runbooks use it).
 - Quota in `swedencentral` for Azure Container Apps, ACR Premium, NAT Gateway, and Key Vault.
 
-## 1. Fork and verify locally
+## 1. Create your copy and verify locally
+
+Your registry, parameters and identifiers live in the repository, so most adopters should keep their copy **private**.
+Choose one:
+
+| | Template copy (**recommended**) | Fork |
+| --- | --- | --- |
+| How | **Use this template** on the repository page, or `gh repo create <name> --template jonathan-vella/azure-gh-runners --private` | **Fork** on the repository page |
+| Can be private | Yes | **No**: a fork of a public repository stays public |
+| History | One clean commit, without the maintainer's evidence history | The full upstream history |
+| Upstream updates | Not linked. To pull changes, add the upstream as a remote and merge with `--allow-unrelated-histories`; expect conflicts in `config/` and `infra/network-config.json` | Sync the fork and merge; expect conflicts in `config/` and `infra/network-config.json` |
+| Contribute fixes back | Open a pull request from a separate clone or fork | Direct |
+
+Neither option copies environments, secrets, variables, issues or the GitHub App; steps 3 to 5 create those. A private
+copy changes the policy floor in your favour only for your own consumers; the rules in
+[`docs/security.md`](security.md) still apply.
 
 ```bash
 git clone https://github.com/<owner>/<repo>.git
