@@ -1,0 +1,50 @@
+[
+  {
+    "name": "stghrsmokeabc12",
+    "type": "Microsoft.Storage/storageAccounts",
+    "properties": { "publicNetworkAccess": "Disabled", "allowBlobPublicAccess": false }
+  },
+  {
+    "name": "kv-ghr-prod-swc-abc12",
+    "type": "Microsoft.KeyVault/vaults",
+    "properties": { "publicNetworkAccess": "Disabled", "enableRbacAuthorization": true }
+  },
+  {
+    "name": "crghrunnersprodswcabc12",
+    "type": "Microsoft.ContainerRegistry/registries",
+    "properties": { "publicNetworkAccess": "Disabled", "adminUserEnabled": false }
+  },
+  {
+    "name": "cae-ghrunners-prod-swc-abc12",
+    "type": "Microsoft.App/managedEnvironments",
+    "properties": { "publicNetworkAccess": "Disabled", "vnetConfiguration": { "internal": true } }
+  },
+  {
+    "name": "law-ghrunners-prod-swc",
+    "type": "Microsoft.OperationalInsights/workspaces",
+    "properties": {
+      "publicNetworkAccessForIngestion": "Enabled",
+      "publicNetworkAccessForQuery": "Enabled",
+      "features": { "disableLocalAuth": true }
+    }
+  },
+  {
+    "name": "pip-ghrunners-prod-swc-abc12",
+    "type": "Microsoft.Network/publicIPAddresses",
+    "properties": {
+      "ipAddress": "203.0.113.10",
+      "natGateway": {
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Network/natGateways/nat-ghrunners-prod-swc-abc12"
+      }
+    }
+  },
+  { "name": "nat-ghrunners-prod-swc-abc12", "type": "Microsoft.Network/natGateways" },
+  { "name": "vnet-ghrunners-prod-swc-abc12", "type": "Microsoft.Network/virtualNetworks" },
+  { "name": "nsg-ghrunners-aca-prod-swc-abc12", "type": "Microsoft.Network/networkSecurityGroups" },
+  { "name": "pe-kv-ghr-prod-swc-abc12", "type": "Microsoft.Network/privateEndpoints" },
+  { "name": "pe-kv-ghr-prod-swc-abc12.nic.1", "type": "Microsoft.Network/networkInterfaces" },
+  { "name": "privatelink.azurecr.io", "type": "Microsoft.Network/privateDnsZones" },
+  { "name": "privatelink.azurecr.io/vnetlink-abc12", "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks" },
+  { "name": "id-ghrunners-prod-swc-abc12", "type": "Microsoft.ManagedIdentity/userAssignedIdentities" },
+  { "name": "caj-ghr-smoke", "type": "Microsoft.App/jobs" }
+]
