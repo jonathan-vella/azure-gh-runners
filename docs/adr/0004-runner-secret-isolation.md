@@ -22,15 +22,23 @@ its resource groups were deleted and verified absent. No further spikes will run
   managed-identity token; the platform still uses the identity for image pull and Key Vault reference resolution.
 - The scale-rule authentication references the App key secret without exposing it as container environment.
 
-This is the chosen default; no live evidence is claimed. The real `platform-prod` deployment and the `ghr-smoke` smoke
-test will prove it, including that no managed-identity token is obtainable inside the job.
+This is the chosen default. **Live evidence (2026-10-11):** on the real deployment, with `lifecycle: None`, the identity
+environment variables (`IDENTITY_ENDPOINT`, `IDENTITY_HEADER`, `MSI_ENDPOINT`, `MSI_SECRET`) are still **set** inside the
+main container, contrary to the Microsoft documentation, so a "variables are unset" assertion fails. What matters is
+that no token is obtainable: from inside the runner, a token request to `IDENTITY_ENDPOINT` returned HTTP 400 both for
+the system-assigned identity and for the platform's user-assigned identity requested explicitly by client ID
+([ghr-smoke run 38147983595](https://github.com/jonathan-vella/ghr-smoke/actions/runs/38147983595)). The smoke workflow
+therefore asserts "no usable managed identity" (no 200 token), not variable absence. This is one run against one job;
+it is not a proof that no other route to an Azure token exists.
 
 ## Consequences
 
 - A compromised job step cannot read the App key or obtain an Azure token from the main container.
+- The identity variables being present is harmless only while the platform keeps refusing tokens; re-run the smoke
+  check after any ACA platform or `identitySettings` change.
 - The App key remains high value; keep the GitHub App installation limited to selected repositories and rotate it.
 - `Microsoft.App/jobs/start/action` must not be granted broadly because it can expose job secrets.
 
 ## Status
 
-Accepted (default, pending live smoke), 2026-10-08.
+Accepted, live-verified once on 2026-10-11 (token refused for both identities); see the evidence above.

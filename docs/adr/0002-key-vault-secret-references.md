@@ -44,4 +44,6 @@ test will prove it, including whether the Key Vault trusted-services bypass is n
 
 ## Status
 
-Accepted (default, pending live smoke), 2026-10-08.
+Accepted, live-verified 2026-10-11: the job deployed with a Key Vault-referenced secret resolved through the single
+user-assigned identity over the private endpoint, and the init container used that secret to mint the JIT configuration
+(the runner registered and ran a job). The ARM secure-secret fallback was not needed.

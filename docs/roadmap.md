@@ -49,10 +49,15 @@ ACA cannot run Windows. Windows jobs use a separate, isolated VMSS Flex backend 
 
 ## Status (2026-10-11)
 
-The ACA platform deployment is **paused**. The foundation deployed (network, Key Vault, ACR, identity, Log Analytics,
-smoke storage); the ACA environment kept failing with `AKSCapacityHeavyUsage` because the AVM module defaulted to
-`zoneRedundant: true`. #92 sets `zoneRedundant: false` but never got a clean run. The owner deletes
-`rg-ghrunners-prod-swc`, and the next step is a full plan review and a non-zonal retry. Handoff:
+The ACA platform is **deployed and the smoke test passes**. The earlier failures were caused by the AVM
+managed-environment module defaulting to `zoneRedundant: true`; #92 set it to `false`. After recreating
+`rg-ghrunners-prod-swc` (restoring the deploy identity's two documented roles and purging the stale vault), a
+foundation-only deploy and then a full staged deploy succeeded. [ghr-smoke run 38147983595](https://github.com/jonathan-vella/azure-gh-runners/actions/runs/38147983595)
+ran on the real ACA runner: the storage hostname resolved to a private address, Entra OIDC login worked, and the
+container listing succeeded over the private endpoint. The job scaled back to zero, no runner registration remained, and
+ACR, Key Vault and storage have public network access disabled with the NAT public IP as the only public IP. Remaining
+v1.0 items: the negative smoke checks (non-default-branch `push` and `pull_request` rejection), the automated
+no-public-endpoint check, documentation and the release tag. Earlier handoff:
 [#34 comment](https://github.com/jonathan-vella/azure-gh-runners/issues/34#issuecomment-6068366703).
 
 ## After v1.0 (not scheduled)
