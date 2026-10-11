@@ -95,14 +95,17 @@ jobs:
             printf '%s\n' "$output"
             grep -q '^GHR_RESULT=OK' <<<"$output"
           }
-          # create_vm <name> <image> <vnet-subnet-id>: private VM, explicit NIC and OS disk names, no identity, no public IP.
+          # create_vm <name> <image> <vnet-subnet-id> [security-type]: private VM, explicit NIC and OS disk names, no identity,
+          # no public IP. The build VM is Standard because a TrustedLaunchSupported gallery image definition only accepts a
+          # Standard source; the test VM (and workers) launch as TrustedLaunch from the resulting version.
           create_vm() {
+            local security=(--security-type TrustedLaunch --enable-secure-boot true --enable-vtpm true)
+            [[ ${4:-TrustedLaunch} != Standard ]] || security=(--security-type Standard)
             az network nic create --resource-group "$RG" --name "$1-nic" --location "$LOCATION" --subnet "$3" --output none
             az vm create --resource-group "$RG" --name "$1" --location "$LOCATION" --image "$2" --size "$VM_SIZE" \
               --nics "$1-nic" --os-disk-name "$1-osdisk" --os-disk-delete-option Delete --nic-delete-option Delete \
               --admin-username ghradmin --admin-password "$VM_PASSWORD" --public-ip-address "" --nsg "" \
-              --security-type TrustedLaunch --enable-secure-boot true --enable-vtpm true \
-              --tags purpose=windows-image-build --output none
+              "${security[@]}" --tags purpose=windows-image-build --output none
           }
           EOF
           sed -i 's/^          //' "$RUNNER_TEMP/helpers.sh"
@@ -123,7 +126,7 @@ jobs:
           fi
           echo "SUBNET_ID=$subnet_id" >> "$GITHUB_ENV"
           base="$(jq -r '.baseImage | "\(.publisher):\(.offer):\(.sku):latest"' image/windows/versions.json)"
-          create_vm "$BUILD_VM" "$base" "$subnet_id"
+          create_vm "$BUILD_VM" "$base" "$subnet_id" Standard
 
       - name: Install tools, runner and worker files, then verify
         run: |
