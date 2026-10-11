@@ -1,0 +1,251 @@
+name: build-windows-image
+
+# Builds the isolated Windows runner image (ADR-0007) and publishes it to an Azure Compute Gallery.
+# Manual only. Creates temporary VMs in the Windows backend resource group and deletes all of them on every outcome.
+# Nothing here is live-verified until it has run once against the Windows backend resource group.
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource-group:
+        description: Resource group of the Windows backend (build VMs and gallery live here)
+        default: rg-ghrunners-win-swc
+        required: true
+      gallery-name:
+        description: Azure Compute Gallery name
+        default: gal_ghrunners_win_swc
+        required: true
+      image-definition:
+        description: Gallery image definition name
+        default: ghr-windows-2025
+        required: true
+      location:
+        description: Azure region for the build VMs and the single image replica
+        default: swedencentral
+        required: true
+      vnet-name:
+        description: Virtual network that contains the build subnet
+        default: vnet-ghrunners-win-swc
+        required: true
+      subnet-name:
+        description: Build subnet (outbound internet through the NAT gateway, no inbound)
+        default: snet-image-build
+        required: true
+      vm-size:
+        description: Size of the temporary build and test VMs
+        default: Standard_D4ds_v5
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: build-windows-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: platform-prod
+    timeout-minutes: 150
+    env:
+      RG: ${{ inputs.resource-group }}
+      GALLERY: ${{ inputs.gallery-name }}
+      DEFINITION: ${{ inputs.image-definition }}
+      LOCATION: ${{ inputs.location }}
+      VNET: ${{ inputs.vnet-name }}
+      SUBNET: ${{ inputs.subnet-name }}
+      VM_SIZE: ${{ inputs.vm-size }}
+      IMAGE_VERSION: 1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate inputs and derive resource names
+        run: |
+          set -euo pipefail
+          for value in "$RG" "$GALLERY" "$DEFINITION" "$LOCATION" "$VNET" "$SUBNET" "$VM_SIZE"; do
+            [[ $value =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || { echo "::error::Invalid input value"; exit 1; }
+          done
+          suffix="${GITHUB_RUN_ID: -8}${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "BUILD_VM=ghrb${suffix}"
+            echo "TEST_VM=ghrt${suffix}"
+          } >> "$GITHUB_ENV"
+
+      - uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.WINDOWS_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare helpers and throwaway credentials
+        run: |
+          set -euo pipefail
+          # Temporary admin password for the build and test VMs only; masked, never stored or reused.
+          password="Aa1!$(openssl rand -base64 24)"
+          echo "::add-mask::$password"
+          echo "VM_PASSWORD=$password" >> "$GITHUB_ENV"
+          cat > "$RUNNER_TEMP/helpers.sh" <<'EOF'
+          # run_ps <vm> <script-file>: runs a PowerShell script on the VM and requires its GHR_RESULT=OK marker.
+          run_ps() {
+            local output
+            output="$(az vm run-command invoke --resource-group "$RG" --name "$1" --command-id RunPowerShellScript \
+              --scripts "@$2" --query 'value[].message' --output tsv)"
+            printf '%s\n' "$output"
+            grep -q '^GHR_RESULT=OK' <<<"$output"
+          }
+          # create_vm <name> <image> <vnet-subnet-id>: private VM, explicit NIC and OS disk names, no identity, no public IP.
+          create_vm() {
+            az network nic create --resource-group "$RG" --name "$1-nic" --location "$LOCATION" --subnet "$3" --output none
+            az vm create --resource-group "$RG" --name "$1" --location "$LOCATION" --image "$2" --size "$VM_SIZE" \
+              --nics "$1-nic" --os-disk-name "$1-osdisk" --os-disk-delete-option Delete --nic-delete-option Delete \
+              --admin-username ghradmin --admin-password "$VM_PASSWORD" --public-ip-address "" --nsg "" \
+              --security-type TrustedLaunch --enable-secure-boot true --enable-vtpm true \
+              --tags purpose=windows-image-build --output none
+          }
+          EOF
+          sed -i 's/^          //' "$RUNNER_TEMP/helpers.sh"
+
+      - name: Create the build VM
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/helpers.sh"
+          subnet_id="$(az network vnet subnet show --resource-group "$RG" --vnet-name "$VNET" --name "$SUBNET" --query id --output tsv)"
+          echo "SUBNET_ID=$subnet_id" >> "$GITHUB_ENV"
+          base="$(jq -r '.baseImage | "\(.publisher):\(.offer):\(.sku):latest"' image/windows/versions.json)"
+          create_vm "$BUILD_VM" "$base" "$subnet_id"
+
+      - name: Install tools, runner and worker files, then verify
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/helpers.sh"
+          stage="$RUNNER_TEMP/stage.ps1"
+          {
+            echo '$files = @{'
+            for file in start-runner.ps1 hooks/job-started.ps1 install-tools.ps1 verify-tools.ps1 versions.json; do
+              printf "  '%s' = '%s'\n" "$file" "$(base64 --wrap=0 "image/windows/$file")"
+            done
+            echo '}'
+            cat <<'EOF'
+          $ErrorActionPreference = 'Stop'
+          $stage = 'C:\ghr-stage'
+          try {
+            foreach ($name in $files.Keys) {
+              $path = Join-Path $stage $name
+              New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+              [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($files[$name]))
+            }
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$stage\install-tools.ps1" -SourceDir $stage -ManifestPath "$stage\versions.json"
+            if ($LASTEXITCODE -ne 0) { throw 'install-tools failed' }
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$stage\verify-tools.ps1" -ManifestPath 'C:\ghr\versions.json'
+            if ($LASTEXITCODE -ne 0) { throw 'verify-tools failed' }
+            Write-Output 'GHR_RESULT=OK'
+          }
+          catch {
+            Write-Output ('GHR_RESULT=FAILED ' + $_.Exception.Message)
+            exit 1
+          }
+          finally {
+            Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+          }
+          EOF
+          } > "$stage"
+          sed -i 's/^          //' "$stage"
+          run_ps "$BUILD_VM" "$stage"
+
+      - name: Generalize the build VM
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/helpers.sh"
+          script="$RUNNER_TEMP/sysprep.ps1"
+          cat > "$script" <<'EOF'
+          $ErrorActionPreference = 'Stop'
+          # The throwaway build admin must not survive into the image.
+          Remove-LocalUser -Name 'ghradmin' -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force 'C:\ghr\logs' -ErrorAction SilentlyContinue
+          Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" -ArgumentList '/generalize', '/oobe', '/shutdown', '/quiet'
+          Write-Output 'GHR_RESULT=OK'
+          EOF
+          sed -i 's/^          //' "$script"
+          run_ps "$BUILD_VM" "$script"
+          for _ in $(seq 1 90); do
+            state="$(az vm get-instance-view --resource-group "$RG" --name "$BUILD_VM" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" --output tsv)"
+            [[ $state == PowerState/stopped || $state == PowerState/deallocated ]] && break
+            sleep 20
+          done
+          [[ $state == PowerState/stopped || $state == PowerState/deallocated ]] || { echo "::error::Sysprep did not shut the VM down"; exit 1; }
+          az vm deallocate --resource-group "$RG" --name "$BUILD_VM"
+          az vm generalize --resource-group "$RG" --name "$BUILD_VM"
+
+      - name: Publish the gallery image version
+        id: publish
+        run: |
+          set -euo pipefail
+          if ! az sig image-definition show --resource-group "$RG" --gallery-name "$GALLERY" --gallery-image-definition "$DEFINITION" --output none 2>/dev/null; then
+            az sig image-definition create --resource-group "$RG" --gallery-name "$GALLERY" --gallery-image-definition "$DEFINITION" \
+              --publisher ghrunners --offer windows-runner --sku 2025-datacenter-azure-edition \
+              --os-type Windows --os-state Generalized --hyper-v-generation V2 \
+              --features SecurityType=TrustedLaunchSupported --output none
+          fi
+          vm_id="$(az vm show --resource-group "$RG" --name "$BUILD_VM" --query id --output tsv)"
+          # Same-region replica only.
+          version_id="$(az sig image-version create --resource-group "$RG" --gallery-name "$GALLERY" \
+            --gallery-image-definition "$DEFINITION" --gallery-image-version "$IMAGE_VERSION" \
+            --virtual-machine "$vm_id" --target-regions "$LOCATION" --replica-count 1 \
+            --storage-account-type Standard_LRS --query id --output tsv)"
+          echo "VERSION_ID=$version_id" >> "$GITHUB_ENV"
+          echo "version-id=$version_id" >> "$GITHUB_OUTPUT"
+
+      - name: Boot a test VM from the new version and verify it
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/helpers.sh"
+          create_vm "$TEST_VM" "$VERSION_ID" "$SUBNET_ID"
+          script="$RUNNER_TEMP/test.ps1"
+          cat > "$script" <<'EOF'
+          $ErrorActionPreference = 'Stop'
+          # No customData was supplied, so the boot task is only waiting; stop it so it cannot power the VM off mid-check.
+          Stop-ScheduledTask -TaskName 'ghr-start-runner' -ErrorAction SilentlyContinue
+          Disable-ScheduledTask -TaskName 'ghr-start-runner' | Out-Null
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\ghr\verify-tools.ps1'
+          if ($LASTEXITCODE -ne 0) { Write-Output 'GHR_RESULT=FAILED verify-tools'; exit 1 }
+          Write-Output 'GHR_RESULT=OK'
+          EOF
+          sed -i 's/^          //' "$script"
+          run_ps "$TEST_VM" "$script"
+          echo "TEST_PASSED=true" >> "$GITHUB_ENV"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Windows image published"
+            echo "- Version: \`$IMAGE_VERSION\` of \`$DEFINITION\` in \`$GALLERY\`"
+            echo "- Status: built and boot-tested from the gallery; not yet exercised by a runner job"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The generalized build VM cannot be reused. Remove every temporary resource on every outcome.
+      - name: Delete temporary resources
+        if: always()
+        run: |
+          set -uo pipefail
+          failed=0
+          for vm in "${TEST_VM:-}" "${BUILD_VM:-}"; do
+            [[ -n $vm ]] || continue
+            if az vm show --resource-group "$RG" --name "$vm" --output none 2>/dev/null; then
+              az vm delete --resource-group "$RG" --name "$vm" --yes --output none || failed=1
+            fi
+            if az network nic show --resource-group "$RG" --name "$vm-nic" --output none 2>/dev/null; then
+              az network nic delete --resource-group "$RG" --name "$vm-nic" || failed=1
+            fi
+            if az disk show --resource-group "$RG" --name "$vm-osdisk" --output none 2>/dev/null; then
+              az disk delete --resource-group "$RG" --name "$vm-osdisk" --yes || failed=1
+            fi
+          done
+          # Never leave an unverified image version behind for consumers to pick up.
+          if [[ -n ${VERSION_ID:-} && ${TEST_PASSED:-} != true ]]; then
+            az sig image-version delete --ids "$VERSION_ID" || failed=1
+          fi
+          exit "$failed"

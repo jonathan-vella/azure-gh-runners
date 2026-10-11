@@ -12,11 +12,7 @@
     "labels",
     "allowedEvents",
     "allowedRefs",
-    "allowedWorkflows",
-    "cpu",
-    "memory",
-    "maxExecutions",
-    "replicaTimeoutSeconds"
+    "allowedWorkflows"
   ],
   "properties": {
     "name": {
@@ -40,9 +36,43 @@
     "backend": {
       "type": "string",
       "enum": [
-        "aca"
+        "aca",
+        "vmss"
       ],
-      "description": "Optional explicit runner backend. v1 supports only Azure Container Apps jobs; omission is equivalent to aca."
+      "description": "Optional explicit runner backend. aca (Azure Container Apps, Linux) is the default when omitted. vmss is the isolated Windows backend and requires os: windows."
+    },
+    "os": {
+      "type": "string",
+      "const": "windows",
+      "description": "Runner operating system. Accepted only with backend: vmss; ACA runs Linux and must omit it."
+    },
+    "vmSize": {
+      "type": "string",
+      "enum": [
+        "Standard_D2ds_v5",
+        "Standard_D4ds_v5",
+        "Standard_D8ds_v5",
+        "Standard_D16ds_v5"
+      ],
+      "default": "Standard_D4ds_v5",
+      "description": "vmss only: Azure VM size for each ephemeral worker. Defaults to Standard_D4ds_v5."
+    },
+    "maxRunners": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "vmss only: maximum concurrent ephemeral Windows workers for this consumer."
+    },
+    "jobTimeoutMinutes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 360,
+      "description": "vmss only: wall-clock limit after which the worker VM is deleted."
+    },
+    "acknowledgePublicPullRequestRisk": {
+      "type": "boolean",
+      "const": true,
+      "description": "vmss only, public repositories only: explicit acknowledgement required to allow pull_request. The Windows hook still accepts only open same-repository (non-fork) pull requests."
     },
     "labels": {
       "type": "array",
@@ -134,232 +164,310 @@
   },
   "allOf": [
     {
-      "oneOf": [
-        {
-          "properties": {
-            "cpu": {
-              "const": 0.25
-            },
-            "memory": {
-              "const": "0.5Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
+      "if": {
+        "properties": {
+          "backend": {
+            "const": "vmss"
+          }
         },
-        {
-          "properties": {
-            "cpu": {
-              "const": 0.5
+        "required": [
+          "backend"
+        ]
+      },
+      "then": {
+        "required": [
+          "os",
+          "maxRunners",
+          "jobTimeoutMinutes"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "cpu"
+              ]
             },
-            "memory": {
-              "const": "1Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 0.75
+            {
+              "required": [
+                "memory"
+              ]
             },
-            "memory": {
-              "const": "1.5Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 1
+            {
+              "required": [
+                "maxExecutions"
+              ]
             },
-            "memory": {
-              "const": "2Gi"
+            {
+              "required": [
+                "replicaTimeoutSeconds"
+              ]
             }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 1.25
-            },
-            "memory": {
-              "const": "2.5Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 1.5
-            },
-            "memory": {
-              "const": "3Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 1.75
-            },
-            "memory": {
-              "const": "3.5Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 2
-            },
-            "memory": {
-              "const": "4Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 2.25
-            },
-            "memory": {
-              "const": "4.5Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 2.5
-            },
-            "memory": {
-              "const": "5Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 2.75
-            },
-            "memory": {
-              "const": "5.5Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 3
-            },
-            "memory": {
-              "const": "6Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 3.25
-            },
-            "memory": {
-              "const": "6.5Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 3.5
-            },
-            "memory": {
-              "const": "7Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 3.75
-            },
-            "memory": {
-              "const": "7.5Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
-          ]
-        },
-        {
-          "properties": {
-            "cpu": {
-              "const": 4
-            },
-            "memory": {
-              "const": "8Gi"
-            }
-          },
-          "required": [
-            "cpu",
-            "memory"
           ]
         }
-      ]
+      },
+      "else": {
+        "required": [
+          "cpu",
+          "memory",
+          "maxExecutions",
+          "replicaTimeoutSeconds"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "os"
+              ]
+            },
+            {
+              "required": [
+                "vmSize"
+              ]
+            },
+            {
+              "required": [
+                "maxRunners"
+              ]
+            },
+            {
+              "required": [
+                "jobTimeoutMinutes"
+              ]
+            },
+            {
+              "required": [
+                "acknowledgePublicPullRequestRisk"
+              ]
+            }
+          ]
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "cpu": {
+                "const": 0.25
+              },
+              "memory": {
+                "const": "0.5Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 0.5
+              },
+              "memory": {
+                "const": "1Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 0.75
+              },
+              "memory": {
+                "const": "1.5Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 1
+              },
+              "memory": {
+                "const": "2Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 1.25
+              },
+              "memory": {
+                "const": "2.5Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 1.5
+              },
+              "memory": {
+                "const": "3Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 1.75
+              },
+              "memory": {
+                "const": "3.5Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 2
+              },
+              "memory": {
+                "const": "4Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 2.25
+              },
+              "memory": {
+                "const": "4.5Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 2.5
+              },
+              "memory": {
+                "const": "5Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 2.75
+              },
+              "memory": {
+                "const": "5.5Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 3
+              },
+              "memory": {
+                "const": "6Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 3.25
+              },
+              "memory": {
+                "const": "6.5Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 3.5
+              },
+              "memory": {
+                "const": "7Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 3.75
+              },
+              "memory": {
+                "const": "7.5Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          },
+          {
+            "properties": {
+              "cpu": {
+                "const": 4
+              },
+              "memory": {
+                "const": "8Gi"
+              }
+            },
+            "required": [
+              "cpu",
+              "memory"
+            ]
+          }
+        ]
+      }
     },
     {
       "if": {
@@ -374,6 +482,46 @@
       },
       "then": {
         "properties": {
+          "allowedRefs": {
+            "type": "array",
+            "maxItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          {
+            "properties": {
+              "visibility": {
+                "const": "public"
+              }
+            },
+            "required": [
+              "visibility"
+            ]
+          },
+          {
+            "not": {
+              "properties": {
+                "backend": {
+                  "const": "vmss"
+                },
+                "acknowledgePublicPullRequestRisk": {
+                  "const": true
+                }
+              },
+              "required": [
+                "backend",
+                "acknowledgePublicPullRequestRisk"
+              ]
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
           "allowedEvents": {
             "type": "array",
             "items": {
@@ -383,12 +531,35 @@
                 "push"
               ]
             }
-          },
-          "allowedRefs": {
-            "type": "array",
-            "maxItems": 1
           }
         }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "acknowledgePublicPullRequestRisk"
+        ]
+      },
+      "then": {
+        "properties": {
+          "backend": {
+            "const": "vmss"
+          },
+          "visibility": {
+            "const": "public"
+          },
+          "allowedEvents": {
+            "type": "array",
+            "contains": {
+              "const": "pull_request"
+            }
+          }
+        },
+        "required": [
+          "backend",
+          "visibility"
+        ]
       }
     }
   ]

@@ -34,18 +34,88 @@ test('accepts a valid public consumer with additional custom labels', () => {
   assert.deepEqual(errors, []);
 });
 
-test('rejects the VMSS backend in v1', () => {
+const windowsSample = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', 'config', 'consumers', 'smoke-windows.json'), 'utf8'),
+);
+const windowsMetadata = { ...publicMetadata, full_name: windowsSample.repo };
+
+function windowsEntry(consumer = {}, filename = `${windowsSample.name}.json`) {
+  return { filename, consumer: { ...windowsSample, ...consumer } };
+}
+
+test('rejects the VMSS backend without os windows', () => {
   let metadataCalls = 0;
   const errors = validateRegistry(
-    [entry({ name: 'vmss', backend: 'vmss' }, 'vmss.json')],
+    [windowsEntry({ os: undefined })],
     () => {
       metadataCalls += 1;
-      return publicMetadata;
+      return windowsMetadata;
     },
   );
 
-  assert.match(errors.join('\n'), /backend "vmss" is not supported in v1/);
+  assert.match(errors.join('\n'), /backend "vmss" is supported only with os "windows"/);
   assert.equal(metadataCalls, 0);
+});
+
+test('accepts a Windows VMSS consumer', () => {
+  assert.deepEqual(validateRegistry([windowsEntry()], () => windowsMetadata), []);
+});
+
+test('accepts an ACA and a Windows entry for the same repository', () => {
+  const aca = entry({
+    name: 'smoke',
+    repo: windowsSample.repo,
+    labels: ['ghr-smoke'],
+    allowedWorkflows: ['jonathan-vella/ghr-smoke/.github/workflows/smoke.yml@refs/heads/main'],
+  }, 'smoke.json');
+  assert.deepEqual(validateRegistry([aca, windowsEntry()], () => windowsMetadata), []);
+});
+
+test('still rejects two Windows entries for the same repository', () => {
+  const second = windowsEntry({ name: 'other-windows', labels: ['ghr-other-windows'] }, 'other-windows.json');
+  assert.match(
+    validateRegistry([windowsEntry(), second], () => windowsMetadata).join('\n'),
+    /repository "jonathan-vella\/ghr-smoke" duplicates/,
+  );
+});
+
+test('requires the ghr label for Windows entries', () => {
+  const errors = validateRegistry([windowsEntry({ labels: ['windows', 'ghr-other'] })], () => windowsMetadata);
+  assert.match(errors.join('\n'), /required custom label "ghr-smoke-windows"/);
+});
+
+test('accepts an acknowledged public pull request only for the Windows backend', () => {
+  const events = ['workflow_dispatch', 'pull_request'];
+  assert.deepEqual(
+    validateRegistry(
+      [windowsEntry({ allowedEvents: events, acknowledgePublicPullRequestRisk: true })],
+      () => windowsMetadata,
+    ),
+    [],
+  );
+  assert.match(
+    validateRegistry([windowsEntry({ allowedEvents: events })], () => windowsMetadata).join('\n'),
+    /public repositories cannot allow event "pull_request"/,
+  );
+  assert.match(
+    validate([entry({ allowedEvents: events, acknowledgePublicPullRequestRisk: true })]).join('\n'),
+    /public repositories cannot allow event "pull_request"/,
+  );
+});
+
+test('never accepts pull_request_target or workflow_run, even when acknowledged', () => {
+  for (const event of ['pull_request_target', 'workflow_run']) {
+    const errors = validateRegistry(
+      [windowsEntry({ allowedEvents: [event], acknowledgePublicPullRequestRisk: true })],
+      () => windowsMetadata,
+    );
+    assert.match(errors.join('\n'), new RegExp(`event "${event}" is never allowed`));
+  }
+});
+
+test('public Windows entries still need the actual default branch', () => {
+  const errors = validateRegistry([windowsEntry()], () => ({ ...windowsMetadata, default_branch: 'trunk' }));
+  assert.match(errors.join('\n'), /actual default branch "refs\/heads\/trunk"/);
 });
 
 test('accepts private pull requests and multiple valid branch refs', () => {
