@@ -68,7 +68,7 @@ resource vmss 'Microsoft.Compute/virtualMachineScaleSets@2024-07-01' = {
   location: location
   tags: tags
   properties: {
-    orchestrationMode: 'Flex'
+    orchestrationMode: 'Flexible'
     platformFaultDomainCount: 1
     singlePlacementGroup: false
   }
