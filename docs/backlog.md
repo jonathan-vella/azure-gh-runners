@@ -77,7 +77,7 @@ PR validation, gated deployment, and scheduled maintenance run from this repo.
 | --- | --- | --- | --- | --- |
 | [#26](https://github.com/jonathan-vella/azure-gh-runners/issues/26) | `ci-validate` | PR validation workflow | ci | [#17](https://github.com/jonathan-vella/azure-gh-runners/issues/17), [#25](https://github.com/jonathan-vella/azure-gh-runners/issues/25), [#20](https://github.com/jonathan-vella/azure-gh-runners/issues/20) |
 | [#27](https://github.com/jonathan-vella/azure-gh-runners/issues/27) | `ci-deploy` | Gated deployment workflow | ci, security | [#26](https://github.com/jonathan-vella/azure-gh-runners/issues/26), [#23](https://github.com/jonathan-vella/azure-gh-runners/issues/23) |
-| [#28](https://github.com/jonathan-vella/azure-gh-runners/issues/28) | `ci-maintenance` | Scheduled maintenance workflow | ci | [#27](https://github.com/jonathan-vella/azure-gh-runners/issues/27) |
+| [#28](https://github.com/jonathan-vella/azure-gh-runners/issues/28) | `ci-maintenance` | Scheduled maintenance workflow (deferred) | ci | [#27](https://github.com/jonathan-vella/azure-gh-runners/issues/27) |
 
 ## M5 - Documentation
 
@@ -366,9 +366,18 @@ Acceptance criteria:
 - Post-deploy assertions: every PaaS resource has public network access disabled; job count equals registry entries; App key secret present
 - Deployment outputs published to `docs/platform-outputs.md` via PR or job summary
 
+Status: the "no public network access" assertion is automated by `tools/check-public-access.mjs` (final `deploy.yml` step).
+The separate job-count and App-key-secret assertions are not implemented. Outputs are in the job summary; there is no
+`docs/platform-outputs.md` (the onboarding guide reads deployment outputs directly).
+
 ### `ci-maintenance` — Scheduled maintenance workflow ([#28](https://github.com/jonathan-vella/azure-gh-runners/issues/28))
 
 Keep the image patched and secrets fresh.
+
+Status: **deferred, not a v1.0 item.** A scheduled deploy would run unattended on the no-reviewer `platform-prod`
+environment, widening the blast radius of that environment for little benefit at lab scale. Rebuilds happen on manual
+dispatch ([operations](operations.md#rebuild-images)). Revisit if a reviewer is added to the environment or rebuilds
+move to a PR-opening workflow that does not deploy.
 
 Acceptance criteria:
 
@@ -380,15 +389,23 @@ Acceptance criteria:
 
 `docs/architecture.md`.
 
+Status: done in [architecture.md](architecture.md).
+
 Acceptance criteria:
 
 - Diagram (Mermaid) of GitHub, VNet, subnets, PEs, ACA env, jobs, ACR, KV, LAW, NAT
 - Trust boundaries and the public-exposure statement (only the NAT egress IP is public)
 - Links to ADRs
 
+Status: done in [architecture.md](architecture.md) (Windows backend only referenced via ADR-0007).
+
 ### `docs-onboarding` — Agent-executable consumer onboarding guide ([#30](https://github.com/jonathan-vella/azure-gh-runners/issues/30))
 
 `docs/onboarding-consumer.md` — a deterministic checklist an agent can follow without other context.
+
+Status: written as [onboarding-consumer.md](onboarding-consumer.md). `ghr-smoke` was onboarded by hand before the guide
+existed, so the guide has not yet been executed cold by an agent; it also uses the actual Entra subject form
+(immutable owner/repository IDs) rather than the original `repo:<owner>/<repo>` sketch below.
 
 Acceptance criteria:
 
@@ -405,6 +422,8 @@ Acceptance criteria:
 
 `docs/operations.md`.
 
+Status: written as [operations.md](operations.md). The budget alert is not deployed; the document says so.
+
 Acceptance criteria:
 
 - Deploy, image rebuild, App key rotation, adding a private DNS zone, offboarding a consumer
@@ -415,6 +434,8 @@ Acceptance criteria:
 
 `docs/security.md`.
 
+Status: finalised against the live deployment: verified controls, planned items and residual risks are separated.
+
 Acceptance criteria:
 
 - Threats: fork PR targeting runners, cross-consumer lateral movement, App key theft, `jobs/start` secret exposure, image supply chain
@@ -424,6 +445,10 @@ Acceptance criteria:
 ### `smoke-consumer` — Smoke-test consumer repo end to end ([#33](https://github.com/jonathan-vella/azure-gh-runners/issues/33))
 
 Create public throwaway repo `jonathan-vella/ghr-smoke` and onboard it using only `docs/onboarding-consumer.md`.
+
+Status: the positive smoke passed live on 2026-10-11 ([smoke.md](smoke.md)), covering scale 0 -> 1 -> 0, runner
+deregistration and the identity-token refusal. The negative checks (push, pull_request) are specified in
+[smoke.md](smoke.md#negative-checks) but have not been run yet. The repository was onboarded by hand, not from the guide.
 
 Acceptance criteria:
 
@@ -436,7 +461,7 @@ Acceptance criteria:
 
 ### `acceptance` — v1.0 acceptance and release ([#34](https://github.com/jonathan-vella/azure-gh-runners/issues/34))
 
-Declare v1.0 of the platform.
+Declare v1.0 of the platform. Progress is tracked in [CHANGELOG.md](../CHANGELOG.md).
 
 Acceptance criteria:
 

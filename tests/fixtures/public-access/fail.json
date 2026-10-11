@@ -1,0 +1,37 @@
+[
+  {
+    "name": "stghrsmokeabc12",
+    "type": "Microsoft.Storage/storageAccounts",
+    "properties": { "publicNetworkAccess": "Enabled", "allowBlobPublicAccess": true }
+  },
+  {
+    "name": "kv-ghr-prod-swc-abc12",
+    "type": "Microsoft.KeyVault/vaults",
+    "properties": { "publicNetworkAccess": "Enabled" }
+  },
+  {
+    "name": "crghrunnersprodswcabc12",
+    "type": "Microsoft.ContainerRegistry/registries",
+    "properties": { "publicNetworkAccess": "Enabled" }
+  },
+  {
+    "name": "cae-ghrunners-prod-swc-abc12",
+    "type": "Microsoft.App/managedEnvironments",
+    "properties": { "publicNetworkAccess": "Enabled", "vnetConfiguration": { "internal": false } }
+  },
+  {
+    "name": "law-ghrunners-prod-swc",
+    "type": "Microsoft.OperationalInsights/workspaces",
+    "properties": { "features": { "disableLocalAuth": false } }
+  },
+  {
+    "name": "pip-ghrunners-prod-swc-abc12",
+    "type": "Microsoft.Network/publicIPAddresses",
+    "properties": { "ipAddress": "203.0.113.10", "natGateway": { "id": "/x/natGateways/nat" } }
+  },
+  {
+    "name": "pip-extra",
+    "type": "Microsoft.Network/publicIPAddresses",
+    "properties": { "ipAddress": "203.0.113.11", "ipConfiguration": { "id": "/x/networkInterfaces/nic/ipConfigurations/ipconfig1" } }
+  }
+]

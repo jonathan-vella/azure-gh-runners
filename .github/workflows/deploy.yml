@@ -176,6 +176,9 @@ jobs:
               { echo "::error::Readback failed for $job"; exit 1; }
           done
 
+      - name: Verify no public endpoints
+        run: node tools/check-public-access.mjs --resource-group "$RESOURCE_GROUP"
+
       - name: Summary
         if: always()
         run: |
