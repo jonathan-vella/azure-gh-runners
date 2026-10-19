@@ -133,12 +133,14 @@ try {
         Assert-Accepted (Invoke-Hook -DotSource)
         Assert-Rejected (Invoke-Hook -DotSource -Overrides @{ GITHUB_REPOSITORY = 'other/service' })
     }
-    Test-Case 'accepts the policy generated for the Windows smoke consumer' {
-        $entry = (Get-Content -Raw (Join-Path $PSScriptRoot '../../infra/generated/windows-consumers.json') | ConvertFrom-Json)[0]
-        $smoke = Get-Json $entry.policy
-        $workflow = $entry.policy.allowedWorkflows[0]
-        Assert-Accepted (Invoke-Hook -PolicyText $smoke -Overrides @{
-                GITHUB_REPOSITORY = $entry.policy.repository; GITHUB_WORKFLOW_REF = $workflow })
+    Test-Case 'accepts the policy derived from the Windows example consumer' {
+        $sample = Get-Content -Raw (Join-Path $PSScriptRoot '../../config/consumers/example-windows.json.sample') | ConvertFrom-Json
+        $policy = [ordered]@{
+            repository = $sample.repo; visibility = $sample.visibility; allowedEvents = $sample.allowedEvents
+            allowedRefs = $sample.allowedRefs; allowedWorkflows = $sample.allowedWorkflows
+        }
+        Assert-Accepted (Invoke-Hook -PolicyText (Get-Json $policy) -Overrides @{
+                GITHUB_REPOSITORY = $sample.repo; GITHUB_WORKFLOW_REF = $sample.allowedWorkflows[0] })
     }
     Test-Case 'matches repositories case-insensitively but workflow files exactly' {
         Assert-Accepted (Invoke-Hook -Overrides @{
