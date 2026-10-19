@@ -95,7 +95,8 @@ Tear everything down when you are not using it ([teardown](docs/adopting.md#8-te
 | Area | Status |
 | --- | --- |
 | Linux ACA platform | **Live-verified** in the maintainer's subscription (2026-10-11): staged deploy, private DNS, Entra OIDC to a private resource, scale 0 to 1 to 0, and negative trigger checks. See [smoke.md](docs/smoke.md). |
-| Windows isolated backend | **Live-verified once** (2026-10-11): a smoke job ran on an ephemeral Trusted Launch VM as a non-admin account, and the VM, NIC, disk and runner registration were gone afterwards ([run](https://github.com/jonathan-vella/ghr-smoke/actions/runs/38176888808)). The `pull_request` exception and the NSG outbound deny rules were not run live. |
+| Windows isolated backend | **Live-verified once** (2026-10-11): a smoke job ran on an ephemeral Trusted Launch VM as a non-admin account, and the VM, NIC, disk and runner registration were gone afterwards (run 38176888808 (repository since removed)). The `pull_request` exception and the NSG outbound deny rules were not run live. |
+| Maintainer's deployment | Torn down after verification (2026-10-11), and the smoke repositories were removed. Nothing is running or costing money. The platform is recreated from this repository with [docs/adopting.md](docs/adopting.md), and [docs/smoke.md](docs/smoke.md) describes the smoke pattern to repeat. |
 | Other tenants, regions, organisations | **Not verified.** Only `swedencentral` is supported by the validators and Bicep. |
 | Linux VMSS Flex backend | Rejected ([ADR-0006](docs/adr/0006-vmss-flex-spike.md)). |
 | Release | v1.0.0. Both backends were deployed through their protected workflows in the maintainer's subscription; this is a lab-grade platform, not a hardened multi-tenant service. |

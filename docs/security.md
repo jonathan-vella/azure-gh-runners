@@ -26,7 +26,7 @@ Assurance levels used below:
 | Staged deploy, image import by digest, jobs by digest | Live-verified | Successful `platform-prod` run ([ADR-0001](adr/0001-image-build-path.md)) |
 | NSG denies lateral RFC1918 traffic outside the platform and consumer endpoint subnets | IaC-defined | `infra/modules/network.bicep`; no live deny test |
 | Runner deregistered and scaled to zero after the job | Live-verified | Scale 0 to 1 to 0 observed; no registration remained |
-| Windows backend controls | Live-verified (one run) | [ADR-0007](adr/0007-windows-vmss-isolated-runners.md); smoke run [38176888808](https://github.com/jonathan-vella/ghr-smoke/actions/runs/38176888808): job ran as a non-admin account on a Trusted Launch VM, got no managed identity token, could not reach the ACA platform network, and the VM, NIC, disk and runner registration were gone afterwards |
+| Windows backend controls | Live-verified (one run) | [ADR-0007](adr/0007-windows-vmss-isolated-runners.md); smoke run 38176888808 (repository since removed): job ran as a non-admin account on a Trusted Launch VM, got no managed identity token, could not reach the ACA platform network, and the VM, NIC, disk and runner registration were gone afterwards |
 
 Residual risks are in the threat table, the shared-network section and the list at the end of this document.
 See the [implementation plan](plan.md) for design context.

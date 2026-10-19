@@ -105,7 +105,7 @@ Built in [#98](https://github.com/jonathan-vella/azure-gh-runners/issues/98) (in
 ## Status
 
 Accepted, and **live-verified on 2026-10-11**. The backend was deployed through the protected `deploy-windows` workflow
-and a Windows smoke job ([run 38176888808](https://github.com/jonathan-vella/ghr-smoke/actions/runs/38176888808))
+and a Windows smoke job (run 38176888808 (repository since removed))
 ran on a self-hosted Trusted Launch VM as a non-admin account; the VM, NIC, disk and runner registration were removed
 afterwards. The live run found and fixed real defects (scale-set orchestration mode value, Trusted Launch image
 definition, ACL handling, `az login --client-id`, the missing batch-logon right and the JIT file ACL). Not verified

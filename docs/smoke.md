@@ -1,5 +1,7 @@
 # Platform smoke test
 
+> **Note:** the original ghr-smoke and ghr-smoke-windows repositories and the Azure resources behind this test were removed after the run on 2026-10-11. Create your own public throwaway repository and registry entry to repeat it; the pattern below is unchanged.
+
 The v1 definition of done: a workflow in the public `jonathan-vella/ghr-smoke` repository runs on the platform's
 ACA runner (`runs-on: ghr-smoke`) and lists the empty `smoke` blob container in a storage account that has public
 network access disabled. The runner can reach the account only through the blob private endpoint in
@@ -12,7 +14,7 @@ Anonymous container access is not possible in this tenant: an inherited Azure Po
 managed identity (the identity environment variables are present, but no token is obtainable; see
 [ADR-0004](adr/0004-runner-secret-isolation.md)). The platform deployment principal's RBAC is unchanged.
 
-**Live result (2026-10-11):** [ghr-smoke run 38147983595](https://github.com/jonathan-vella/ghr-smoke/actions/runs/38147983595)
+**Live result (2026-10-11):** ghr-smoke run 38147983595 (repository since removed)
 passed on the real ACA runner: the storage hostname resolved to private `10.60.0.132`, Entra OIDC login worked, and the
 container listing succeeded over the private endpoint.
 

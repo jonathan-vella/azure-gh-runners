@@ -27,7 +27,7 @@ environment variables (`IDENTITY_ENDPOINT`, `IDENTITY_HEADER`, `MSI_ENDPOINT`, `
 main container, contrary to the Microsoft documentation, so a "variables are unset" assertion fails. What matters is
 that no token is obtainable: from inside the runner, a token request to `IDENTITY_ENDPOINT` returned HTTP 400 both for
 the system-assigned identity and for the platform's user-assigned identity requested explicitly by client ID
-([ghr-smoke run 38147983595](https://github.com/jonathan-vella/ghr-smoke/actions/runs/38147983595)). The smoke workflow
+(ghr-smoke run 38147983595 (repository since removed)). The smoke workflow
 therefore asserts "no usable managed identity" (no 200 token), not variable absence. This is one run against one job;
 it is not a proof that no other route to an Azure token exists.
 
