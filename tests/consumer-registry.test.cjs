@@ -35,7 +35,7 @@ test('accepts a valid public consumer with additional custom labels', () => {
 });
 
 const windowsSample = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', 'config', 'consumers', 'smoke-windows.json'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, '..', 'config', 'consumers', 'example-windows.json.sample'), 'utf8'),
 );
 const windowsMetadata = { ...publicMetadata, full_name: windowsSample.repo };
 
@@ -66,7 +66,7 @@ test('accepts an ACA and a Windows entry for the same repository', () => {
     name: 'smoke',
     repo: windowsSample.repo,
     labels: ['ghr-smoke'],
-    allowedWorkflows: ['jonathan-vella/ghr-smoke/.github/workflows/smoke.yml@refs/heads/main'],
+    allowedWorkflows: [`${windowsSample.repo}/.github/workflows/aca.yml@refs/heads/main`],
   }, 'smoke.json');
   assert.deepEqual(validateRegistry([aca, windowsEntry()], () => windowsMetadata), []);
 });
@@ -75,13 +75,13 @@ test('still rejects two Windows entries for the same repository', () => {
   const second = windowsEntry({ name: 'other-windows', labels: ['ghr-other-windows'] }, 'other-windows.json');
   assert.match(
     validateRegistry([windowsEntry(), second], () => windowsMetadata).join('\n'),
-    /repository "jonathan-vella\/ghr-smoke" duplicates/,
+    /repository "your-account\/your-windows-repo" duplicates/,
   );
 });
 
 test('requires the ghr label for Windows entries', () => {
   const errors = validateRegistry([windowsEntry({ labels: ['windows', 'ghr-other'] })], () => windowsMetadata);
-  assert.match(errors.join('\n'), /required custom label "ghr-smoke-windows"/);
+  assert.match(errors.join('\n'), /required custom label "ghr-example-windows"/);
 });
 
 test('accepts an acknowledged public pull request only for the Windows backend', () => {
