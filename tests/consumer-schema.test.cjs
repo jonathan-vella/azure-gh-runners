@@ -20,7 +20,7 @@ const resourcePairs = Array.from({ length: 16 }, (_, index) => {
   return [`${cpu} vCPU / ${memory}`, consumer({ cpu, memory })];
 });
 
-const windowsSample = JSON.parse(fs.readFileSync(path.join(root, "config", "consumers", "smoke-windows.json"), "utf8"));
+const windowsSample = JSON.parse(fs.readFileSync(path.join(root, "config", "consumers", "example-windows.json.sample"), "utf8"));
 
 function windows(overrides) {
   return { ...windowsSample, ...overrides };

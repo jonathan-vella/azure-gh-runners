@@ -217,7 +217,7 @@ test('refuses invalid JSON, schema violations, and policy violations without rep
 });
 
 const windowsSample = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', 'config', 'consumers', 'smoke-windows.json'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, '..', 'config', 'consumers', 'example-windows.json.sample'), 'utf8'),
 );
 const windowsMetadata = { full_name: windowsSample.repo, private: false, default_branch: 'main' };
 
@@ -232,7 +232,7 @@ test('Windows entries generate their own file and never reach the ACA parameters
     const acaBefore = fs.readFileSync(output, 'utf8');
     assert.equal(fs.readFileSync(windowsOutput, 'utf8'), '[]\n');
 
-    writeConsumers(registry, [['example.json', sample], ['smoke-windows.json', windowsSample]]);
+    writeConsumers(registry, [['example.json', sample], ['example-windows.json', windowsSample]]);
     generateConsumers({ directory: registry, destination: output, metadataProvider: acaOnly });
     assert.equal(fs.readFileSync(output, 'utf8'), acaBefore);
     generateConsumers({
@@ -245,7 +245,7 @@ test('Windows entries generate their own file and never reach the ACA parameters
     ]);
     assert.deepEqual(
       [worker.name, worker.owner, worker.repo, worker.label, worker.vmSize, worker.maxRunners, worker.jobTimeoutMinutes],
-      ['smoke-windows', 'jonathan-vella', 'ghr-smoke', 'ghr-smoke-windows', 'Standard_D4ds_v5', 1, 30],
+      ['example-windows', 'your-account', 'your-windows-repo', 'ghr-example-windows', 'Standard_D4ds_v5', 1, 30],
     );
     assert.deepEqual(worker.policy, {
       repository: windowsSample.repo,
@@ -267,7 +267,7 @@ test('Windows entries generate their own file and never reach the ACA parameters
 
 test('Windows defaults the VM size and keeps ACA entries out of the Windows file', () => {
   const [worker] = buildWindowsConsumers([
-    { filename: 'smoke-windows.json', consumer: { ...windowsSample, vmSize: undefined } },
+    { filename: 'example-windows.json', consumer: { ...windowsSample, vmSize: undefined } },
     { filename: 'example.json', consumer: sample },
   ]);
   assert.equal(worker.vmSize, 'Standard_D4ds_v5');

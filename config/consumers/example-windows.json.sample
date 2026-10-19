@@ -1,11 +1,11 @@
 {
-  "name": "smoke-windows",
-  "repo": "jonathan-vella/ghr-smoke",
+  "name": "example-windows",
+  "repo": "your-account/your-windows-repo",
   "visibility": "public",
   "backend": "vmss",
   "os": "windows",
   "labels": [
-    "ghr-smoke-windows"
+    "ghr-example-windows"
   ],
   "vmSize": "Standard_D4ds_v5",
   "maxRunners": 1,
@@ -17,7 +17,8 @@
     "refs/heads/main"
   ],
   "allowedWorkflows": [
-    "jonathan-vella/ghr-smoke/.github/workflows/smoke-windows.yml@refs/heads/main"
+    "your-account/your-windows-repo/.github/workflows/windows-job.yml@refs/heads/main"
   ],
-  "notes": "Windows backend smoke test on the isolated VMSS Flex runner. See ADR-0007."
+  "notes": "Example Windows consumer for the isolated VMSS Flex runner. See ADR-0007."
 }
+
