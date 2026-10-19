@@ -5,7 +5,7 @@ Operator and adopter guide for the Windows backend. Decision record:
 [#93](https://github.com/jonathan-vella/azure-gh-runners/issues/93).
 
 **Status: live-verified once (2026-10-11).** A Windows smoke job
-([run 38176888808](https://github.com/jonathan-vella/ghr-smoke/actions/runs/38176888808)) ran on an ephemeral Trusted
+(run 38176888808 (repository since removed)) ran on an ephemeral Trusted
 Launch VM created by the orchestrator, and the VM, NIC, disk and runner registration were removed afterwards. The
 `pull_request` exception and the NSG outbound deny rules have not been exercised live.
 
